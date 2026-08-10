@@ -69,7 +69,19 @@ export async function appendAudit(
   const detailsJson = params.detailsJson ?? null;
   const createdAt = params.createdAt ?? options.now?.() ?? new Date();
   if (repository.appendAtomic) {
-    return repository.appendAtomic({ ...params, detailsJson }, createdAt);
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      try {
+        return await repository.appendAtomic({ ...params, detailsJson }, createdAt);
+      } catch (error) {
+        const message = String((error as Error)?.message ?? error);
+        if (!/duplicate|unique|ER_DUP_ENTRY/i.test(message)
+          || attempt === maxAttempts - 1) throw error;
+        await sleep(25 + Math.floor(random() * 150) * (attempt + 1));
+      }
+    }
+    throw new Error(
+      "Audit-Eintrag konnte nach mehreren Versuchen nicht geschrieben werden",
+    );
   }
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const latest = await repository.latest();
