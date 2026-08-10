@@ -1,0 +1,26 @@
+name: print-intelligence-foundation
+on:
+  push:
+    paths:
+      - "print-intelligence-foundation/**"
+      - ".github/workflows/print-intelligence-foundation.yml"
+  pull_request:
+    paths:
+      - "print-intelligence-foundation/**"
+      - ".github/workflows/print-intelligence-foundation.yml"
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: print-intelligence-foundation
+    env:
+      VISION_PROVIDER: recorded
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - run: ruff check app tests
+      - run: pytest -q

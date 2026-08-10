@@ -1,0 +1,27 @@
+{
+  "page_number": 11,
+  "model": "qwen3-vl:4b",
+  "verified_by_human": true,
+  "advertisements": [
+    {
+      "company_name": "Grau & Sohn",
+      "bbox": [70, 68, 925, 264],
+      "confidence": 0.95
+    },
+    {
+      "company_name": "Altenzentrum Wetzlar-Pariser Gasse",
+      "bbox": [70, 285, 469, 713],
+      "confidence": 0.94
+    },
+    {
+      "company_name": "AWO Kreisverband Lahn-Dill e.V.",
+      "bbox": [70, 722, 469, 935],
+      "confidence": 0.94
+    },
+    {
+      "company_name": "Pietät Ulm",
+      "bbox": [718, 340, 930, 935],
+      "confidence": 0.93
+    }
+  ]
+}
