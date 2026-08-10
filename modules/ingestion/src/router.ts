@@ -22,33 +22,6 @@ export function createIngestionRouter(
       list: permissionProcedure("ingestion.document.read").query(({ ctx }) =>
         repository.listDocuments(ctx.auth.tenantId),
       ),
-      ingestDemo: permissionProcedure("ingestion.document.write").mutation(
-        async ({ ctx }) => {
-          const result = await repository.ingestDemo(ctx.auth.tenantId);
-          await publish({
-            name: "document.ingested",
-            tenantId: ctx.auth.tenantId,
-            aggregateType: "document",
-            aggregateId: String(result.document.id),
-            payload: { documentId: result.document.id },
-            idempotencyKey: `document.ingested:${result.document.sha256}`,
-          });
-          await publish({
-            name: "advertisement.detected",
-            tenantId: ctx.auth.tenantId,
-            aggregateType: "occurrence",
-            aggregateId: String(result.occurrence.id),
-            payload: {
-              occurrenceId: result.occurrence.id,
-              documentId: result.document.id,
-              company: result.occurrence.company,
-              preview: result.occurrence.preview,
-            },
-            idempotencyKey: `advertisement.detected:${result.document.sha256}`,
-          });
-          return result;
-        },
-      ),
     }),
     occurrences: router({
       list: permissionProcedure("ingestion.occurrence.read").query(({ ctx }) =>

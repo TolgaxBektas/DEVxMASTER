@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@xmaster-center/jobs": "workspace:*",
+    "@xmaster-center/integrations": "workspace:*",
     "@xmaster-center/kernel": "workspace:*",
     "@xmaster-center/module-crm": "workspace:*",
     "@xmaster-center/module-billing": "workspace:*",

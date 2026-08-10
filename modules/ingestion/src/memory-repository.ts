@@ -17,40 +17,72 @@ export class MemoryIngestionRepository implements IngestionRepository {
     return this.sources.filter((source) => source.url.startsWith(`${tenantId}:`));
   }
   async listDocuments(tenantId: string) {
-    const ids = new Set((await this.listSources(tenantId)).map((source) => source.id));
-    return this.documents.filter((document) => !document.sourceId || ids.has(document.sourceId));
+    return this.documents.filter((document) => document.tenantId === tenantId);
   }
   async listOccurrences(tenantId: string) {
     const documents = new Set((await this.listDocuments(tenantId)).map((document) => document.id));
     return this.occurrences.filter((occurrence) => documents.has(occurrence.documentId));
   }
-  async ingestDemo(tenantId: string) {
-    const existing = this.documents.find((item) => item.sha256 === `demo-${tenantId}-1`);
-    if (existing) {
-      const source = this.sources.find((item) => item.id === existing.sourceId);
-      const occurrence = this.occurrences.find((item) => item.documentId === existing.id);
-      if (source && occurrence) return { source, document: existing, occurrence };
-    }
-    const source = { id: ++this.sourceId, url: `${tenantId}:demo://publication`, status: "discovered" };
+  async createUploadedDocument(tenantId: string, input: {
+    filename: string;
+    sha256: string;
+    storageKey: string;
+    sizeBytes: number;
+    mimeType: string;
+    origin: string;
+  }) {
+    const existing = this.documents.find(
+      (item) => item.sha256 === input.sha256 && item.tenantId === tenantId,
+    );
+    if (existing) return { document: existing, deduplicated: true };
     const document = {
       id: ++this.documentId,
-      sourceId: source.id,
-      filename: "demo-publication.pdf",
-      sha256: `demo-${tenantId}-${this.documentId}`,
-      state: "processed",
+      tenantId,
+      sourceId: null,
+      filename: `${tenantId}:${input.filename}`,
+      sha256: input.sha256,
+      storageKey: input.storageKey,
+      sizeBytes: input.sizeBytes,
+      mimeType: input.mimeType,
+      origin: input.origin,
+      state: "uploaded",
       error: null,
     };
-    const occurrence = {
+    this.documents.push(document);
+    return { document, deduplicated: false };
+  }
+  async getDocument(tenantId: string, documentId: number) {
+    const document = (await this.listDocuments(tenantId)).find((item) => item.id === documentId);
+    if (!document) throw new Error("Dokument nicht gefunden");
+    return document;
+  }
+  async replaceProcessedDocument(tenantId: string, documentId: number, processedPages: Array<{
+    pageNumber: number;
+    text: string;
+    imageKey: string;
+    classification: string;
+    adProbability: number;
+    occurrences: Array<{
+      bbox: Record<string, number>;
+      imageKey: string;
+      confidence: number;
+      company: string;
+      preview: string;
+    }>;
+  }>) {
+    const document = await this.getDocument(tenantId, documentId);
+    this.occurrences = this.occurrences.filter((item) => item.documentId !== document.id);
+    const created = processedPages.flatMap((page) => page.occurrences.map((item) => ({
       id: ++this.occurrenceId,
       documentId: document.id,
-      company: "Beispiel GmbH",
-      preview: "Beispiel GmbH · Werbung · 01234 567890",
+      company: item.company,
+      preview: item.preview,
       status: "detected",
-    };
-    this.sources.push(source);
-    this.documents.push(document);
-    this.occurrences.push(occurrence);
-    return { source, document, occurrence };
+    })));
+    this.occurrences.push(...created);
+    document.state = "processed";
+    document.error = null;
+    return created;
   }
 
   async setDocumentState(
@@ -62,6 +94,7 @@ export class MemoryIngestionRepository implements IngestionRepository {
     const document = (await this.listDocuments(tenantId)).find((item) => item.id === documentId);
     if (!document) throw new Error("Dokument nicht gefunden");
     const allowed: Record<string, string[]> = {
+      uploaded: ["processing", "failed"],
       discovered: ["processing", "failed"],
       processing: ["processed", "failed"],
       failed: ["processing"],

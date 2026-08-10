@@ -1,7 +1,7 @@
 import type { MySql2Database } from "drizzle-orm/mysql2";
 import { and, desc, eq } from "drizzle-orm";
 import { documents, occurrences, pages, sources, ingestionSchema } from "./schema.js";
-import type { IngestionRepository } from "./repository.js";
+import type { IngestionOccurrence, IngestionRepository } from "./repository.js";
 
 type IngestionDb = MySql2Database<typeof ingestionSchema>;
 
@@ -23,61 +23,85 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
         .where(eq(occurrences.tenantId, Number(tenantId)))
         .orderBy(desc(occurrences.createdAt)) as never;
     },
-    async ingestDemo(tenantId) {
-      const sourceRow = await database.insert(sources).values({
-        tenantId: Number(tenantId),
-        url: `${tenantId}:demo://publication`,
-        status: "discovered",
-      });
-      const sourceId = Number(sourceRow[0]?.insertId);
-      const hash = `demo-${tenantId}-1`;
+    async createUploadedDocument(tenantId, input) {
       const existing = await database.select().from(documents).where(
-        and(eq(documents.tenantId, Number(tenantId)), eq(documents.sha256, hash)),
+        and(eq(documents.tenantId, Number(tenantId)), eq(documents.sha256, input.sha256)),
       ).limit(1);
-      let documentId = existing[0]?.id;
-      if (!documentId) {
-        try {
-          const documentRow = await database.insert(documents).values({
-            tenantId: Number(tenantId),
-            sourceId,
-            filename: "demo-publication.pdf",
-            sha256: hash,
-            state: "discovered",
-          });
-          documentId = Number(documentRow[0]?.insertId);
-        } catch {
-          const concurrent = await database.select().from(documents).where(
-            and(eq(documents.tenantId, Number(tenantId)), eq(documents.sha256, hash)),
-          ).limit(1);
-          documentId = concurrent[0]?.id;
-        }
+      if (existing[0]) return { document: existing[0] as never, deduplicated: true };
+      try {
+        const documentRow = await database.insert(documents).values({
+          tenantId: Number(tenantId),
+          filename: input.filename,
+          sha256: input.sha256,
+          storageKey: input.storageKey,
+          sizeBytes: input.sizeBytes,
+          mimeType: input.mimeType,
+          origin: input.origin,
+          state: "uploaded",
+        });
+        const documentId = Number(documentRow[0]?.insertId);
+        const document = (await database.select().from(documents)
+          .where(eq(documents.id, documentId)).limit(1))[0];
+        if (!document) throw new Error("Dokument konnte nicht angelegt werden");
+        return { document: document as never, deduplicated: false };
+      } catch (error) {
+        if (!/duplicate|unique|ER_DUP_ENTRY/i.test(String(error))) throw error;
+        const concurrent = await database.select().from(documents).where(
+          and(eq(documents.tenantId, Number(tenantId)), eq(documents.sha256, input.sha256)),
+        ).limit(1);
+        if (!concurrent[0]) throw error;
+        return { document: concurrent[0] as never, deduplicated: true };
       }
-      const priorOccurrence = documentId
-        ? (await database.select().from(occurrences).where(eq(occurrences.documentId, documentId)).limit(1))[0]
-        : undefined;
-      if (!documentId) throw new Error("Dokument konnte nicht angelegt werden");
-      if (documentId && !priorOccurrence) {
-        await database.update(documents).set({ state: "processing" }).where(eq(documents.id, documentId));
-        await database.update(documents).set({ state: "processed" }).where(eq(documents.id, documentId));
+    },
+    async getDocument(tenantId, documentId) {
+      const document = (await database.select().from(documents).where(
+        and(eq(documents.id, documentId), eq(documents.tenantId, Number(tenantId))),
+      ).limit(1))[0];
+      if (!document) throw new Error("Dokument nicht gefunden");
+      return document as never;
+    },
+    async replaceProcessedDocument(tenantId, documentId, processedPages) {
+      const document = await this.getDocument(tenantId, documentId);
+      await database.delete(occurrences).where(eq(occurrences.documentId, documentId));
+      await database.delete(pages).where(eq(pages.documentId, documentId));
+      const created: IngestionOccurrence[] = [];
+      for (const processed of processedPages) {
         const pageRow = await database.insert(pages).values({
           documentId,
-          pageNumber: 1,
-          text: "Beispiel GmbH · Werbung · 01234 567890",
+          pageNumber: processed.pageNumber,
+          text: processed.text,
+          imageKey: processed.imageKey,
+          classification: processed.classification,
+          adProbability: processed.adProbability,
         });
-        await database.insert(occurrences).values({
-          tenantId: Number(tenantId),
-          documentId,
-          pageId: Number(pageRow[0]?.insertId),
-          company: "Beispiel GmbH",
-          preview: "Beispiel GmbH · Werbung · 01234 567890",
-          status: "detected",
-        });
+        const pageId = Number(pageRow[0]?.insertId);
+        for (const occurrence of processed.occurrences) {
+          const occurrenceRow = await database.insert(occurrences).values({
+            tenantId: Number(tenantId),
+            documentId,
+            pageId,
+            company: occurrence.company,
+            preview: occurrence.preview,
+            status: "detected",
+            bbox: occurrence.bbox,
+            imageKey: occurrence.imageKey,
+            confidence: occurrence.confidence,
+          });
+          created.push({
+            id: Number(occurrenceRow[0]?.insertId),
+            documentId,
+            company: occurrence.company,
+            preview: occurrence.preview,
+            status: "detected",
+            bbox: occurrence.bbox,
+            imageKey: occurrence.imageKey,
+            confidence: occurrence.confidence,
+          });
+        }
       }
-      const source = (await database.select().from(sources).where(eq(sources.id, sourceId)).limit(1))[0];
-      const document = (await database.select().from(documents).where(eq(documents.id, documentId)).limit(1))[0];
-      const occurrence = (await database.select().from(occurrences).where(eq(occurrences.documentId, documentId)).limit(1))[0];
-      if (!source || !document || !occurrence) throw new Error("Ingestion-Ergebnis fehlt");
-      return { source, document, occurrence };
+      await database.update(documents).set({ state: "processed", error: null })
+        .where(and(eq(documents.id, document.id), eq(documents.tenantId, Number(tenantId))));
+      return created;
     },
     async setDocumentState(tenantId, documentId, state, error = null) {
       const current = (await database.select().from(documents).where(
@@ -85,6 +109,7 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
       ).limit(1))[0];
       if (!current) throw new Error("Dokument nicht gefunden");
       const allowed: Record<string, string[]> = {
+        uploaded: ["processing", "failed"],
         discovered: ["processing", "failed"],
         processing: ["processed", "failed"],
         failed: ["processing"],
@@ -99,7 +124,7 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
         and(eq(documents.id, documentId), eq(documents.tenantId, Number(tenantId))),
       ).limit(1))[0];
       if (!row) throw new Error("Dokument nicht gefunden");
-      return row;
+      return { ...row, tenantId: String(row.tenantId) } as never;
     },
   };
 }

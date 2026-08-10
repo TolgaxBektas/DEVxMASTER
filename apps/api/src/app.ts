@@ -166,6 +166,7 @@ export function createApiApp(runtime: Runtime): Express {
     response.clearCookie("xmc_session", { httpOnly: true, sameSite: "lax" });
     response.status(204).end();
   });
+  runtime.registry.rest(app);
   app.use(
     "/api/trpc",
     createExpressMiddleware({

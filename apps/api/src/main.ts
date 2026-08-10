@@ -19,15 +19,27 @@ import { createCrmModule } from "@xmaster-center/module-crm";
 import { createSystemModule } from "@xmaster-center/module-system";
 import { createBillingModule } from "@xmaster-center/module-billing";
 import { createIngestionModule } from "@xmaster-center/module-ingestion";
+import { createDrizzleIngestionRepository } from "@xmaster-center/module-ingestion";
 import { createAssistantModule } from "@xmaster-center/module-assistant";
 import { appendAudit } from "@xmaster-center/kernel";
 import { invoices } from "@xmaster-center/module-billing";
 import { customers } from "@xmaster-center/module-crm";
 import type { ModuleRegistry } from "@xmaster-center/kernel";
+import { createConfiguredStorage } from "@xmaster-center/integrations";
 
 const env = parseEnv();
 const dbFactory = createDbFactory(env);
 const db = dbFactory.get();
+const storage = createConfiguredStorage(
+  env.S3_ENDPOINT && env.S3_ACCESS_KEY && env.S3_SECRET_KEY && env.S3_BUCKET
+    ? {
+        endpoint: env.S3_ENDPOINT,
+        accessKey: env.S3_ACCESS_KEY,
+        secretKey: env.S3_SECRET_KEY,
+        bucket: env.S3_BUCKET,
+      }
+    : undefined,
+);
 const audit = createDrizzleAuditRepository(db);
 const eventRepository = createDrizzleEventRepository(db);
 const queue = new LeaseQueue(new DrizzleQueueRepository(db));
@@ -61,6 +73,16 @@ const billing = createBillingModule({
 });
 const ingestion = createIngestionModule({
   db,
+  audit,
+  storage,
+  maxUploadBytes: env.INGESTION_MAX_UPLOAD_BYTES,
+  transaction: (callback) => db.transaction(callback),
+  repositoryForTransaction: (transactionDb) => createDrizzleIngestionRepository(transactionDb),
+  enqueue: (input) => queue.enqueue({
+    name: input.name,
+    ...(input.tenantId === undefined ? {} : { tenantId: input.tenantId }),
+    payload: input.payload,
+  }),
   publish: (input) => eventBus.publish(input),
 });
 const assistant = createAssistantModule({

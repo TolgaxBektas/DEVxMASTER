@@ -6,8 +6,14 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
-    ".": { "types": "./src/index.ts", "import": "./dist/index.js" },
-    "./ui": { "types": "./src/ui/index.ts", "import": "./dist/ui/index.js" }
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./dist/index.js"
+    },
+    "./ui": {
+      "types": "./src/ui/index.ts",
+      "import": "./dist/ui/index.js"
+    }
   },
   "scripts": {
     "check": "tsc -p tsconfig.json --noEmit",
@@ -15,10 +21,15 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@types/busboy": "1.5.4",
+    "@types/express": "4.17.21",
     "@xmaster-center/contracts": "workspace:*",
+    "@xmaster-center/integrations": "workspace:*",
     "@xmaster-center/kernel": "workspace:*",
     "@xmaster-center/ui": "workspace:*",
+    "busboy": "1.0.0",
     "drizzle-orm": "0.44.5",
+    "express": "4.21.2",
     "react": "19.2.1",
     "zod": "4.1.12"
   },

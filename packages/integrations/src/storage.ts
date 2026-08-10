@@ -15,6 +15,14 @@ export type Storage = {
   presignGet(key: string, expiresInSeconds?: number): Promise<string>;
 };
 
+export type S3StorageConfig = {
+  endpoint: string;
+  accessKey: string;
+  secretKey: string;
+  bucket: string;
+  region?: string;
+};
+
 export class NoopStorage implements Storage {
   readonly objects = new Map<string, Uint8Array>();
   async put(key: string, body: Uint8Array | string) {
@@ -60,4 +68,20 @@ export class S3Storage implements Storage {
       { expiresIn: expiresInSeconds },
     );
   }
+}
+
+export function createConfiguredStorage(config?: S3StorageConfig): Storage {
+  if (!config) return new NoopStorage();
+  return new S3Storage(
+    new S3Client({
+      endpoint: config.endpoint,
+      forcePathStyle: true,
+      region: config.region ?? "us-east-1",
+      credentials: {
+        accessKeyId: config.accessKey,
+        secretAccessKey: config.secretKey,
+      },
+    }),
+    config.bucket,
+  );
 }

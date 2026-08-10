@@ -127,6 +127,9 @@ export function createRegistry(modules: readonly ModuleDefinition[]) {
     pages: modules.flatMap((module) =>
       module.pages.map((page) => ({ ...page, moduleId: module.id })),
     ),
+    rest(app: Express) {
+      for (const module of modules) module.rest?.(app);
+    },
     navigation(context: { permissions: ReadonlySet<string> }) {
       return modules
         .flatMap((module) =>

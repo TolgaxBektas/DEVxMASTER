@@ -1,4 +1,4 @@
-import { int, mysqlTable, text, timestamp, uniqueIndex, varchar } from "drizzle-orm/mysql-core";
+import { float, int, json, mysqlTable, text, timestamp, uniqueIndex, varchar } from "drizzle-orm/mysql-core";
 
 export const sources = mysqlTable("ingestion_sources", {
   id: int("id").autoincrement().primaryKey(),
@@ -13,6 +13,10 @@ export const documents = mysqlTable("ingestion_documents", {
   sourceId: int("source_id"),
   filename: varchar("filename", { length: 255 }).notNull(),
   sha256: varchar("sha256", { length: 64 }).notNull(),
+  storageKey: varchar("storage_key", { length: 1024 }).notNull(),
+  sizeBytes: int("size_bytes").notNull(),
+  mimeType: varchar("mime_type", { length: 128 }).notNull(),
+  origin: varchar("origin", { length: 32 }).notNull(),
   state: varchar("state", { length: 32 }).notNull(),
   error: text("error"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -24,6 +28,9 @@ export const pages = mysqlTable("ingestion_pages", {
   documentId: int("document_id").notNull(),
   pageNumber: int("page_number").notNull(),
   text: text("text"),
+  imageKey: varchar("image_key", { length: 1024 }),
+  classification: varchar("classification", { length: 64 }),
+  adProbability: float("ad_probability"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 export const occurrences = mysqlTable("ingestion_occurrences", {
@@ -34,6 +41,9 @@ export const occurrences = mysqlTable("ingestion_occurrences", {
   company: varchar("company", { length: 255 }).notNull(),
   preview: text("preview").notNull(),
   status: varchar("status", { length: 32 }).notNull(),
+  bbox: json("bbox"),
+  imageKey: varchar("image_key", { length: 1024 }),
+  confidence: float("confidence"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 export const ingestionSchema = { sources, documents, pages, occurrences };
