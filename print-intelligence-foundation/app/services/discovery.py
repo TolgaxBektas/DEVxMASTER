@@ -1,18 +1,25 @@
 from collections import deque
 from datetime import datetime, timezone
+import logging
 from time import monotonic, sleep
 from urllib.parse import urljoin, urlsplit, urlunsplit
 from urllib.robotparser import RobotFileParser
 import xml.etree.ElementTree as ET
 
 from bs4 import BeautifulSoup
+import httpx
+from redis import RedisError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import DiscoveredCandidate, Document, Source
+from app.core.config import get_settings
 from app.services.downloader import download, fetch_url
+from app.services.factory import make_pipeline
 from app.services.queue import RedisQueue
 from app.services.storage import sha256
+
+logger = logging.getLogger(__name__)
 
 
 def discover_pdf_links(html: str, base_url: str = "") -> list[str]:
@@ -73,19 +80,14 @@ class DiscoveryCrawler:
         for url in links[: self.max_entries]:
             if monotonic() >= deadline:
                 break
-            _, created = self._candidate(source, url)
+            candidate, created = self._candidate(source, url)
             if created:
                 discovered += 1
-                candidate = self.session.scalar(
-                    select(DiscoveredCandidate).where(
-                        DiscoveredCandidate.normalized_url == normalize_url(url)
-                    )
-                )
                 if self.queue:
                     try:
                         if self.queue.enqueue_candidate(candidate.id):
                             candidate.state = "queued"
-                    except Exception as exc:
+                    except RedisError as exc:
                         candidate.error = str(exc)
             else:
                 skipped += 1
@@ -106,22 +108,10 @@ class DiscoveryCrawler:
                 candidate.state = "skipped"
                 self.session.commit()
                 return existing
-            from app.core.config import get_settings
-            from app.services.factory import make_provider, make_storage
-            from app.services.pipeline import Pipeline
-
             settings = get_settings()
-            document = Pipeline(
-                self.session,
-                make_provider(settings),
-                make_storage(settings),
-                settings.render_dpi,
-                settings.confidence_threshold,
-                settings.max_job_attempts,
-                settings.stage_timeout_seconds,
-                settings.local_work_dir,
-                settings.bbox_iou_threshold,
-            ).ingest(data, source_url=candidate.url)
+            document = make_pipeline(self.session, settings).ingest(
+                data, source_url=candidate.url
+            )
             candidate.content_sha256 = digest
             candidate.document_id = document.id
             candidate.state = "ingested"
@@ -159,14 +149,16 @@ class DiscoveryCrawler:
         return fetch_url(url, self.max_bytes)
 
     def _robots(self, base_url: str, deadline: float):
+        robots_url = urljoin(base_url, "/robots.txt")
         try:
-            status, _, body = self._request(urljoin(base_url, "/robots.txt"), deadline)
+            status, _, body = self._request(robots_url, deadline)
             if status >= 400:
                 return None
             parser = RobotFileParser()
             parser.parse(body.decode("utf-8", errors="replace").splitlines())
             return parser
-        except Exception:
+        except (ValueError, TimeoutError, httpx.HTTPError) as exc:
+            logger.warning("robots fetch failed url=%s error=%s", robots_url, exc)
             return None
 
     def _allowed(self, robots, url: str) -> bool:
@@ -198,7 +190,8 @@ class DiscoveryCrawler:
                         for value in values
                         if urlsplit(value).path.lower().endswith(".pdf")
                     )
-            except Exception:
+            except (ET.ParseError, ValueError, TimeoutError, httpx.HTTPError) as exc:
+                logger.warning("sitemap fetch failed url=%s error=%s", url, exc)
                 continue
         return list(dict.fromkeys(links))
 
@@ -219,7 +212,8 @@ class DiscoveryCrawler:
                 status, headers, body = self._request(url, deadline)
                 if status >= 400:
                     continue
-                if "html" not in headers.get("content-type", "").lower() and not url.endswith("/"):
+                content_type = headers.get("content-type", "").lower()
+                if content_type and "html" not in content_type:
                     continue
                 soup = BeautifulSoup(body, "html.parser")
                 for anchor in soup.find_all("a", href=True):
@@ -235,6 +229,7 @@ class DiscoveryCrawler:
                         and depth < self.max_depth
                     ):
                         pending.append((child, depth + 1))
-            except Exception:
+            except (ValueError, TimeoutError, httpx.HTTPError) as exc:
+                logger.warning("html fetch failed url=%s error=%s", url, exc)
                 continue
         return list(dict.fromkeys(links))

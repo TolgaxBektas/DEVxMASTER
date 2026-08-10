@@ -20,7 +20,8 @@ def test_html_crawl_is_bounded_robots_aware_and_restartable(monkeypatch):
             200,
             {"content-type": "text/html"},
             b'<a href="/nested">Nested</a><a href="/one.pdf">One</a>'
-            b'<a href="https://other.test/out.pdf">External</a>',
+            b'<a href="https://other.test/out.pdf">External</a>'
+            b'<a href="/no-content-type">No type</a>',
         ),
         "https://city.test/nested": (
             200,
@@ -29,6 +30,11 @@ def test_html_crawl_is_bounded_robots_aware_and_restartable(monkeypatch):
             b'<a href="/dead">Dead</a>',
         ),
         "https://city.test/dead": (500, {}, b""),
+        "https://city.test/no-content-type": (
+            200,
+            {},
+            b'<a href="/three.pdf">Three</a>',
+        ),
     }
     monkeypatch.setattr(
         "app.services.discovery.fetch_url",
@@ -41,12 +47,13 @@ def test_html_crawl_is_bounded_robots_aware_and_restartable(monkeypatch):
         session.add(source)
         session.commit()
         crawler = DiscoveryCrawler(session, max_depth=2, max_pages=5)
-        assert crawler.crawl(source) == {"discovered": 2, "skipped": 0}
-        assert crawler.crawl(source) == {"discovered": 0, "skipped": 2}
+        assert crawler.crawl(source) == {"discovered": 3, "skipped": 0}
+        assert crawler.crawl(source) == {"discovered": 0, "skipped": 3}
         candidates = session.scalars(select(DiscoveredCandidate)).all()
         assert {candidate.normalized_url for candidate in candidates} == {
             normalize_url("https://city.test/one.pdf"),
             normalize_url("https://city.test/two.pdf"),
+            normalize_url("https://city.test/three.pdf"),
         }
 
 

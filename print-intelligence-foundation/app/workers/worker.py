@@ -6,9 +6,8 @@ from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.models import DiscoveredCandidate, Document, Job
 from app.services.discovery import DiscoveryCrawler
-from app.services.factory import make_provider, make_storage
+from app.services.factory import make_pipeline, make_storage
 from app.services.jobs import transition
-from app.services.pipeline import Pipeline
 from app.services.queue import RedisQueue
 
 logger = logging.getLogger("print_intelligence.worker")
@@ -64,17 +63,9 @@ class Worker:
                         return True
                     storage = make_storage(self.settings)
                     data = storage.get(f"{document.content_sha256}/source.pdf")
-                    Pipeline(
-                        session,
-                        make_provider(self.settings),
-                        storage,
-                        self.settings.render_dpi,
-                        self.settings.confidence_threshold,
-                        self.settings.max_job_attempts,
-                        self.settings.stage_timeout_seconds,
-                        self.settings.local_work_dir,
-                        self.settings.bbox_iou_threshold,
-                    ).ingest(data, document.filename or "document.pdf")
+                    make_pipeline(session, self.settings).ingest(
+                        data, document.filename or "document.pdf"
+                    )
             self.queue.ack(item)
             return True
         except Exception as exc:

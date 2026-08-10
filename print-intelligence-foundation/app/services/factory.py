@@ -1,4 +1,5 @@
 from app.core.config import Settings
+from app.services.pipeline import Pipeline
 from app.services.storage import LocalStorage, S3Storage
 from app.services.vision import OllamaVisionProvider, RecordedVisionProvider
 
@@ -21,3 +22,17 @@ def make_storage(settings: Settings):
             settings.s3_region,
         )
     return LocalStorage(settings.storage_path)
+
+
+def make_pipeline(session, settings: Settings):
+    return Pipeline(
+        session,
+        make_provider(settings),
+        make_storage(settings),
+        settings.render_dpi,
+        settings.confidence_threshold,
+        settings.max_job_attempts,
+        settings.stage_timeout_seconds,
+        settings.local_work_dir,
+        settings.bbox_iou_threshold,
+    )
