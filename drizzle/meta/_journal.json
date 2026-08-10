@@ -71,6 +71,13 @@
       "when": 1786349100000,
       "tag": "0009_global_audit_verify_permission",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1786349200000,
+      "tag": "0010_ingestion_sources",
+      "breakpoints": true
     }
   ]
 }

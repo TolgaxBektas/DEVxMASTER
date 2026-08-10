@@ -14,7 +14,38 @@ export class MemoryIngestionRepository implements IngestionRepository {
   private occurrenceId = 0;
 
   async listSources(tenantId: string) {
-    return this.sources.filter((source) => source.url.startsWith(`${tenantId}:`));
+    return this.sources.filter((source) => source.tenantId === tenantId);
+  }
+  async createSource(tenantId: string, input: { url: string; score: number; metadata: Record<string, unknown> }) {
+    const existing = this.sources.find((source) => source.tenantId === tenantId && source.url === input.url);
+    if (existing) return existing;
+    const source = {
+      id: ++this.sourceId,
+      tenantId,
+      url: input.url,
+      status: "proposed",
+      score: input.score,
+      metadata: input.metadata,
+      approvedBy: null,
+      approvedAt: null,
+      lastFetchedAt: null,
+      lastError: null,
+    };
+    this.sources.push(source);
+    return source;
+  }
+  async getSource(tenantId: string, sourceId: number) {
+    const source = this.sources.find((item) => item.tenantId === tenantId && item.id === sourceId);
+    if (!source) throw new Error("Quelle nicht gefunden");
+    return source;
+  }
+  async updateSource(tenantId: string, sourceId: number, input: {
+    status?: string; approvedBy?: string | null; approvedAt?: Date | null;
+    lastFetchedAt?: Date | null; lastError?: string | null;
+  }) {
+    const source = await this.getSource(tenantId, sourceId);
+    Object.assign(source, input);
+    return source;
   }
   async listDocuments(tenantId: string) {
     return this.documents.filter((document) => document.tenantId === tenantId);
@@ -25,6 +56,7 @@ export class MemoryIngestionRepository implements IngestionRepository {
   }
   async createUploadedDocument(tenantId: string, input: {
     filename: string;
+    sourceId?: number | null;
     sha256: string;
     storageKey: string;
     sizeBytes: number;
@@ -38,7 +70,7 @@ export class MemoryIngestionRepository implements IngestionRepository {
     const document = {
       id: ++this.documentId,
       tenantId,
-      sourceId: null,
+      sourceId: input.sourceId ?? null,
       filename: `${tenantId}:${input.filename}`,
       sha256: input.sha256,
       storageKey: input.storageKey,

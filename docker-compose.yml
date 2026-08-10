@@ -31,12 +31,30 @@ services:
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       S3_BUCKET: xmaster-center
+      SEARXNG_URL: http://searxng:8080
     ports:
       - "127.0.0.1:8010:8000"
     volumes:
       - print_ingest_data:/data
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  searxng:
+    image: searxng/searxng:latest
+    container_name: xmaster-center-searxng
+    restart: unless-stopped
+    environment:
+      BASE_URL: http://searxng:8080/
+      INSTANCE_NAME: xMaster Center Search
+    ports:
+      - "127.0.0.1:8081:8080"
+    volumes:
+      - searxng_data:/etc/searxng
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8080/"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -77,3 +95,4 @@ volumes:
   xmaster_mysql_data:
   print_ingest_data:
   print_ingest_storage:
+  searxng_data:

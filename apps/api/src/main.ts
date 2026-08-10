@@ -84,6 +84,23 @@ const ingestion = createIngestionModule({
     payload: input.payload,
   }),
   publish: (input) => eventBus.publish(input),
+  discoverProposals: async ({ seedPages, searchTerms, maxResults }) => {
+    const response = await fetch(`${env.PIF_BASE_URL}/api/v1/discovery/proposals`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(env.PIF_SERVICE_TOKEN ? { "x-service-token": env.PIF_SERVICE_TOKEN } : {}),
+      },
+      body: JSON.stringify({ seed_pages: seedPages, search_terms: searchTerms, max_results: maxResults }),
+    });
+    if (!response.ok) throw new Error(`Quellensuche fehlgeschlagen (${response.status})`);
+    const body = await response.json() as { proposals?: Array<Record<string, unknown>> };
+    return (body.proposals ?? []).map((item) => ({
+      url: String(item.url),
+      score: Number(item.score ?? 0),
+      metadata: item,
+    }));
+  },
 });
 const assistant = createAssistantModule({
   briefing: async (tenantId) => {

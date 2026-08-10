@@ -13,6 +13,7 @@ import { MemoryIngestionRepository } from "./memory-repository.js";
 import { createDrizzleIngestionRepository } from "./drizzle-repository.js";
 import type { IngestionRepository } from "./repository.js";
 import { registerUploadRoute } from "./rest.js";
+import { persistDocumentBytes } from "./rest.js";
 import { ingestionPages, IngestionPage, OccurrencesPage } from "./ui/index.js";
 
 export type ProcessedPage = {
@@ -66,6 +67,10 @@ export function createIngestionModule(deps: {
     storageKey: string;
     outputPrefix: string;
   }) => Promise<ProcessedPage[]>;
+  fetchSource?: (input: { url: string }) => Promise<{ bytes: Buffer; filename: string }>;
+  discoverProposals?: (input: { seedPages: string[]; searchTerms: string[]; maxResults: number }) => Promise<Array<{
+    url: string; score: number; metadata: Record<string, unknown>;
+  }>>;
 }): ModuleDefinition {
   const repository = deps.repository ?? (deps.db
     ? createDrizzleIngestionRepository(deps.db)
@@ -76,14 +81,16 @@ export function createIngestionModule(deps: {
     icon: "file",
     version: "0.1.0",
     schema: ingestionSchema,
-    router: createIngestionRouter(repository, deps.publish),
+    router: createIngestionRouter(repository, deps.publish, deps.enqueue, deps.discoverProposals),
     ...(deps.db && deps.storage && deps.audit && deps.transaction && deps.enqueue
       ? {
           rest: (app: Parameters<typeof registerUploadRoute>[0]) =>
             registerUploadRoute(app, {
-              db: deps.db,
+              db: deps.db!,
               repository,
-              repositoryFor: (db) => createDrizzleIngestionRepository(db),
+              ...(deps.repositoryForTransaction
+                ? { repositoryFor: (db: unknown) => createDrizzleIngestionRepository(db) }
+                : {}),
               storage: deps.storage as Storage,
               audit: deps.audit as ReturnType<typeof createDrizzleAuditRepository>,
               auditFor: (db) => createDrizzleAuditRepository(db),
@@ -107,6 +114,9 @@ export function createIngestionModule(deps: {
     })),
     permissions: [
       { permission: "ingestion.source.read", title: "Quellen lesen" },
+      { permission: "ingestion.source.search", title: "Quellen suchen" },
+      { permission: "ingestion.source.approve", title: "Quellen freigeben" },
+      { permission: "ingestion.source.fetch", title: "Quellen abrufen" },
       { permission: "ingestion.document.read", title: "Dokumente lesen" },
       { permission: "ingestion.document.write", title: "Dokumente aufnehmen" },
       { permission: "ingestion.document.upload", title: "Dokumente hochladen" },
@@ -123,6 +133,55 @@ export function createIngestionModule(deps: {
             tenantId,
             payload: {},
           });
+        },
+      },
+      {
+        name: "ingestion.source.fetch",
+        schedule: "daily",
+        handle: async (payload, context) => {
+          const tenantId = jobTenantId(context);
+          const sourceId = (payload as { sourceId?: unknown }).sourceId;
+          if (typeof sourceId !== "number") throw new Error("Quelle für Abruf fehlt");
+          const source = await repository.getSource(tenantId, sourceId);
+          if (source.status !== "approved") throw new Error("Quelle ist nicht freigegeben");
+          if (!deps.fetchSource) throw new Error("Quellenabruf ist nicht konfiguriert");
+          try {
+            const fetched = await deps.fetchSource({ url: source.url });
+            const result = await persistDocumentBytes({
+              db: deps.db,
+              repository,
+              ...(deps.repositoryForTransaction
+                ? { repositoryFor: deps.repositoryForTransaction }
+                : {}),
+              storage: deps.storage!,
+              audit: deps.audit!,
+              auditFor: (db) => createDrizzleAuditRepository(db),
+              transaction: deps.transaction!,
+              publish: deps.publish,
+              enqueue: deps.enqueue!,
+              maxUploadBytes: 250 * 1024 * 1024,
+            }, {
+              tenantId,
+              userId: null,
+              displayName: "Ingestion-Worker",
+              bytes: fetched.bytes,
+              filename: fetched.filename,
+              origin: "source",
+              sourceId,
+            });
+            await repository.updateSource(tenantId, sourceId, {
+              lastFetchedAt: new Date(),
+              lastError: null,
+            });
+            if (!result.deduplicated) {
+              await deps.enqueue!({ name: "ingestion.processing.run", tenantId, payload: { documentId: result.document.id } });
+            }
+          } catch (error) {
+            await repository.updateSource(tenantId, sourceId, {
+              lastError: error instanceof Error ? error.message : "Quellenabruf fehlgeschlagen",
+            });
+            throw error;
+          }
         },
       },
       {

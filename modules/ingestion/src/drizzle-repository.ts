@@ -13,6 +13,39 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
         .where(eq(sources.tenantId, Number(tenantId)))
         .orderBy(desc(sources.createdAt)) as never;
     },
+    async createSource(tenantId, input) {
+      const existing = await database.select().from(sources).where(and(
+        eq(sources.tenantId, Number(tenantId)),
+        eq(sources.url, input.url),
+      )).limit(1);
+      if (existing[0]) return existing[0] as never;
+      const result = await database.insert(sources).values({
+        tenantId: Number(tenantId),
+        url: input.url,
+        status: "proposed",
+        score: input.score,
+        metadata: input.metadata,
+      });
+      const created = (await database.select().from(sources)
+        .where(eq(sources.id, Number(result[0]?.insertId))).limit(1))[0];
+      if (!created) throw new Error("Quelle konnte nicht angelegt werden");
+      return created as never;
+    },
+    async getSource(tenantId, sourceId) {
+      const source = (await database.select().from(sources).where(and(
+        eq(sources.id, sourceId),
+        eq(sources.tenantId, Number(tenantId)),
+      )).limit(1))[0];
+      if (!source) throw new Error("Quelle nicht gefunden");
+      return source as never;
+    },
+    async updateSource(tenantId, sourceId, input) {
+      await database.update(sources).set(input).where(and(
+        eq(sources.id, sourceId),
+        eq(sources.tenantId, Number(tenantId)),
+      ));
+      return this.getSource(tenantId, sourceId);
+    },
     async listDocuments(tenantId) {
       return database.select().from(documents)
         .where(eq(documents.tenantId, Number(tenantId)))
@@ -31,6 +64,7 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
       try {
         const documentRow = await database.insert(documents).values({
           tenantId: Number(tenantId),
+          sourceId: input.sourceId ?? null,
           filename: input.filename,
           sha256: input.sha256,
           storageKey: input.storageKey,

@@ -3,10 +3,18 @@ import { float, int, json, mysqlTable, text, timestamp, uniqueIndex, varchar } f
 export const sources = mysqlTable("ingestion_sources", {
   id: int("id").autoincrement().primaryKey(),
   tenantId: int("tenant_id").notNull(),
-  url: text("url").notNull(),
+  url: varchar("url", { length: 700 }).notNull(),
   status: varchar("status", { length: 32 }).notNull(),
+  score: float("score").default(0).notNull(),
+  metadata: json("metadata"),
+  approvedBy: text("approved_by"),
+  approvedAt: timestamp("approved_at"),
+  lastFetchedAt: timestamp("last_fetched_at"),
+  lastError: text("last_error"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => ({
+  tenantUrl: uniqueIndex("ingestion_sources_tenant_url_uq").on(table.tenantId, table.url),
+}));
 export const documents = mysqlTable("ingestion_documents", {
   id: int("id").autoincrement().primaryKey(),
   tenantId: int("tenant_id").notNull(),

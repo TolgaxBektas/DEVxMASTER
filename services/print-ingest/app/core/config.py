@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     outbound_http_enabled: bool = True
     discovery_enabled: bool = True
     max_download_mb: int = 250
+    max_response_mb: int = 16
+    max_discovery_requests: int = 40
+    max_discovery_depth: int = 2
+    max_discovery_seconds: int = 90
+    max_redirects: int = 5
     crawl_user_agent: str = 'PrintIntelligenceBot/0.1'
     request_timeout_seconds: int = 30
     ocr_provider: str = 'local_tesseract'

@@ -1,4 +1,15 @@
-export type IngestionSource = { id: number; url: string; status: string };
+export type IngestionSource = {
+  id: number;
+  tenantId: string;
+  url: string;
+  status: string;
+  score: number;
+  metadata: Record<string, unknown> | null;
+  approvedBy: string | null;
+  approvedAt: Date | null;
+  lastFetchedAt: Date | null;
+  lastError: string | null;
+};
 export type IngestionDocument = {
   id: number;
   tenantId: string;
@@ -24,12 +35,22 @@ export type IngestionOccurrence = {
 };
 export type IngestionRepository = {
   listSources(tenantId: string): Promise<IngestionSource[]>;
+  createSource(tenantId: string, input: { url: string; score: number; metadata: Record<string, unknown> }): Promise<IngestionSource>;
+  getSource(tenantId: string, sourceId: number): Promise<IngestionSource>;
+  updateSource(tenantId: string, sourceId: number, input: {
+    status?: string;
+    approvedBy?: string | null;
+    approvedAt?: Date | null;
+    lastFetchedAt?: Date | null;
+    lastError?: string | null;
+  }): Promise<IngestionSource>;
   listDocuments(tenantId: string): Promise<IngestionDocument[]>;
   listOccurrences(tenantId: string): Promise<IngestionOccurrence[]>;
   createUploadedDocument(
     tenantId: string,
     input: {
       filename: string;
+      sourceId?: number | null;
       sha256: string;
       storageKey: string;
       sizeBytes: number;

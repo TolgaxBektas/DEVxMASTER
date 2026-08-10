@@ -1,13 +1,35 @@
 import re
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import Response
 
 from app.core.config import settings
 from app.services.processor import heuristic_ad_regions, render_and_extract
 from app.services.storage import storage
+from app.services.downloader import download_pdf, DownloadError
 from app.api.routes import require_service_token
 
 router = APIRouter()
+
+
+@router.post("/fetch")
+async def fetch_source(payload: dict, _token: None = Depends(require_service_token)):
+    url = payload.get("url")
+    if not isinstance(url, str):
+        raise HTTPException(400, "url_required")
+    try:
+        data, metadata = download_pdf(url)
+    except DownloadError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return Response(
+        content=data,
+        media_type="application/pdf",
+        headers={
+            "X-Source-Url": metadata["final_url"],
+            "X-Source-Sha256": metadata["sha256"],
+            "Content-Disposition": f'attachment; filename="{metadata["filename"]}"',
+        },
+    )
 
 
 @router.post("/process")

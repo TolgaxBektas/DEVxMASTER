@@ -86,6 +86,19 @@ const ingestion = createIngestionModule({
     });
     return processor(input);
   },
+  fetchSource: async ({ url }) => {
+    if (!env.PIF_SERVICE_TOKEN) throw new Error("PIF-Service-Token fehlt");
+    const response = await fetch(`${env.PIF_BASE_URL}/api/v1/stateless/fetch`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-service-token": env.PIF_SERVICE_TOKEN },
+      body: JSON.stringify({ url }),
+    });
+    if (!response.ok) throw new Error(`Quellenabruf fehlgeschlagen (${response.status})`);
+    const bytes = Buffer.from(await response.arrayBuffer());
+    const disposition = response.headers.get("content-disposition") ?? "";
+    const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? "source.pdf";
+    return { bytes, filename };
+  },
   publish: (input) => eventBus.publish(input),
 });
 const assistant = createAssistantModule({

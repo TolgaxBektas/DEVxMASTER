@@ -12,7 +12,7 @@ from app.services.discovery import discover_pdf_links
 from app.services.downloader import download_pdf, DownloadError
 from app.services.storage import storage
 from app.services.pipeline import process_document
-from app.services.autodiscovery import run_discovery
+from app.services.autodiscovery import discover_proposals, run_discovery
 
 router=APIRouter()
 token_header = APIKeyHeader(name='x-service-token', auto_error=False)
@@ -47,6 +47,11 @@ def discover(req: DiscoverRequest, db: Session=Depends(get_db), _token: None=Dep
 @router.post('/discovery/run')
 def autodiscover(req: AutoDiscoverRequest, db: Session=Depends(get_db), _token: None=Depends(require_service_token)):
     return run_discovery(db,[str(x) for x in req.seed_pages],req.search_terms,req.max_results)
+
+@router.post('/discovery/proposals')
+def proposals(req: AutoDiscoverRequest, _token: None=Depends(require_service_token)):
+    items = discover_proposals([str(x) for x in req.seed_pages], req.search_terms, req.max_results)
+    return {'proposals': items}
 
 @router.get('/sources')
 def list_sources(db: Session=Depends(get_db), _token: None=Depends(require_service_token)):
