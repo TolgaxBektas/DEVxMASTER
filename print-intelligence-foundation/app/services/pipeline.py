@@ -58,6 +58,7 @@ class Pipeline:
         self.artwork_padding = artwork_padding
         self.artwork_trim_cap = artwork_trim_cap
         self._form_results: dict[int, FormParseResult] = {}
+        self._form_results_source: str | None = None
 
     def _run(self, document_id, stage, action, force=False):
         job = get_or_create(self.session, document_id, stage, self.max_attempts)
@@ -148,7 +149,7 @@ class Pipeline:
             raise TimeoutError("stage deadline exceeded")
 
     def _classify_pages(self, doc, source, page_paths, deadline):
-        self._form_results = parse_order_forms(source)
+        self._get_form_results(source)
         for number, path in page_paths.items():
             self._check_deadline(deadline)
             page = self.session.scalar(
@@ -367,10 +368,7 @@ class Pipeline:
             for occurrence, text in zip(occurrences, texts):
                 data = json.loads(occurrence.fields_json or "{}")
                 extracted.append((occurrence, data, text))
-            form = self._form_results.get(page.page_number)
-            if form is None:
-                self._form_results = parse_order_forms(source)
-                form = self._form_results[page.page_number]
+            form = self._get_form_results(source)[page.page_number]
             for occurrence, data, text in extracted:
                 self._check_deadline(deadline)
                 fields = extract_contact_fields(
@@ -415,6 +413,13 @@ class Pipeline:
                         self._add_review(occurrence, "incomplete contact fields")
                 occurrence.fields_json = json.dumps(data, ensure_ascii=False)
         self.session.commit()
+
+    def _get_form_results(self, source):
+        source_key = str(Path(source).resolve())
+        if self._form_results_source != source_key:
+            self._form_results = parse_order_forms(source)
+            self._form_results_source = source_key
+        return self._form_results
 
     def _add_review(self, occurrence, reason):
         review = self.session.scalar(

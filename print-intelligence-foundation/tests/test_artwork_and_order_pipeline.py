@@ -134,6 +134,52 @@ def test_order_form_frame_gate_rejects_full_page_boxes():
     )
 
 
+def test_reused_pipeline_rekeys_form_cache_by_source(tmp_path):
+    def form(company):
+        return _pdf(
+            [
+                "PUBLIKATIONSVORSCHLAG",
+                f"FIRMA : {company}",
+                "STRASSE : Teststrasse 1",
+                "PLZ/ORT : 12345 Teststadt",
+                "ASP. : Frau Test",
+                "TEL : 01234 56789",
+                "E-MAIL : customer@example.de",
+            ]
+        )
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'cache.db'}")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with factory() as session:
+        pipeline = Pipeline(
+            session,
+            _SyntheticProvider(),
+            LocalStorage(tmp_path / "storage"),
+            render_dpi=36,
+            artwork_dpi=72,
+            local_work_dir=tmp_path / "work",
+        )
+        first = pipeline.ingest(form("Synthetic First GmbH"))
+        second = pipeline.ingest(form("Synthetic Second GmbH"))
+        first_ad = session.scalar(
+            select(AdOccurrence)
+            .join(Page)
+            .where(Page.document_id == first.id)
+        )
+        second_ad = session.scalar(
+            select(AdOccurrence)
+            .join(Page)
+            .where(Page.document_id == second.id)
+        )
+        assert json.loads(first_ad.fields_json)["form_header"]["fields"]["company"] == (
+            "Synthetic First GmbH"
+        )
+        assert json.loads(second_ad.fields_json)["form_header"]["fields"]["company"] == (
+            "Synthetic Second GmbH"
+        )
+
+
 def test_authenticated_artwork_api_returns_png(tmp_path, monkeypatch):
     engine = create_engine(f"sqlite:///{tmp_path / 'api.db'}")
     Base.metadata.create_all(engine)
