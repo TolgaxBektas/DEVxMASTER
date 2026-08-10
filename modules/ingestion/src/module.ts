@@ -141,6 +141,7 @@ export function createIngestionModule(deps: {
         }
       : {}),
     nav: [
+      { id: "ingestion.sources", label: "Quellen", href: "/ingestion/sources", permission: "ingestion.source.read", order: 5 },
       { id: "ingestion.documents", label: "Dokumente", href: "/ingestion", permission: "ingestion.document.read", order: 10 },
       { id: "ingestion.occurrences", label: "Fundstellen", href: "/ingestion/occurrences", permission: "ingestion.occurrence.read", order: 20 },
     ],
