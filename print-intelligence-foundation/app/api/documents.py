@@ -2,7 +2,11 @@ import json
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
 from sqlalchemy import select
 from app.api.auth import require_auth
-from app.api.dependencies import pipeline_dependency, session_dependency
+from app.api.dependencies import (
+    pipeline_dependency,
+    session_dependency,
+    storage_dependency,
+)
 from app.core.config import get_settings
 from app.models import Document, Page
 from app.models import AdOccurrence
@@ -109,7 +113,12 @@ def document(document_id: int, session=Depends(session_dependency)):
 
 
 @router.get("/{document_id}/ads/{ad_id}/artwork")
-def artwork(document_id: int, ad_id: int, session=Depends(session_dependency)):
+def artwork(
+    document_id: int,
+    ad_id: int,
+    session=Depends(session_dependency),
+    storage=Depends(storage_dependency),
+):
     occurrence = session.scalar(
         select(AdOccurrence)
         .join(Page)
@@ -117,5 +126,5 @@ def artwork(document_id: int, ad_id: int, session=Depends(session_dependency)):
     )
     if not occurrence or not occurrence.artwork_path:
         raise HTTPException(404, "restored artwork is not available")
-    content = pipeline_dependency(session).storage.get(occurrence.artwork_path)
+    content = storage.get(occurrence.artwork_path)
     return Response(content=content, media_type="image/png")

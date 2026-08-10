@@ -1,6 +1,5 @@
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 from PIL import Image
 from sqlalchemy import create_engine, func, select
@@ -8,7 +7,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
 from app.models import AdOccurrence, Company, Document, Page, ReviewItem
-from app.api.dependencies import session_dependency
+from app.api.dependencies import session_dependency, storage_dependency
 from app.main import app
 from app.services.bbox import Box
 from app.services.crop import restore_artwork
@@ -25,7 +24,7 @@ class _SyntheticProvider:
         return [
             {
                 "company_name": "Other Synthetic GmbH",
-                "bbox": [50, 550, 950, 950],
+                "bbox": [50, 150, 950, 850],
                 "confidence": 0.95,
             }
         ]
@@ -45,14 +44,13 @@ def test_restore_artwork_keeps_untrimmed_png_and_trimmed_copy(tmp_path):
         output_path=tmp_path / "raw.png",
         trimmed_output_path=tmp_path / "trimmed.png",
         padding=5,
-        trim_margin=4,
+        trim_cap=4,
     )
     assert raw.read_bytes().startswith(b"\x89PNG")
     assert trimmed.read_bytes().startswith(b"\x89PNG")
     assert box.left == 15 and box.top == 10
     assert Image.open(raw).size == (70, 60)
-    assert Image.open(trimmed).size[0] <= 70
-    assert Image.open(trimmed).size[1] <= 60
+    assert Image.open(trimmed).size == (62, 52)
 
 
 def test_order_form_pipeline_persists_header_and_conflict_review(tmp_path):
@@ -95,6 +93,9 @@ def test_order_form_pipeline_persists_header_and_conflict_review(tmp_path):
         assert payload["fields"]["company"] == "Synthetic Bau GmbH"
         assert payload["advert_fields"]["company"] == "Other Synthetic GmbH"
         assert payload["field_conflicts"]["company"]["header"] == "Synthetic Bau GmbH"
+        review = session.scalar(select(ReviewItem).where(ReviewItem.ad_id == ad.id))
+        assert "header/advert conflict for company" in review.reason
+        assert "header/advert conflict for phone" in review.reason
         assert ad.artwork_path and ad.artwork_trimmed_path
         assert json.loads(ad.artwork_metadata_json)["source_dpi"] == 72
         assert session.scalar(select(func.count(Company.id))) == 1
@@ -127,6 +128,12 @@ def test_page11_ads_receive_restored_artwork_artifacts(tmp_path):
         )
 
 
+def test_order_form_frame_gate_rejects_full_page_boxes():
+    assert not Pipeline._order_form_box_is_plausible(
+        Box(0, 0, 1000, 1000), (1000, 1000)
+    )
+
+
 def test_authenticated_artwork_api_returns_png(tmp_path, monkeypatch):
     engine = create_engine(f"sqlite:///{tmp_path / 'api.db'}")
     Base.metadata.create_all(engine)
@@ -154,11 +161,8 @@ def test_authenticated_artwork_api_returns_png(tmp_path, monkeypatch):
         with factory() as session:
             yield session
 
-    monkeypatch.setattr(
-        "app.api.documents.pipeline_dependency",
-        lambda _session: SimpleNamespace(storage=storage),
-    )
     app.dependency_overrides[session_dependency] = override
+    app.dependency_overrides[storage_dependency] = lambda: storage
     try:
         with TestClient(app) as client:
             response = client.get(f"/documents/{document_id}/ads/{ad_id}/artwork")

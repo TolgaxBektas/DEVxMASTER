@@ -34,6 +34,7 @@ FORM_MARKERS = (
     "auftraggeber",
     "annahmeformular",
 )
+STRONG_FORM_MARKERS = frozenset(FORM_MARKERS)
 EXCLUDED_CONTEXT = (
     "antwort",
     "per e-mail an",
@@ -170,10 +171,14 @@ def _aliases() -> list[tuple[str, str]]:
     ]
 
 
+_ALIAS_INDEX = tuple(
+    sorted(_aliases(), key=lambda item: len(_normalized(item[0])), reverse=True)
+)
+
+
 def _extract_row_value(row: list[_Character], canonical: str) -> str | None:
-    aliases = sorted(_aliases(), key=lambda item: len(_normalized(item[0])), reverse=True)
     normalized_chars = "".join(_normalized(character.value) for character in row)
-    for alias, alias_canonical in aliases:
+    for alias, alias_canonical in _ALIAS_INDEX:
         if alias_canonical != canonical:
             continue
         needle = _normalized(alias)
@@ -204,12 +209,9 @@ def _looks_like_marker(text: str) -> bool:
     return any(_normalized(marker) in normalized for marker in FORM_MARKERS)
 
 
-def parse_order_form(pdf_path: str | Path, page_number: int) -> FormParseResult:
-    pdf = pdfium.PdfDocument(str(pdf_path))
-    page = pdf[page_number - 1]
+def _parse_order_form_page(page) -> FormParseResult:
     characters = _page_characters(page)
     page_text = "".join(character.value for character in characters)
-    marker = _looks_like_marker(page_text)
     rows = _rows(characters)
     fields: dict[str, str] = {}
     metadata: dict[str, str] = {}
@@ -248,14 +250,35 @@ def parse_order_form(pdf_path: str | Path, page_number: int) -> FormParseResult:
     ]
     if any(address_parts):
         fields["address"] = ", ".join(part for part in address_parts if part)
+    matched_markers = {
+        marker
+        for marker in FORM_MARKERS
+        if _normalized(marker) in _normalized(page_text)
+    }
+    # Strong publisher boilerplate is enough to flag a form-looking page even
+    # when its customer header is missing; ordinary markers need two labels.
+    is_order_form = bool(matched_markers) and (
+        len(labels) >= 2
+        or any(marker in STRONG_FORM_MARKERS for marker in matched_markers)
+    )
     return FormParseResult(
-        is_order_form=marker and (len(labels) >= 2 or any(
-            _normalized(marker) in _normalized(page_text) for marker in FORM_MARKERS[:4]
-        )),
+        is_order_form=is_order_form,
         fields=fields,
         labels=labels,
         metadata=metadata,
     )
+
+
+def parse_order_forms(pdf_path: str | Path) -> dict[int, FormParseResult]:
+    pdf = pdfium.PdfDocument(str(pdf_path))
+    return {
+        page_number: _parse_order_form_page(pdf[page_number - 1])
+        for page_number in range(1, len(pdf) + 1)
+    }
+
+
+def parse_order_form(pdf_path: str | Path, page_number: int) -> FormParseResult:
+    return parse_order_forms(pdf_path)[page_number]
 
 
 def merge_form_and_ad_fields(

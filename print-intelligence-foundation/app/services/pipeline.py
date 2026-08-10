@@ -14,7 +14,11 @@ from app.services.dedupe import contact_key, normalize_name
 from app.services.extraction import extract_contact_fields
 from app.services.ingest import content_lock, validate_pdf
 from app.services.jobs import get_or_create, retry, run_stage
-from app.services.order_forms import merge_form_and_ad_fields, parse_order_form
+from app.services.order_forms import (
+    FormParseResult,
+    merge_form_and_ad_fields,
+    parse_order_forms,
+)
 from app.services.render import render_page, render_pdf
 from app.services.storage import sha256
 from app.services.text_layer import (
@@ -40,7 +44,7 @@ class Pipeline:
         bbox_iou_threshold=0.85,
         artwork_dpi=300,
         artwork_padding=8,
-        artwork_trim_margin=4,
+        artwork_trim_cap=4,
     ):
         self.session, self.provider, self.storage = session, provider, storage
         self.render_dpi, self.confidence_threshold = render_dpi, confidence_threshold
@@ -52,7 +56,8 @@ class Pipeline:
         self.bbox_iou_threshold = bbox_iou_threshold
         self.artwork_dpi = artwork_dpi
         self.artwork_padding = artwork_padding
-        self.artwork_trim_margin = artwork_trim_margin
+        self.artwork_trim_cap = artwork_trim_cap
+        self._form_results: dict[int, FormParseResult] = {}
 
     def _run(self, document_id, stage, action, force=False):
         job = get_or_create(self.session, document_id, stage, self.max_attempts)
@@ -143,6 +148,7 @@ class Pipeline:
             raise TimeoutError("stage deadline exceeded")
 
     def _classify_pages(self, doc, source, page_paths, deadline):
+        self._form_results = parse_order_forms(source)
         for number, path in page_paths.items():
             self._check_deadline(deadline)
             page = self.session.scalar(
@@ -161,7 +167,7 @@ class Pipeline:
                 self.session.add(page)
             else:
                 page.image_path, page.classification = str(path), classification
-            form = parse_order_form(source, number)
+            form = self._form_results[number]
             page.is_order_form = form.is_order_form
             page.form_header_json = form.as_json()
         self.session.commit()
@@ -201,10 +207,27 @@ class Pipeline:
                     )
                 )
                 if existing:
-                    if artwork_page is not None and not existing.artwork_path:
+                    frame_plausible = (
+                        not page.is_order_form
+                        or self._order_form_box_is_plausible(box, size)
+                    )
+                    if (
+                        artwork_page is not None
+                        and not existing.artwork_path
+                        and (
+                            not page.is_order_form
+                            or (
+                                existing.confidence >= self.confidence_threshold
+                                and frame_plausible
+                            )
+                        )
+                    ):
                         self._write_artwork(
                             existing, artwork_page, box, size, digest, number, index
                         )
+                    self._add_order_form_reviews(
+                        existing, page, frame_plausible
+                    )
                     continue
                 crop_path = crop_ad(
                     path, box, local_root / "crops" / f"page_{number}_{index}.png"
@@ -228,9 +251,16 @@ class Pipeline:
                 )
                 self.session.add(occurrence)
                 self.session.flush()
+                frame_plausible = (
+                    not page.is_order_form
+                    or self._order_form_box_is_plausible(box, size)
+                )
                 if artwork_page is not None and (
                     not page.is_order_form
-                    or occurrence.confidence >= self.confidence_threshold
+                    or (
+                        occurrence.confidence >= self.confidence_threshold
+                        and frame_plausible
+                    )
                 ):
                     self._write_artwork(
                         occurrence, artwork_page, box, size, digest, number, index
@@ -240,12 +270,31 @@ class Pipeline:
                     self._assign_company(occurrence, company_name, fields)
                 if occurrence.confidence < self.confidence_threshold:
                     self._add_review(occurrence, "low confidence")
-                if page.is_order_form and (
-                    artwork_page is None
-                    or occurrence.confidence < self.confidence_threshold
-                ):
-                    self._add_review(occurrence, "order-form advert frame not located")
+                self._add_order_form_reviews(occurrence, page, frame_plausible)
             self.session.commit()
+
+    @staticmethod
+    def _order_form_box_is_plausible(box, page_size):
+        if box is None:
+            return False
+        page_width, page_height = page_size
+        area_ratio = box.area / (page_width * page_height)
+        return (
+            area_ratio <= 0.75
+            and box.top >= page_height * 0.12
+            and box.bottom <= page_height * 0.92
+            and box.right - box.left <= page_width * 0.95
+            and box.bottom - box.top <= page_height * 0.82
+        )
+
+    def _add_order_form_reviews(self, occurrence, page, frame_plausible):
+        if page.is_order_form and not frame_plausible:
+            self._add_review(
+                occurrence,
+                "order-form advert box failed geometric plausibility check",
+            )
+        if page.is_order_form and occurrence.confidence < self.confidence_threshold:
+            self._add_review(occurrence, "low confidence")
 
     def _write_artwork(
         self, occurrence, artwork_page, box, detector_size, digest, number, index
@@ -271,7 +320,7 @@ class Pipeline:
             output,
             trimmed,
             self.artwork_padding,
-            self.artwork_trim_margin,
+            self.artwork_trim_cap,
         )
         occurrence.artwork_path = self.storage.put_file(
             output, f"{digest}/artwork/page_{number}_{index}.png"
@@ -290,7 +339,7 @@ class Pipeline:
                 ],
                 "source_dpi": self.artwork_dpi,
                 "padding": self.artwork_padding,
-                "trim_margin": self.artwork_trim_margin,
+                "trim_cap": self.artwork_trim_cap,
             }
         )
 
@@ -318,6 +367,10 @@ class Pipeline:
             for occurrence, text in zip(occurrences, texts):
                 data = json.loads(occurrence.fields_json or "{}")
                 extracted.append((occurrence, data, text))
+            form = self._form_results.get(page.page_number)
+            if form is None:
+                self._form_results = parse_order_forms(source)
+                form = self._form_results[page.page_number]
             for occurrence, data, text in extracted:
                 self._check_deadline(deadline)
                 fields = extract_contact_fields(
@@ -326,7 +379,6 @@ class Pipeline:
                 fields.update({k: v for k, v in data.get("fields", {}).items() if v})
                 data["text"], data["advert_fields"] = text, fields
                 if page.is_order_form:
-                    form = parse_order_form(source, page.page_number)
                     data["form_header"] = {
                         "fields": form.fields,
                         "metadata": form.metadata,
@@ -365,10 +417,13 @@ class Pipeline:
         self.session.commit()
 
     def _add_review(self, occurrence, reason):
-        if not self.session.scalar(
+        review = self.session.scalar(
             select(ReviewItem).where(ReviewItem.ad_id == occurrence.id)
-        ):
+        )
+        if review is None:
             self.session.add(ReviewItem(ad_id=occurrence.id, reason=reason))
+        elif reason not in review.reason.split("; "):
+            review.reason = f"{review.reason}; {reason}"
 
     def _assign_company(self, occurrence, name, fields):
         normalized, key = normalize_name(name), contact_key(fields)

@@ -10,7 +10,7 @@ Pipeline: discover → download → deduplicate → render → classify → dete
 
 ## Configuration and running
 
-Copy `.env.example` to `.env`. Configuration includes `DATABASE_URL`, `STORAGE_BACKEND`, `STORAGE_PATH`, `LOCAL_WORK_DIR`, `S3_ENDPOINT_URL`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_REGION`, `VISION_PROVIDER=recorded|ollama`, `VISION_RECORDED_DIR`, `OLLAMA_URL`, `OLLAMA_MODEL`, `OLLAMA_TIMEOUT`, `RENDER_DPI`, `ARTWORK_DPI`, `ARTWORK_PADDING`, `ARTWORK_TRIM_MARGIN`, `CONFIDENCE_THRESHOLD`, `MAX_DOWNLOAD_BYTES`, `BBOX_IOU_THRESHOLD`, `MAX_JOB_ATTEMPTS`, `STAGE_TIMEOUT_SECONDS`, `REDIS_URL`, and `REDIS_QUEUE`.
+Copy `.env.example` to `.env`. Configuration includes `DATABASE_URL`, `STORAGE_BACKEND`, `STORAGE_PATH`, `LOCAL_WORK_DIR`, `S3_ENDPOINT_URL`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_REGION`, `VISION_PROVIDER=recorded|ollama`, `VISION_RECORDED_DIR`, `OLLAMA_URL`, `OLLAMA_MODEL`, `OLLAMA_TIMEOUT`, `RENDER_DPI`, `ARTWORK_DPI`, `ARTWORK_PADDING`, `ARTWORK_TRIM_CAP`, `CONFIDENCE_THRESHOLD`, `MAX_DOWNLOAD_BYTES`, `BBOX_IOU_THRESHOLD`, `MAX_JOB_ATTEMPTS`, `STAGE_TIMEOUT_SECONDS`, `REDIS_URL`, and `REDIS_QUEUE`.
 
 On the Mac, install Docker Desktop and Ollama, pull `qwen3-vl:4b` (or 8b), set `VISION_PROVIDER=ollama`, then run `docker compose up --build`. Ollama stays outside Compose at `http://host.docker.internal:11434`. The worker can also be run directly with `.venv/bin/python -m app.workers.worker`.
 
@@ -64,10 +64,15 @@ Each ad retains its detector crop and may also have a restored artwork artifact.
 Restored artwork is rendered from the source PDF at `ARTWORK_DPI` (300 by
 default), cropped with `ARTWORK_PADDING`, and stored as lossless PNG. A
 conservative trimmed copy is stored separately; the untrimmed copy is retained.
+`ARTWORK_TRIM_CAP` is the maximum number of near-white edge pixels removed per
+side, not the amount of whitespace to preserve.
 Fetch it with `GET /documents/{document_id}/ads/{ad_id}/artwork`. Restoration
 does not upscale source detail, remove backgrounds, sharpen, or add
 transparency. Order-form artwork is only exported when the framed advert has
-sufficient detector confidence; otherwise the ad goes to review.
+sufficient detector confidence and passes a cheap geometric plausibility check.
+We do not detect or prove the visual advert frame; a failed geometric check is
+reported as `order-form advert box failed geometric plausibility check`, while
+low detector confidence remains a separate `low confidence` review reason.
 
 ## Remaining limitations
 

@@ -37,5 +37,5 @@ def make_pipeline(session, settings: Settings):
         settings.bbox_iou_threshold,
         settings.artwork_dpi,
         settings.artwork_padding,
-        settings.artwork_trim_margin,
+        settings.artwork_trim_cap,
     )
