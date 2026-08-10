@@ -5,6 +5,13 @@ einen gemeinsamen Kernel, eine DB-basierte Lease-Queue, ein LLM-Gateway,
 Integrationsadapter und die Verträge für spätere Fachmodule. Nutzerseitige
 Fachtexte bleiben deutsch; Quellcode und Bezeichner sind englisch.
 
+## Architektur und Entscheidungen
+
+Die vollständige visuelle Architektur- und Entscheidungsübersicht steht in
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Die offline lesbare HTML-Ansicht
+mit eingebetteten Diagrammen liegt unter
+[`docs/architecture/index.html`](docs/architecture/index.html).
+
 ## Struktur
 
 - `packages/contracts` — Zod-Schemas für IDs, Mandanten, Benutzer, Rechte,
