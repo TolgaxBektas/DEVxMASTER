@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
-import concurrent.futures
+from time import monotonic
+import inspect
 from app.models import Job
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -16,12 +17,12 @@ def transition(job: Job, state: str, error: str | None = None) -> Job:
     if state == "running":
         job.attempts += 1
         job.started_at = datetime.now(timezone.utc)
-    if state in {"succeeded", "dead"}:
-        job.finished_at = datetime.now(timezone.utc)
     if state == "failed":
         job.last_error = error
         state = "dead" if job.attempts >= job.max_attempts else "failed"
     job.state = state
+    if state in {"succeeded", "dead"}:
+        job.finished_at = datetime.now(timezone.utc)
     return job
 
 
@@ -61,13 +62,12 @@ def run_stage(session: Session, job: Job, action, timeout_seconds: float = 300):
         raise RuntimeError(f"job {job.id} is dead")
     transition(job, "running")
     session.commit()
+    deadline = monotonic() + timeout_seconds
     try:
-        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        future = pool.submit(action)
-        try:
-            future.result(timeout=timeout_seconds)
-        finally:
-            pool.shutdown(wait=False, cancel_futures=True)
+        if "deadline" in inspect.signature(action).parameters:
+            action(deadline=deadline)
+        else:
+            action()
     except Exception as exc:
         transition(job, "failed", str(exc))
         session.commit()

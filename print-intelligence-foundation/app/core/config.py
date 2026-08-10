@@ -28,8 +28,17 @@ class Settings(BaseSettings):
     s3_access_key: str | None = None
     s3_secret_key: str | None = None
     s3_region: str = "us-east-1"
+    service_token: str | None = None
+    auth_disabled: bool = False
 
 
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+def validate_auth_config(settings: Settings) -> None:
+    if not settings.service_token and not settings.auth_disabled:
+        raise RuntimeError(
+            "SERVICE_TOKEN must be configured, or AUTH_DISABLED=true must be explicitly set for local development"
+        )

@@ -12,6 +12,7 @@ from app.services.classify import classify_page
 from app.services.pipeline import Pipeline
 from app.services.storage import LocalStorage, S3Storage
 from app.services.downloader import validate_public_url
+from app.core.config import Settings
 from app.services.vision.recorded import RecordedVisionProvider
 
 
@@ -139,6 +140,47 @@ def test_url_rejects_private_and_non_http(monkeypatch):
         validate_public_url("http://127.0.0.1/file.pdf")
     with pytest.raises(ValueError):
         validate_public_url("ftp://example.test/file.pdf")
+
+
+def test_auth_rejects_missing_and_accepts_bearer(monkeypatch):
+    monkeypatch.setattr(
+        "app.api.auth.get_settings",
+        lambda: Settings(service_token="secret", auth_disabled=False),
+    )
+    with TestClient(app) as client:
+        assert client.get("/documents/1").status_code == 401
+        assert client.get(
+            "/documents/1", headers={"Authorization": "Bearer secret"}
+        ).status_code == 404
+
+
+def test_redirect_to_private_target_is_rejected(monkeypatch):
+    class Response:
+        is_redirect = True
+        headers = {"location": "http://127.0.0.1/private.pdf"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+    calls = []
+
+    def validate(url):
+        calls.append(url)
+        if "127.0.0.1" in url:
+            raise ValueError("private URL is not allowed")
+
+    monkeypatch.setattr("app.services.downloader.validate_public_url", validate)
+    monkeypatch.setattr(
+        "app.services.downloader.httpx.stream", lambda *a, **k: Response()
+    )
+    with pytest.raises(ValueError):
+        from app.services.downloader import download
+
+        download("https://example.test/start.pdf")
+    assert calls == ["https://example.test/start.pdf", "http://127.0.0.1/private.pdf"]
 
 
 def test_review_actions(isolated_db):

@@ -82,3 +82,37 @@ def test_seniorenpost_recorded_pipeline_is_idempotent(tmp_path):
         assert session.scalar(select(func.count(Company.id))) == 4
         assert session.scalar(select(func.count(ReviewItem.id))) >= 1
         assert session.scalar(select(func.count(Job.id))) == 6
+
+
+def test_resumed_detect_uses_numeric_page_mapping(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'test.db'}")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    pdf = Path("tests/fixtures/Seniorenpost_Mai_Juni_2026.pdf").read_bytes()
+    with session_factory() as session:
+        pipeline = Pipeline(
+            session,
+            RecordedVisionProvider("tests/fixtures/qwen"),
+            LocalStorage(tmp_path / "storage"),
+            render_dpi=12,
+            local_work_dir=tmp_path / "work",
+        )
+        document = pipeline.ingest(pdf)
+        detect_job = session.scalar(
+            select(Job).where(Job.document_id == document.id, Job.stage == "detect")
+        )
+        detect_job.state = "queued"
+        session.commit()
+        pipeline.ingest(pdf)
+        ads = session.scalars(
+            select(AdOccurrence)
+            .join(Page)
+            .where(Page.document_id == document.id, Page.page_number == 11)
+        ).all()
+        assert len(ads) == 4
+        assert [ad.company.name for ad in ads] == [
+            "Grau & Sohn",
+            "Altenzentrum Wetzlar-Pariser Gasse",
+            "AWO Kreisverband Lahn-Dill e.V.",
+            "Pietät Ulm",
+        ]

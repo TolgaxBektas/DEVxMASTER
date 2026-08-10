@@ -1,4 +1,6 @@
 import json
+import re
+from time import monotonic
 from pathlib import Path
 from PIL import Image
 from sqlalchemy import select
@@ -78,31 +80,47 @@ class Pipeline:
         self._run(
             doc.id,
             "render",
-            lambda: page_paths.extend(
+            lambda deadline: page_paths.extend(
                 render_pdf(source, local_root / "pages", self.render_dpi)
             ),
             force,
         )
         if not page_paths:
-            page_paths = sorted((local_root / "pages").glob("page_*.png"))
+            page_paths = list((local_root / "pages").glob("page_*.png"))
+        page_paths_by_number = self._page_paths_by_number(page_paths)
         self._run(
             doc.id,
             "classify",
-            lambda: self._classify_pages(doc, source, page_paths),
+            lambda deadline: self._classify_pages(doc, source, page_paths_by_number, deadline),
             force,
         )
         self._run(
             doc.id,
             "detect",
-            lambda: self._detect_pages(doc, page_paths, digest, local_root),
+            lambda deadline: self._detect_pages(doc, page_paths_by_number, digest, local_root, deadline),
             force,
         )
-        self._run(doc.id, "extract", lambda: self._extract_missing(doc, source), force)
+        self._run(doc.id, "extract", lambda deadline: self._extract_missing(doc, source, deadline), force)
         self._run(doc.id, "store", lambda: self.session.commit(), force)
         return doc
 
-    def _classify_pages(self, doc, source, page_paths):
-        for number, path in enumerate(page_paths, 1):
+    @staticmethod
+    def _page_paths_by_number(page_paths):
+        paths = {}
+        for path in page_paths:
+            match = re.fullmatch(r"page_(\d+)", path.stem)
+            if match:
+                paths[int(match.group(1))] = path
+        return dict(sorted(paths.items()))
+
+    @staticmethod
+    def _check_deadline(deadline):
+        if monotonic() >= deadline:
+            raise TimeoutError("stage deadline exceeded")
+
+    def _classify_pages(self, doc, source, page_paths, deadline):
+        for number, path in page_paths.items():
+            self._check_deadline(deadline)
             page = self.session.scalar(
                 select(Page).where(
                     Page.document_id == doc.id, Page.page_number == number
@@ -122,8 +140,9 @@ class Pipeline:
                 page.image_path, page.classification = str(path), classification
         self.session.commit()
 
-    def _detect_pages(self, doc, page_paths, digest, local_root):
-        for number, path in enumerate(page_paths, 1):
+    def _detect_pages(self, doc, page_paths, digest, local_root, deadline):
+        for number, path in page_paths.items():
+            self._check_deadline(deadline)
             page = self.session.scalar(
                 select(Page).where(
                     Page.document_id == doc.id, Page.page_number == number
@@ -145,6 +164,7 @@ class Pipeline:
                 [box for box, _ in candidates], self.bbox_iou_threshold
             )
             for index, box in enumerate(boxes):
+                self._check_deadline(deadline)
                 advert = next(ad for candidate, ad in candidates if candidate == box)
                 key = f"{box.left},{box.top},{box.right},{box.bottom}"
                 if self.session.scalar(
@@ -184,10 +204,11 @@ class Pipeline:
                     )
             self.session.commit()
 
-    def _extract_missing(self, doc, source):
+    def _extract_missing(self, doc, source, deadline):
         for page in self.session.scalars(
             select(Page).where(Page.document_id == doc.id)
         ):
+            self._check_deadline(deadline)
             extracted = []
             occurrences = list(page.ads)
             boxes = [
@@ -208,6 +229,7 @@ class Pipeline:
                 data = json.loads(occurrence.fields_json or "{}")
                 extracted.append((occurrence, data, text))
             for occurrence, data, text in extracted:
+                self._check_deadline(deadline)
                 fields = extract_contact_fields(
                     text, occurrence.company.name if occurrence.company else None
                 ).model_dump(exclude_none=True)

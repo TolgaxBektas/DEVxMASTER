@@ -1,24 +1,29 @@
 import json
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy import select
+from app.api.auth import require_auth
 from app.api.dependencies import pipeline_dependency, session_dependency
 from app.core.config import get_settings
 from app.models import Document, Page
 from app.services.downloader import download
 from app.services.storage import sha256
 
-router = APIRouter(prefix="/documents", tags=["documents"])
+router = APIRouter(
+    prefix="/documents", tags=["documents"], dependencies=[Depends(require_auth)]
+)
 
 
 @router.post("/upload")
-async def upload(file: UploadFile = File(...), session=Depends(session_dependency)):
-    data = await file.read()
+def upload(file: UploadFile = File(...), session=Depends(session_dependency)):
     settings = get_settings()
-    if len(data) > settings.max_download_bytes:
-        raise HTTPException(413, "file too large")
+    data = bytearray()
+    while chunk := file.file.read(1024 * 1024):
+        data.extend(chunk)
+        if len(data) > settings.max_download_bytes:
+            raise HTTPException(413, "file too large")
     return {
         "document_id": pipeline_dependency(session)
-        .ingest(data, file.filename or "document.pdf")
+        .ingest(bytes(data), file.filename or "document.pdf")
         .id
     }
 

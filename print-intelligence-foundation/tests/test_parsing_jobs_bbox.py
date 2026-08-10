@@ -1,11 +1,13 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from fastapi.testclient import TestClient
+import pytest
 from app.main import app
 from app.db.base import Base
 from app.models import Job
 from app.services.bbox import Box, deduplicate_boxes, normalize_bbox
-from app.services.jobs import get_or_create, requeue, retry, transition
+from app.services.jobs import get_or_create, requeue, retry, run_stage, transition
+from app.core.config import Settings, validate_auth_config
 from app.services.parsing import parse_qwen_response
 
 
@@ -56,12 +58,46 @@ def test_job_retry_dead_and_resume():
         transition(job, "running")
         transition(job, "failed", "boom")
         assert job.state == "dead"
+        assert job.finished_at is not None
         requeue(job)
         assert job.state == "queued"
         resumable = get_or_create(session, 1, "detect")
         resumable.state = "running"
         session.flush()
         assert get_or_create(session, 1, "detect").state == "queued"
+
+
+def test_cooperative_deadline_fails_without_worker_thread():
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        job = Job(stage="extract", max_attempts=2)
+        session.add(job)
+        session.flush()
+        thread_ids = []
+
+        def action(deadline):
+            import threading
+
+            thread_ids.append(threading.get_ident())
+            raise TimeoutError("stage deadline exceeded")
+
+        import threading
+
+        main_thread = threading.get_ident()
+        try:
+            run_stage(session, job, action, 0)
+        except TimeoutError:
+            pass
+        assert thread_ids == [main_thread]
+        assert job.state == "failed"
+        assert "deadline" in job.last_error
+
+
+def test_auth_configuration_requires_explicit_opt_out():
+    with pytest.raises(RuntimeError):
+        validate_auth_config(Settings(service_token=None, auth_disabled=False))
+    validate_auth_config(Settings(service_token=None, auth_disabled=True))
 
 
 def test_fastapi_bad_review_decision():

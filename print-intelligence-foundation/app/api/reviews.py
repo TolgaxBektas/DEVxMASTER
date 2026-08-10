@@ -1,10 +1,13 @@
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
+from app.api.auth import require_auth
 from sqlalchemy import select
 from app.api.dependencies import session_dependency
 from app.models import ReviewItem
 
-router = APIRouter(prefix="/review-queue", tags=["review"])
+router = APIRouter(
+    prefix="/review-queue", tags=["review"], dependencies=[Depends(require_auth)]
+)
 
 
 @router.get("")
