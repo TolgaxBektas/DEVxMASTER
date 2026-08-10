@@ -33,7 +33,35 @@ export function createPifProcessor(input: {
       const body = await response.text();
       throw new Error(body || "PDF-Verarbeitung wurde abgelehnt");
     }
-    const result = (await response.json()) as { pages: ProcessedPage[] };
-    return result.pages;
+    const result = (await response.json()) as {
+      pages: Array<{
+        page_number: number;
+        text: string;
+        image_key: string;
+        classification: string;
+        ad_probability: number;
+        occurrences: Array<{
+          bbox: Record<string, number>;
+          image_key: string;
+          confidence: number;
+          company: string;
+          preview: string;
+        }>;
+      }>;
+    };
+    return result.pages.map((page) => ({
+      pageNumber: page.page_number,
+      text: page.text,
+      imageKey: page.image_key,
+      classification: page.classification,
+      adProbability: page.ad_probability,
+      occurrences: page.occurrences.map((occurrence) => ({
+        bbox: occurrence.bbox,
+        imageKey: occurrence.image_key,
+        confidence: occurrence.confidence,
+        company: occurrence.company,
+        preview: occurrence.preview,
+      })),
+    }));
   };
 }
