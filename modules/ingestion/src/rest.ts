@@ -62,16 +62,6 @@ async function handleUpload(
     const upload = await readPdf(request, deps.maxUploadBytes);
     const sha256 = createHash("sha256").update(upload.bytes).digest("hex");
     const storageKey = `tenants/${auth.tenantId}/originals/${sha256}/${safeFilename(upload.filename)}`;
-    const existing = await deps.repository.listDocuments(auth.tenantId);
-    if (existing.some((document) => document.sha256 === sha256)) {
-      response.json({
-        documentId: existing.find((document) => document.sha256 === sha256)?.id,
-        filename: upload.filename,
-        state: existing.find((document) => document.sha256 === sha256)?.state,
-        deduplicated: true,
-      });
-      return;
-    }
     await deps.storage.put(storageKey, upload.bytes, "application/pdf");
     const result = await deps.transaction(async (db) => {
       const repository = deps.repositoryFor?.(db) ?? deps.repository;
@@ -121,8 +111,11 @@ async function handleUpload(
       deduplicated: result.deduplicated,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Upload fehlgeschlagen";
-    const status = message === "file_too_large" ? 413 : 400;
+    const reason = error instanceof Error ? error.message : "upload_failed";
+    const status = reason === "file_too_large" ? 413 : 400;
+    const message = reason === "file_too_large"
+      ? `Datei zu groß (maximal ${formatUploadLimit(deps.maxUploadBytes)})`
+      : reason === "upload_failed" ? "Upload fehlgeschlagen" : reason;
     response.status(status).json({ code: "UPLOAD_REJECTED", message });
   }
 }
@@ -164,4 +157,14 @@ function readPdf(request: Request, maxBytes: number): Promise<{ bytes: Buffer; f
 
 function safeFilename(filename: string) {
   return filename.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 255) || "upload.pdf";
+}
+
+function formatUploadLimit(bytes: number) {
+  if (bytes >= 1024 * 1024 && bytes % (1024 * 1024) === 0) {
+    return `${bytes / (1024 * 1024)} MB`;
+  }
+  if (bytes >= 1024 && bytes % 1024 === 0) {
+    return `${bytes / 1024} KB`;
+  }
+  return `${bytes} Bytes`;
 }

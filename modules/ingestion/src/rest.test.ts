@@ -73,6 +73,7 @@ describe("Ingestion-Upload", () => {
     });
     expect(nonPdf.status).toBe(400);
     expect(tooLarge.status).toBe(413);
+    expect((await tooLarge.json()).message).toBe("Datei zu groß (maximal 32 Bytes)");
   });
 
   it("dedupliziert denselben Hash nur innerhalb eines Mandanten", async () => {
