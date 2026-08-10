@@ -15,6 +15,13 @@
       "when": 1786328336209,
       "tag": "0001_clammy_mach_iv",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1786329049745,
+      "tag": "0002_yellow_siren",
+      "breakpoints": true
     }
   ]
 }
