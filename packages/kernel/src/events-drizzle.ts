@@ -104,6 +104,17 @@ export function createDrizzleEventRepository(db: any): EventRepository {
         .where(eq(eventOutbox.eventId, eventId));
     },
     async requeue(eventId) {
+      const current = (
+        await db
+          .select()
+          .from(eventOutbox)
+          .where(eq(eventOutbox.eventId, eventId))
+          .limit(1)
+      )[0];
+      if (!current) return null;
+      if (current.publishedAt || !current.deadLetter) {
+        throw new Error("Nur Dead Letters können erneut zugestellt werden");
+      }
       await db
         .update(eventOutbox)
         .set({
@@ -112,7 +123,13 @@ export function createDrizzleEventRepository(db: any): EventRepository {
           deadLetter: false,
           publishedAt: null,
         })
-        .where(eq(eventOutbox.eventId, eventId));
+        .where(
+          and(
+            eq(eventOutbox.eventId, eventId),
+            eq(eventOutbox.deadLetter, true),
+            isNull(eventOutbox.publishedAt),
+          ),
+        );
       const row = (
         await db
           .select()
@@ -120,7 +137,10 @@ export function createDrizzleEventRepository(db: any): EventRepository {
           .where(eq(eventOutbox.eventId, eventId))
           .limit(1)
       )[0];
-      return row ? rowToEvent(row) : null;
+      if (!row || row.publishedAt || row.deadLetter) {
+        throw new Error("Ereignis konnte nicht erneut zugestellt werden");
+      }
+      return rowToEvent(row);
     },
     async markPublished(id) {
       await db

@@ -38,9 +38,15 @@ export function SystemPage({ api }: ModulePageProps) {
   const health = useModuleQuery<Health[]>(api, "modules.system.health");
   const audit = useModuleQuery<AuditRow[]>(api, "modules.system.audit.list");
   const jobs = useModuleQuery<JobRow[]>(api, "modules.system.jobs.list");
+  const permissions = useModuleQuery<string[]>(
+    api,
+    "modules.system.permissions",
+  );
   const events = useModuleQuery<EventRow[]>(
     api,
     "modules.system.events.list",
+    undefined,
+    permissions.data?.includes("system.events.read") ?? false,
   );
   const costs = useModuleQuery<Record<string, unknown>[]>(
     api,
@@ -62,13 +68,13 @@ export function SystemPage({ api }: ModulePageProps) {
   const verify = async () =>
     setVerification(await api.query("modules.system.audit.verify"));
   if (
-    [health, audit, jobs, events, costs, flags, policies].some(
+    [health, audit, jobs, permissions, costs, flags, policies].some(
       (query) => query.isLoading,
     )
   )
     return <Skeleton />;
   if (
-    [health, audit, jobs, events, costs, flags, policies].some(
+    [health, audit, jobs, permissions, costs, flags, policies].some(
       (query) => query.error,
     )
   ) {
@@ -89,6 +95,8 @@ export function SystemPage({ api }: ModulePageProps) {
     "/system/policies": "Automations-Policies",
   };
   const title = titles[path] ?? "Betriebsübersicht";
+  const canRequeueJobs = permissions.data?.includes("system.jobs.requeue");
+  const canRequeueEvents = permissions.data?.includes("system.events.requeue");
   const requeueJob = async (id: string) => {
     setMessage("");
     try {
@@ -178,7 +186,7 @@ export function SystemPage({ api }: ModulePageProps) {
                 key: "action",
                 label: "Aktion",
                 render: (row) =>
-                  row.status === "dead" ? (
+                  row.status === "dead" && canRequeueJobs ? (
                     <Button
                       variant="secondary"
                       onClick={() => void requeueJob(row.id)}
@@ -200,14 +208,15 @@ export function SystemPage({ api }: ModulePageProps) {
               {
                 key: "action",
                 label: "Aktion",
-                render: (row) => (
-                  <Button
-                    variant="secondary"
-                    onClick={() => void requeueEvent(row.eventId)}
-                  >
-                    Erneut zustellen
-                  </Button>
-                ),
+                render: (row) =>
+                  canRequeueEvents ? (
+                    <Button
+                      variant="secondary"
+                      onClick={() => void requeueEvent(row.eventId)}
+                    >
+                      Erneut zustellen
+                    </Button>
+                  ) : null,
               },
             ]}
           />

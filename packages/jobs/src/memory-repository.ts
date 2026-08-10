@@ -118,6 +118,9 @@ export class MemoryQueueRepository implements QueueRepository {
   async requeue(id: string, now: Date) {
     const job = this.jobs.get(id);
     if (!job) return null;
+    if (job.status !== "dead") {
+      throw new Error("Nur tote Jobs können erneut eingereiht werden");
+    }
     const updated = {
       ...job,
       status: "pending" as const,

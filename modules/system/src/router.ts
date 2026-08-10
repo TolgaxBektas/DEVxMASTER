@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull, or } from "drizzle-orm";
 import { z } from "zod";
 import {
   aiUsageLedger,
@@ -31,6 +31,9 @@ export function createSystemRouter(deps: {
     navigation: permissionProcedure("system.health.read").query(({ ctx }) =>
       deps.navigation(ctx.auth.permissions),
     ),
+    permissions: permissionProcedure("system.health.read").query(({ ctx }) =>
+      [...ctx.auth.permissions],
+    ),
     audit: router({
       list: permissionProcedure("system.audit.read").query(() =>
         deps.db.select().from(auditLog).orderBy(desc(auditLog.seq)).limit(100),
@@ -40,12 +43,36 @@ export function createSystemRouter(deps: {
       ),
     }),
     jobs: router({
-      list: permissionProcedure("system.jobs.read").query(() =>
-        deps.db.select().from(jobs).orderBy(desc(jobs.updatedAt)).limit(100),
+      list: permissionProcedure("system.jobs.read").query(({ ctx }) =>
+        deps.db
+          .select()
+          .from(jobs)
+          .where(
+            or(
+              eq(jobs.tenantId, Number(ctx.auth.tenantId)),
+              isNull(jobs.tenantId),
+            ),
+          )
+          .orderBy(desc(jobs.updatedAt))
+          .limit(100),
       ),
-      requeue: permissionProcedure("system.jobs.read")
+      requeue: permissionProcedure("system.jobs.requeue")
         .input(z.object({ id: z.string().uuid() }))
         .mutation(async ({ ctx, input }) => {
+          const current = (
+            await deps.db
+              .select()
+              .from(jobs)
+              .where(eq(jobs.id, input.id))
+              .limit(1)
+          )[0];
+          if (
+            !current ||
+            (current.tenantId !== null &&
+              current.tenantId !== Number(ctx.auth.tenantId))
+          ) {
+            throw new Error("Job nicht gefunden");
+          }
           const job = await deps.queue.requeue(input.id);
           if (!job) throw new Error("Job nicht gefunden");
           await appendAudit(deps.audit, {
@@ -61,16 +88,30 @@ export function createSystemRouter(deps: {
         }),
     }),
     events: router({
-      list: permissionProcedure("system.jobs.read").query(() =>
+      list: permissionProcedure("system.events.read").query(({ ctx }) =>
         deps.db
           .select()
           .from(eventOutbox)
+          .where(eq(eventOutbox.tenantId, Number(ctx.auth.tenantId)))
           .orderBy(desc(eventOutbox.createdAt))
           .limit(100),
       ),
-      requeue: permissionProcedure("system.jobs.read")
+      requeue: permissionProcedure("system.events.requeue")
         .input(z.object({ id: z.string().uuid() }))
         .mutation(async ({ ctx, input }) => {
+          const current = (
+            await deps.db
+              .select()
+              .from(eventOutbox)
+              .where(
+                and(
+                  eq(eventOutbox.eventId, input.id),
+                  eq(eventOutbox.tenantId, Number(ctx.auth.tenantId)),
+                ),
+              )
+              .limit(1)
+          )[0];
+          if (!current) throw new Error("Event nicht gefunden");
           const event = await deps.events.requeue(input.id);
           if (!event) throw new Error("Event nicht gefunden");
           await appendAudit(deps.audit, {

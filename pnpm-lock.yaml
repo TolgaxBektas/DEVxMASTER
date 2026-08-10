@@ -366,6 +366,9 @@ importers:
 
   modules/system:
     dependencies:
+      '@xmaster-center/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@xmaster-center/jobs':
         specifier: workspace:*
         version: link:../../packages/jobs

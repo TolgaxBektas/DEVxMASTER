@@ -69,6 +69,9 @@ export class MemoryEventRepository implements EventRepository {
   async requeue(eventId: string) {
     const event = this.events.find((item) => item.id === eventId);
     if (!event) return null;
+    if (event.publishedAt || !event.delivery.deadLetter) {
+      throw new Error("Nur Dead Letters können erneut zugestellt werden");
+    }
     event.delivery.attempts = 0;
     event.delivery.deadLetter = false;
     event.delivery.nextAttemptAt = null;

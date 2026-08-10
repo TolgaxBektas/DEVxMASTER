@@ -129,6 +129,11 @@ export class DrizzleQueueRepository implements QueueRepository {
   }
 
   async requeue(id: string, now: Date) {
+    const current = await this.get(id);
+    if (!current) return null;
+    if (current.status !== "dead") {
+      throw new Error("Nur tote Jobs können erneut eingereiht werden");
+    }
     await this.db
       .update(jobs)
       .set({
@@ -140,7 +145,11 @@ export class DrizzleQueueRepository implements QueueRepository {
         lastError: null,
         updatedAt: now,
       })
-      .where(eq(jobs.id, id));
-    return this.get(id);
+      .where(and(eq(jobs.id, id), eq(jobs.status, "dead")));
+    const updated = await this.get(id);
+    if (!updated || updated.status !== "pending") {
+      throw new Error("Job konnte nicht erneut eingereiht werden");
+    }
+    return updated;
   }
 }
