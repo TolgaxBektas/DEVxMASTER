@@ -3,6 +3,10 @@ import { MemoryEventRepository } from "@xmaster-center/kernel";
 import { MemoryIngestionRepository } from "./memory-repository.js";
 import { createIngestionModule } from "./module.js";
 
+const context = (tenantId: string | null, payload: unknown) => ({
+  job: { tenantId, payload },
+});
+
 describe("Ingestion-Bestand", () => {
   it("dedupliziert Dokumente über den Inhalts-Hash", async () => {
     const repository = new MemoryIngestionRepository();
@@ -90,8 +94,14 @@ describe("Ingestion-Bestand", () => {
     });
     const job = module.jobs.find((item) => item.name === "ingestion.processing.run");
     if (!job) throw new Error("Verarbeitungsjob fehlt");
-    await job.handle({ tenantId: "1", documentId: document.document.id }, {});
-    await job.handle({ tenantId: "1", documentId: document.document.id }, {});
+    await job.handle(
+      { documentId: document.document.id },
+      context("1", { documentId: document.document.id }),
+    );
+    await job.handle(
+      { documentId: document.document.id },
+      context("1", { documentId: document.document.id }),
+    );
     expect(calls).toBe(1);
     expect(repository.occurrences).toHaveLength(1);
   });
@@ -116,7 +126,81 @@ describe("Ingestion-Bestand", () => {
     });
     const job = module.jobs.find((item) => item.name === "ingestion.processing.run");
     if (!job) throw new Error("Verarbeitungsjob fehlt");
-    await expect(job.handle({ tenantId: "1", documentId: document.document.id }, {}))
+    await expect(job.handle(
+      { documentId: document.document.id },
+      context("1", { documentId: document.document.id }),
+    ))
       .rejects.toThrow("PDF-Verarbeitung ist nicht erreichbar");
+  });
+
+  it("verarbeitet ein Dokument des zweiten Mandanten mit dem Job-Mandanten", async () => {
+    const repository = new MemoryIngestionRepository();
+    const document = await repository.createUploadedDocument("2", {
+      filename: "tenant-2.pdf",
+      sha256: "e".repeat(64),
+      storageKey: "tenants/2/originals/e/tenant-2.pdf",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "upload",
+    });
+    const module = createIngestionModule({
+      repository,
+      repositoryForTransaction: () => repository,
+      transaction: async (callback) => callback({}),
+      processDocument: async ({ tenantId }) => [{
+        pageNumber: 1,
+        text: `Mandant ${tenantId}`,
+        imageKey: "page.png",
+        classification: "MIXED_CONTENT",
+        adProbability: 0.5,
+        occurrences: [],
+      }],
+      publish: async () => undefined,
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.processing.run");
+    if (!job) throw new Error("Verarbeitungsjob fehlt");
+    await job.handle(
+      { documentId: document.document.id },
+      context("2", { documentId: document.document.id }),
+    );
+    expect((await repository.getDocument("2", document.document.id)).state).toBe("processed");
+  });
+
+  it("verweigert einen Job ohne ermittelbaren Mandanten", async () => {
+    const repository = new MemoryIngestionRepository();
+    const module = createIngestionModule({ repository, publish: async () => undefined });
+    const job = module.jobs.find((item) => item.name === "ingestion.processing.run");
+    if (!job) throw new Error("Verarbeitungsjob fehlt");
+    await expect(job.handle(
+      { documentId: 1 },
+      context(null, { documentId: 1 }),
+    )).rejects.toThrow("Mandant für Job fehlt");
+  });
+
+  it("markiert ein Dokument nach einem endgültigen Jobfehler als fehlgeschlagen", async () => {
+    const repository = new MemoryIngestionRepository();
+    const document = await repository.createUploadedDocument("2", {
+      filename: "tenant-2-failed.pdf",
+      sha256: "f".repeat(64),
+      storageKey: "tenants/2/originals/f/tenant-2-failed.pdf",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "upload",
+    });
+    const module = createIngestionModule({
+      repository,
+      transaction: async (callback) => callback({}),
+      processDocument: async () => { throw new Error("PIF dauerhaft nicht erreichbar"); },
+      publish: async () => undefined,
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.processing.run");
+    if (!job || !job.onFailure) throw new Error("Verarbeitungsjob fehlt");
+    const failureContext = context("2", { documentId: document.document.id });
+    await expect(job.handle({ documentId: document.document.id }, failureContext))
+      .rejects.toThrow("PIF dauerhaft nicht erreichbar");
+    await job.onFailure("PIF dauerhaft nicht erreichbar", failureContext);
+    const failed = await repository.getDocument("2", document.document.id);
+    expect(failed.state).toBe("failed");
+    expect(failed.error).toBe("PIF dauerhaft nicht erreichbar");
   });
 });

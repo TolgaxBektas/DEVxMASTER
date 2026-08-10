@@ -22,6 +22,7 @@ export type ModuleHealth = {
 export type ModuleJob = {
   name: string;
   handle: (payload: unknown, context: unknown) => Promise<void>;
+  onFailure?: (error: unknown, context: unknown) => Promise<void>;
   maxAttempts?: number;
   timeoutMs?: number;
   schedule?: string;

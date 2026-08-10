@@ -61,6 +61,7 @@ export type JobHandlerContext = {
 export type JobHandler = {
   name: string;
   handle(payload: unknown, context: JobHandlerContext): Promise<void>;
+  onFailure?(error: unknown, context: JobHandlerContext): Promise<void>;
   maxAttempts?: number;
   timeoutMs?: number;
 };

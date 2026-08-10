@@ -30,6 +30,20 @@ export type ProcessedPage = {
   }>;
 };
 
+type JobContext = { job: { tenantId: string | null } };
+
+function jobTenantId(context: unknown) {
+  const tenantId = (context as JobContext).job?.tenantId;
+  if (!tenantId) throw new Error("Mandant für Job fehlt");
+  return tenantId;
+}
+
+function jobDocumentId(payload: unknown) {
+  const documentId = (payload as { documentId?: unknown }).documentId;
+  if (typeof documentId !== "number") throw new Error("Dokument für Job fehlt");
+  return documentId;
+}
+
 export function createIngestionModule(deps: {
   db?: unknown;
   repository?: IngestionRepository;
@@ -103,23 +117,23 @@ export function createIngestionModule(deps: {
       {
         name: "ingestion.discovery.run",
         schedule: "daily",
-        handle: async (payload) => {
-          const tenantId = String((payload as { tenantId?: string }).tenantId ?? "1");
+        handle: async (payload, context) => {
+          const tenantId = jobTenantId(context);
           if (deps.enqueue) await deps.enqueue({
             name: "ingestion.processing.run",
             tenantId,
-            payload: { tenantId },
+            payload: {},
           });
         },
       },
       {
         name: "ingestion.processing.run",
         schedule: "daily",
-        handle: async (payload) => {
-          const tenantId = String((payload as { tenantId?: string }).tenantId ?? "1");
-          const input = payload as { documentId?: number };
-          const documents = input.documentId
-            ? [await repository.getDocument(tenantId, input.documentId)]
+        handle: async (payload, context) => {
+          const tenantId = jobTenantId(context);
+          const documentId = (payload as { documentId?: unknown }).documentId;
+          const documents = typeof documentId === "number"
+            ? [await repository.getDocument(tenantId, documentId)]
             : await repository.listDocuments(tenantId);
           for (const document of documents.filter((item) => item.state === "uploaded" || item.state === "failed")) {
             if (!deps.processDocument || !deps.transaction) {
@@ -175,6 +189,15 @@ export function createIngestionModule(deps: {
               await repository.setDocumentState(tenantId, document.id, "failed", message);
               throw error;
             }
+          }
+        },
+        onFailure: async (error, context) => {
+          const tenantId = jobTenantId(context);
+          const documentId = jobDocumentId((context as { job: { payload: unknown } }).job.payload);
+          const message = error instanceof Error ? error.message : "Verarbeitung fehlgeschlagen";
+          const document = await repository.getDocument(tenantId, documentId);
+          if (document.state !== "failed") {
+            await repository.setDocumentState(tenantId, documentId, "failed", message);
           }
         },
       },

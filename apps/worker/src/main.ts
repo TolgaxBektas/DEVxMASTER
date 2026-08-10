@@ -122,6 +122,9 @@ const handlers = new Map(
       ...(job.timeoutMs === undefined ? {} : { timeoutMs: job.timeoutMs }),
       handle: (payload: unknown, context: unknown) =>
         job.handle(payload, context),
+      ...(job.onFailure
+        ? { onFailure: (error: unknown, context: unknown) => job.onFailure!(error, context) }
+        : {}),
     },
   ]),
 );
@@ -142,6 +145,7 @@ scheduler.start(
     .map((job) => ({
       name: job.name,
       intervalMs: 86_400_000,
+      tenantId: "1",
       payload: { tenantId: "1" },
     })),
 );

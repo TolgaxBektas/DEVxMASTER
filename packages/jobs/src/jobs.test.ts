@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { MemoryQueueRepository } from "./memory-repository.js";
 import { LeaseQueue } from "./queue.js";
 import { retryDelay } from "./backoff.js";
+import { Worker } from "./worker.js";
 
 describe("Lease-Queue", () => {
   it("vergibt parallele Claims nur einmal", async () => {
@@ -53,5 +54,32 @@ describe("Lease-Queue", () => {
     expect(requeued?.status).toBe("pending");
     expect(requeued?.attempts).toBe(0);
     expect(requeued?.lastError).toBeNull();
+  });
+
+  it("ruft bei einem endgültigen Fehler den Handler für die sichtbare Nachbearbeitung auf", async () => {
+    const repository = new MemoryQueueRepository();
+    const queue = new LeaseQueue(repository);
+    await queue.enqueue({ name: "test", payload: { documentId: 7 }, maxAttempts: 1 });
+    const failures: Array<{ tenantId: string | null; message: string }> = [];
+    const worker = new Worker(queue, new Map([[
+      "test",
+      {
+        name: "test",
+        handle: async () => { throw new Error("dauerhaft fehlgeschlagen"); },
+        onFailure: async (error, context) => {
+          failures.push({
+            tenantId: context.job.tenantId,
+            message: error instanceof Error ? error.message : String(error),
+          });
+        },
+      },
+    ]]));
+    const controller = new AbortController();
+    const run = worker.run({ workerId: "test", pollMs: 1, signal: controller.signal });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    controller.abort();
+    worker.stop();
+    await run;
+    expect(failures).toEqual([{ tenantId: null, message: "dauerhaft fehlgeschlagen" }]);
   });
 });

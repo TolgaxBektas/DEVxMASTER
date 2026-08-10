@@ -44,11 +44,18 @@ export class Worker {
         );
         await this.queue.complete(job);
       } catch (error) {
+        const maxAttempts = handler.maxAttempts ?? job.maxAttempts;
+        const terminal = job.attempts >= maxAttempts;
         await this.queue.fail(
           job,
           error,
-          handler.maxAttempts ?? job.maxAttempts,
+          maxAttempts,
         );
+        if (terminal) await handler.onFailure?.(error, createJobHandlerContext(
+          this.queue,
+          job,
+          controller.signal,
+        ));
       } finally {
         if (timer) clearTimeout(timer);
       }
