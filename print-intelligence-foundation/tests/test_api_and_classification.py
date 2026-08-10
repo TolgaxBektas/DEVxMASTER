@@ -1,4 +1,5 @@
 from unittest.mock import Mock
+import socket
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -181,6 +182,40 @@ def test_redirect_to_private_target_is_rejected(monkeypatch):
 
         download("https://example.test/start.pdf")
     assert calls == ["https://example.test/start.pdf", "http://127.0.0.1/private.pdf"]
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        "192.0.2.1",
+        "169.254.1.1",
+        "0.0.0.0",
+        "224.0.0.1",
+        "::",
+        "ff02::1",
+        "::ffff:127.0.0.1",
+    ],
+)
+def test_validate_public_url_rejects_unsafe_resolved_addresses(monkeypatch, address):
+    family = socket.AF_INET6 if ":" in address else socket.AF_INET
+    monkeypatch.setattr(
+        "app.services.downloader.socket.getaddrinfo",
+        lambda *args, **kwargs: [(family, socket.SOCK_STREAM, 6, "", (address, 0))],
+    )
+    with pytest.raises(ValueError, match="private"):
+        validate_public_url("https://example.test/file.pdf")
+
+
+def test_validate_public_url_checks_every_resolved_address(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.downloader.socket.getaddrinfo",
+        lambda *args, **kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0)),
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0)),
+        ],
+    )
+    with pytest.raises(ValueError, match="private"):
+        validate_public_url("https://example.test/file.pdf")
 
 
 def test_review_actions(isolated_db):
