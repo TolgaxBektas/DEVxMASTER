@@ -2,8 +2,10 @@ import { desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import {
   aiUsageLedger,
+  appendAudit,
   auditLog,
   automationPolicies,
+  eventOutbox,
   featureFlags,
   jobs,
   permissionProcedure,
@@ -11,10 +13,14 @@ import {
   verifyAuditChain,
   type AuditRepository,
 } from "@xmaster-center/kernel";
+import type { EventRepository } from "@xmaster-center/kernel";
+import type { LeaseQueue } from "@xmaster-center/jobs";
 
 export function createSystemRouter(deps: {
   db: any;
   audit: AuditRepository;
+  events: EventRepository;
+  queue: LeaseQueue;
   health(): Promise<unknown>;
   navigation(permissions: ReadonlySet<string>): unknown[];
 }) {
@@ -37,6 +43,47 @@ export function createSystemRouter(deps: {
       list: permissionProcedure("system.jobs.read").query(() =>
         deps.db.select().from(jobs).orderBy(desc(jobs.updatedAt)).limit(100),
       ),
+      requeue: permissionProcedure("system.jobs.read")
+        .input(z.object({ id: z.string().uuid() }))
+        .mutation(async ({ ctx, input }) => {
+          const job = await deps.queue.requeue(input.id);
+          if (!job) throw new Error("Job nicht gefunden");
+          await appendAudit(deps.audit, {
+            tenantId: ctx.auth.tenantId,
+            action: "job.requeued",
+            entityType: "job",
+            entityId: job.id,
+            actorId: ctx.auth.user.id,
+            actorName: ctx.auth.user.displayName,
+            detailsJson: JSON.stringify({ name: job.name }),
+          });
+          return job;
+        }),
+    }),
+    events: router({
+      list: permissionProcedure("system.jobs.read").query(() =>
+        deps.db
+          .select()
+          .from(eventOutbox)
+          .orderBy(desc(eventOutbox.createdAt))
+          .limit(100),
+      ),
+      requeue: permissionProcedure("system.jobs.read")
+        .input(z.object({ id: z.string().uuid() }))
+        .mutation(async ({ ctx, input }) => {
+          const event = await deps.events.requeue(input.id);
+          if (!event) throw new Error("Event nicht gefunden");
+          await appendAudit(deps.audit, {
+            tenantId: ctx.auth.tenantId,
+            action: "event.requeued",
+            entityType: "event",
+            entityId: event.id,
+            actorId: ctx.auth.user.id,
+            actorName: ctx.auth.user.displayName,
+            detailsJson: JSON.stringify({ name: event.name }),
+          });
+          return event;
+        }),
     }),
     ai: router({
       costs: permissionProcedure("system.ai.read")

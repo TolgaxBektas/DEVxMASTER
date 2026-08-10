@@ -1,5 +1,7 @@
 import { defineModule, type ModuleDefinition } from "@xmaster-center/kernel";
 import { createSystemRouter } from "./router.js";
+import type { EventRepository } from "@xmaster-center/kernel";
+import type { LeaseQueue } from "@xmaster-center/jobs";
 import { systemPages, SystemPage } from "./ui/index.js";
 
 export { systemPages } from "./ui/index.js";
@@ -7,6 +9,8 @@ export { systemPages } from "./ui/index.js";
 export function createSystemModule(deps: {
   db: any;
   audit: any;
+  events: EventRepository;
+  queue: LeaseQueue;
   health(): Promise<unknown>;
   navigation(permissions: ReadonlySet<string>): unknown[];
 }): ModuleDefinition {
@@ -72,6 +76,9 @@ export function createSystemModule(deps: {
       { permission: "system.health.read", title: "Betriebsstatus lesen" },
       { permission: "system.audit.read", title: "Audit lesen" },
       { permission: "system.jobs.read", title: "Jobs lesen" },
+      { permission: "system.jobs.requeue", title: "Jobs erneut einreihen" },
+      { permission: "system.events.read", title: "Ereignisse lesen" },
+      { permission: "system.events.requeue", title: "Ereignisse erneut zustellen" },
       { permission: "system.ai.read", title: "KI-Kosten lesen" },
       { permission: "system.flags.read", title: "Feature Flags lesen" },
       {

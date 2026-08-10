@@ -191,4 +191,35 @@ describe("Event-Outbox", () => {
     expect(poisonCalls).toBe(2);
     expect(repository.events[0]!.delivery.deadLetter).toBe(true);
   });
+  it("stellt Dead Letters nach Wiedervorlage erneut zu", async () => {
+    const repository = new MemoryEventRepository();
+    let calls = 0;
+    const bus = createEventBus(
+      repository,
+      [
+        {
+          name: "retry",
+          async handle() {
+            calls += 1;
+            if (calls === 1) throw new Error("kaputt");
+          },
+        },
+      ],
+      { maxAttempts: 1, backoffMs: () => 0 },
+    );
+    const event = await bus.publish({
+      name: "retry",
+      tenantId: "t",
+      aggregateType: "x",
+      aggregateId: "1",
+      payload: {},
+      idempotencyKey: "retry",
+    });
+    await bus.dispatch();
+    expect((await repository.state(event.id)).deadLetter).toBe(true);
+    await repository.requeue(event.id);
+    expect((await repository.state(event.id)).attempts).toBe(0);
+    expect(await bus.dispatch()).toBe(1);
+    expect(calls).toBe(2);
+  });
 });

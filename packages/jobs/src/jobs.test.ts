@@ -40,4 +40,18 @@ describe("Lease-Queue", () => {
       retryDelay(1, { baseMs: 100, jitter: 0 }),
     );
   });
+  it("setzt tote Jobs bei der Wiedervorlage zurück", async () => {
+    const now = new Date("2026-01-01T00:00:00Z");
+    const repository = new MemoryQueueRepository();
+    const queue = new LeaseQueue(repository, { now: () => now });
+    const created = await queue.enqueue({ name: "test", payload: {} });
+    const claim = await queue.claimNext();
+    await queue.fail(claim!, "kaputt", 1);
+    const dead = await repository.get(created.id);
+    expect(dead?.status).toBe("dead");
+    const requeued = await queue.requeue(created.id);
+    expect(requeued?.status).toBe("pending");
+    expect(requeued?.attempts).toBe(0);
+    expect(requeued?.lastError).toBeNull();
+  });
 });

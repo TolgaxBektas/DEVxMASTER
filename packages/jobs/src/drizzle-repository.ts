@@ -127,4 +127,20 @@ export class DrizzleQueueRepository implements QueueRepository {
       null
     );
   }
+
+  async requeue(id: string, now: Date) {
+    await this.db
+      .update(jobs)
+      .set({
+        status: "pending",
+        attempts: 0,
+        availableAt: now,
+        leaseToken: null,
+        leaseExpiresAt: null,
+        lastError: null,
+        updatedAt: now,
+      })
+      .where(eq(jobs.id, id));
+    return this.get(id);
+  }
 }

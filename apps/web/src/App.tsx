@@ -9,7 +9,11 @@ import { AppShell, EmptyState, type ModulePageProps } from "@xmaster-center/ui";
 import { crmPages, CrmPage } from "@xmaster-center/module-crm/ui";
 import { systemPages, SystemPage } from "@xmaster-center/module-system/ui";
 import { billingPages, BillingPage } from "@xmaster-center/module-billing/ui";
-import { ingestionPages, IngestionPage } from "@xmaster-center/module-ingestion/ui";
+import {
+  ingestionPages,
+  IngestionPage,
+  OccurrencesPage,
+} from "@xmaster-center/module-ingestion/ui";
 import { assistantPages, AssistantPage } from "@xmaster-center/module-assistant/ui";
 import { ApiError, logout, moduleApi, sessionRequest } from "./api.js";
 import { LoginPage } from "./LoginPage.js";
@@ -55,7 +59,7 @@ const pages: Page[] = [
     title,
     path,
     permission,
-    component: IngestionPage,
+    component: path === "/ingestion/occurrences" ? OccurrencesPage : IngestionPage,
   })),
   ...assistantPages.map(([id, title, path, permission]) => ({
     id,

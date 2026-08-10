@@ -366,6 +366,9 @@ importers:
 
   modules/system:
     dependencies:
+      '@xmaster-center/jobs':
+        specifier: workspace:*
+        version: link:../../packages/jobs
       '@xmaster-center/kernel':
         specifier: workspace:*
         version: link:../../packages/kernel

@@ -17,6 +17,7 @@ export type EventRepository = {
     eventId: string,
     input: { nextAttemptAt: Date; deadLetter: boolean },
   ): Promise<void>;
+  requeue(eventId: string): Promise<EventEnvelope | null>;
   markPublished(id: string): Promise<void>;
 };
 

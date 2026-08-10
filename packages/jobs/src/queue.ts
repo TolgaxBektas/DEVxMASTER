@@ -99,6 +99,10 @@ export class LeaseQueue {
       dead,
     });
   }
+
+  requeue(id: string): Promise<JobRecord | null> {
+    return this.repository.requeue(id, this.now());
+  }
 }
 
 export function createJobHandlerContext(

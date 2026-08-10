@@ -30,6 +30,8 @@ let registry: ModuleRegistry;
 const system = createSystemModule({
   db,
   audit,
+  events: eventRepository,
+  queue,
   health: async () => [
     { id: "system", status: "healthy" },
     { id: "crm", status: "healthy" },

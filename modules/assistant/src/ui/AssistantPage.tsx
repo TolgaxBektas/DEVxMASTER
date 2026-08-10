@@ -6,6 +6,7 @@ import {
   useModuleQuery,
   type ModulePageProps,
 } from "@xmaster-center/ui";
+import { useState } from "react";
 
 type Briefing = {
   overdueInvoices?: number;
@@ -39,6 +40,7 @@ function formatCosts(micros: number, budgetMicros: number) {
 }
 
 export function AssistantPage({ api }: ModulePageProps) {
+  const [message, setMessage] = useState("");
   const briefing = useModuleQuery<Briefing>(
     api,
     "modules.assistant.briefing",
@@ -54,12 +56,22 @@ export function AssistantPage({ api }: ModulePageProps) {
   const refreshProposals = () =>
     api.invalidate?.("modules.assistant.proposals.list");
   const approve = async (id: string) => {
-    await api.mutate("modules.assistant.proposals.approve", { id });
-    await refreshProposals();
+    setMessage("");
+    try {
+      await api.mutate("modules.assistant.proposals.approve", { id });
+      await refreshProposals();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Freigabe fehlgeschlagen");
+    }
   };
   const execute = async (id: string) => {
-    await api.mutate("modules.assistant.proposals.execute", { id });
-    await refreshProposals();
+    setMessage("");
+    try {
+      await api.mutate("modules.assistant.proposals.execute", { id });
+      await refreshProposals();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Ausführung fehlgeschlagen");
+    }
   };
   const costs = briefing.data?.costsMicros ?? 0;
   const budget = briefing.data?.budgetMicros ?? 0;
@@ -73,6 +85,7 @@ export function AssistantPage({ api }: ModulePageProps) {
           <p>Modulübergreifende Lage und freigegebene Aktionen.</p>
         </div>
       </div>
+      {message && <div className="form-message">{message}</div>}
       <Card>
         <h2>Lage</h2>
         <div className="metric-grid">

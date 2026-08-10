@@ -25,12 +25,23 @@ type JobRow = {
   attempts: number;
   lastError: string | null;
 };
+type EventRow = {
+  eventId: string;
+  name: string;
+  deadLetter: boolean;
+  deliveryAttempts: number;
+  lastError: string | null;
+};
 
 export function SystemPage({ api }: ModulePageProps) {
   const path = window.location.pathname;
   const health = useModuleQuery<Health[]>(api, "modules.system.health");
   const audit = useModuleQuery<AuditRow[]>(api, "modules.system.audit.list");
   const jobs = useModuleQuery<JobRow[]>(api, "modules.system.jobs.list");
+  const events = useModuleQuery<EventRow[]>(
+    api,
+    "modules.system.events.list",
+  );
   const costs = useModuleQuery<Record<string, unknown>[]>(
     api,
     "modules.system.ai.costs",
@@ -47,16 +58,19 @@ export function SystemPage({ api }: ModulePageProps) {
     ok: boolean;
     totalEntries: number;
   } | null>(null);
+  const [message, setMessage] = useState("");
   const verify = async () =>
     setVerification(await api.query("modules.system.audit.verify"));
   if (
-    [health, audit, jobs, costs, flags, policies].some(
+    [health, audit, jobs, events, costs, flags, policies].some(
       (query) => query.isLoading,
     )
   )
     return <Skeleton />;
   if (
-    [health, audit, jobs, costs, flags, policies].some((query) => query.error)
+    [health, audit, jobs, events, costs, flags, policies].some(
+      (query) => query.error,
+    )
   ) {
     return (
       <EmptyState
@@ -75,6 +89,26 @@ export function SystemPage({ api }: ModulePageProps) {
     "/system/policies": "Automations-Policies",
   };
   const title = titles[path] ?? "Betriebsübersicht";
+  const requeueJob = async (id: string) => {
+    setMessage("");
+    try {
+      await api.mutate("modules.system.jobs.requeue", { id });
+      await api.invalidate?.("modules.system.jobs.list");
+      setMessage("Job erneut eingereiht");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Job konnte nicht erneut eingereiht werden");
+    }
+  };
+  const requeueEvent = async (id: string) => {
+    setMessage("");
+    try {
+      await api.mutate("modules.system.events.requeue", { id });
+      await api.invalidate?.("modules.system.events.list");
+      setMessage("Ereignis erneut zugestellt");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Ereignis konnte nicht erneut zugestellt werden");
+    }
+  };
   return (
     <div className="stack">
       <div className="page-heading">
@@ -84,6 +118,7 @@ export function SystemPage({ api }: ModulePageProps) {
           <p>Transparenz für Betrieb, Audit und Automatisierung.</p>
         </div>
       </div>
+      {message && <div className="form-message">{message}</div>}
       {(path === "/system" || path === "/system/modules") && (
         <Card>
           <h2>Modulgesundheit</h2>
@@ -139,6 +174,41 @@ export function SystemPage({ api }: ModulePageProps) {
               { key: "status", label: "Status" },
               { key: "attempts", label: "Versuche" },
               { key: "lastError", label: "Fehler" },
+              {
+                key: "action",
+                label: "Aktion",
+                render: (row) =>
+                  row.status === "dead" ? (
+                    <Button
+                      variant="secondary"
+                      onClick={() => void requeueJob(row.id)}
+                    >
+                      Erneut einreihen
+                    </Button>
+                  ) : null,
+              },
+            ]}
+          />
+          <h2>Dead Letters</h2>
+          <DataTable
+            rows={(events.data ?? []).filter((event) => event.deadLetter)}
+            columns={[
+              { key: "name", label: "Ereignis" },
+              { key: "eventId", label: "ID" },
+              { key: "deliveryAttempts", label: "Versuche" },
+              { key: "lastError", label: "Fehler" },
+              {
+                key: "action",
+                label: "Aktion",
+                render: (row) => (
+                  <Button
+                    variant="secondary"
+                    onClick={() => void requeueEvent(row.eventId)}
+                  >
+                    Erneut zustellen
+                  </Button>
+                ),
+              },
             ]}
           />
         </Card>

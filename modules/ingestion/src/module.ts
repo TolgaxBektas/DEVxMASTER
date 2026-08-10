@@ -3,7 +3,7 @@ import { ingestionSchema } from "./schema.js";
 import { createIngestionRouter } from "./router.js";
 import { MemoryIngestionRepository } from "./memory-repository.js";
 import { createDrizzleIngestionRepository } from "./drizzle-repository.js";
-import { ingestionPages, IngestionPage } from "./ui/index.js";
+import { ingestionPages, IngestionPage, OccurrencesPage } from "./ui/index.js";
 
 export function createIngestionModule(deps: {
   db?: unknown;
@@ -31,7 +31,13 @@ export function createIngestionModule(deps: {
       { id: "ingestion.documents", label: "Dokumente", href: "/ingestion", permission: "ingestion.document.read", order: 10 },
       { id: "ingestion.occurrences", label: "Fundstellen", href: "/ingestion/occurrences", permission: "ingestion.occurrence.read", order: 20 },
     ],
-    pages: ingestionPages.map(([id, title, path, permission]) => ({ id, title, path, permission, component: IngestionPage })),
+    pages: ingestionPages.map(([id, title, path, permission]) => ({
+      id,
+      title,
+      path,
+      permission,
+      component: path === "/ingestion/occurrences" ? OccurrencesPage : IngestionPage,
+    })),
     permissions: [
       { permission: "ingestion.source.read", title: "Quellen lesen" },
       { permission: "ingestion.document.read", title: "Dokumente lesen" },

@@ -48,6 +48,7 @@ export type QueueRepository = {
     nextAttemptAt: Date | null;
     dead: boolean;
   }): Promise<boolean>;
+  requeue(id: string, now: Date): Promise<JobRecord | null>;
   get(id: string): Promise<JobRecord | null>;
 };
 

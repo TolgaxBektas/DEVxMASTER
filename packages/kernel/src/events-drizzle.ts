@@ -103,6 +103,25 @@ export function createDrizzleEventRepository(db: any): EventRepository {
         })
         .where(eq(eventOutbox.eventId, eventId));
     },
+    async requeue(eventId) {
+      await db
+        .update(eventOutbox)
+        .set({
+          deliveryAttempts: 0,
+          nextAttemptAt: null,
+          deadLetter: false,
+          publishedAt: null,
+        })
+        .where(eq(eventOutbox.eventId, eventId));
+      const row = (
+        await db
+          .select()
+          .from(eventOutbox)
+          .where(eq(eventOutbox.eventId, eventId))
+          .limit(1)
+      )[0];
+      return row ? rowToEvent(row) : null;
+    },
     async markPublished(id) {
       await db
         .update(eventOutbox)

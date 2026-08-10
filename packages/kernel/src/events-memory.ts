@@ -66,6 +66,16 @@ export class MemoryEventRepository implements EventRepository {
     }
   }
 
+  async requeue(eventId: string) {
+    const event = this.events.find((item) => item.id === eventId);
+    if (!event) return null;
+    event.delivery.attempts = 0;
+    event.delivery.deadLetter = false;
+    event.delivery.nextAttemptAt = null;
+    delete event.publishedAt;
+    return event;
+  }
+
   async markPublished(id: string) {
     const event = this.events.find((item) => item.id === id);
     if (event) event.publishedAt = new Date();

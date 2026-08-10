@@ -114,4 +114,21 @@ export class MemoryQueueRepository implements QueueRepository {
   async get(id: string) {
     return this.jobs.get(id) ? { ...this.jobs.get(id)! } : null;
   }
+
+  async requeue(id: string, now: Date) {
+    const job = this.jobs.get(id);
+    if (!job) return null;
+    const updated = {
+      ...job,
+      status: "pending" as const,
+      attempts: 0,
+      availableAt: now,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      lastError: null,
+      updatedAt: now,
+    };
+    this.jobs.set(id, updated);
+    return { ...updated };
+  }
 }

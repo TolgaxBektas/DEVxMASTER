@@ -56,41 +56,68 @@ export function BillingPage({ api }: ModulePageProps) {
   if ([issuers, invoices, dunning].some((query) => query.error)) {
     return <EmptyState title="Faktura-Daten konnten nicht geladen werden" />;
   }
+  const runMutation = async (
+    operation: () => Promise<unknown>,
+    success: string,
+    failure: string,
+    invalidations: readonly string[],
+  ) => {
+    setMessage("");
+    try {
+      await operation();
+      for (const query of invalidations) await api.invalidate?.(query);
+      setMessage(success);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : failure);
+    }
+  };
   const createIssuer = async (event: FormEvent) => {
     event.preventDefault();
-    await api.mutate("modules.billing.issuers.create", {
-      name: issuerName,
-      invoicePrefix: prefix,
-      currency: "EUR",
-      vatTreatment: "VAT19",
-    });
-    setMessage("Aussteller angelegt");
-    await api.invalidate?.("modules.billing.issuers.list");
+    await runMutation(
+      () => api.mutate("modules.billing.issuers.create", {
+        name: issuerName,
+        invoicePrefix: prefix,
+        currency: "EUR",
+        vatTreatment: "VAT19",
+      }),
+      "Aussteller angelegt",
+      "Aussteller konnte nicht angelegt werden",
+      ["modules.billing.issuers.list"],
+    );
   };
   const createInvoice = async (event: FormEvent) => {
     event.preventDefault();
-    await api.mutate("modules.billing.invoices.create", {
-      issuerId: Number(selectedIssuer),
-      recipientName: recipient,
-      items: [{ description, quantity: "1.00", unitPrice: amount }],
-    });
-    setMessage("Rechnung angelegt");
-    await api.invalidate?.("modules.billing.invoices.list");
+    await runMutation(
+      () => api.mutate("modules.billing.invoices.create", {
+        issuerId: Number(selectedIssuer),
+        recipientName: recipient,
+        items: [{ description, quantity: "1.00", unitPrice: amount }],
+      }),
+      "Rechnung angelegt",
+      "Rechnung konnte nicht angelegt werden",
+      ["modules.billing.invoices.list"],
+    );
   };
   const issue = async () => {
-    await api.mutate("modules.billing.invoices.issue", {
-      id: Number(selectedInvoice),
-    });
-    setMessage("Rechnung ausgestellt");
-    await api.invalidate?.("modules.billing.invoices.list");
+    await runMutation(
+      () => api.mutate("modules.billing.invoices.issue", {
+        id: Number(selectedInvoice),
+      }),
+      "Rechnung ausgestellt",
+      "Rechnung konnte nicht ausgestellt werden",
+      ["modules.billing.invoices.list"],
+    );
   };
   const pay = async () => {
-    await api.mutate("modules.billing.invoices.pay", {
-      id: Number(selectedInvoice),
-      amount,
-    });
-    setMessage("Zahlung erfasst");
-    await api.invalidate?.("modules.billing.invoices.list");
+    await runMutation(
+      () => api.mutate("modules.billing.invoices.pay", {
+        id: Number(selectedInvoice),
+        amount,
+      }),
+      "Zahlung erfasst",
+      "Zahlung konnte nicht erfasst werden",
+      ["modules.billing.invoices.list"],
+    );
   };
   const downloadPdf = async () => {
     const result = await api.query<{ filename: string; base64: string }>(
@@ -111,10 +138,12 @@ export function BillingPage({ api }: ModulePageProps) {
     setMessage("PDF heruntergeladen");
   };
   const runDunning = async () => {
-    await api.mutate("modules.billing.dunning.run");
-    setMessage("Mahnlauf ausgeführt");
-    await api.invalidate?.("modules.billing.invoices.list");
-    await api.invalidate?.("modules.billing.dunning.list");
+    await runMutation(
+      () => api.mutate("modules.billing.dunning.run"),
+      "Mahnlauf ausgeführt",
+      "Mahnlauf konnte nicht ausgeführt werden",
+      ["modules.billing.invoices.list", "modules.billing.dunning.list"],
+    );
   };
   return (
     <div className="stack">

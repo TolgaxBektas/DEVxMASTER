@@ -95,8 +95,14 @@ export function CrmPage({ api, navigate }: ModulePageProps) {
   };
   const remove = async (id: number) => {
     if (!window.confirm("Kunden wirklich löschen?")) return;
-    await api.mutate("modules.crm.customers.delete", { id });
-    await api.invalidate?.("modules.crm.customers.list");
+    setMessage("");
+    try {
+      await api.mutate("modules.crm.customers.delete", { id });
+      await api.invalidate?.("modules.crm.customers.list");
+      setMessage("Kunde gelöscht");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Kunde konnte nicht gelöscht werden");
+    }
   };
   if (detailId)
     return (
