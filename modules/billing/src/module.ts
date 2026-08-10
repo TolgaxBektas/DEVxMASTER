@@ -114,6 +114,7 @@ export function createBillingModule(deps: {
       { name: "invoice.created", direction: "published" },
       { name: "invoice.issued", direction: "published" },
       { name: "invoice.paid", direction: "published" },
+      { name: "invoice.partially_paid", direction: "published" },
       { name: "invoice.overdue", direction: "published" },
       { name: "dunning.issued", direction: "published" },
       { name: "creditnote.created", direction: "published" },

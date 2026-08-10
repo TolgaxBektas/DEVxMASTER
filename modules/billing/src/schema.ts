@@ -25,6 +25,8 @@ export const issuers = mysqlTable(
     taxId: varchar("tax_id", { length: 64 }),
     invoicePrefix: varchar("invoice_prefix", { length: 20 }).notNull(),
     nextNumber: int("next_number").default(1).notNull(),
+    numberYear: int("number_year"),
+    paymentTermDays: int("payment_term_days").default(14).notNull(),
     bankName: varchar("bank_name", { length: 255 }),
     iban: varchar("iban", { length: 50 }),
     bic: varchar("bic", { length: 20 }),
@@ -177,6 +179,11 @@ export const dunningLog = mysqlTable(
   },
   (table) => ({
     invoiceIdx: index("billing_dunning_invoice_idx").on(table.invoiceId),
+    invoiceLevelUnique: uniqueIndex("billing_dunning_invoice_level_uq").on(
+      table.tenantId,
+      table.invoiceId,
+      table.level,
+    ),
   }),
 );
 

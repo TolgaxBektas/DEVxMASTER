@@ -22,6 +22,7 @@ const issuerInput = z.object({
   letterhead: z.string().optional(),
   currency: z.enum(["EUR", "GBP"]).default("EUR"),
   vatTreatment: z.enum(["RC", "VAT19", "VAT0"]).default("RC"),
+  paymentTermDays: z.number().int().positive().max(365).default(14),
 });
 
 const invoiceInput = z.object({
@@ -52,7 +53,7 @@ export function createBillingRouter(service: BillingService) {
       create: permissionProcedure("billing.issuer.write")
         .input(issuerInput)
         .mutation(({ ctx, input }) =>
-          service.createIssuer(ctx.auth.tenantId, input),
+          service.createIssuer(ctx.auth.tenantId, input, actor(ctx)),
         ),
     }),
     invoices: router({

@@ -26,7 +26,11 @@ export function createDrizzleBillingRepository(db: unknown): BillingRepository {
     async createIssuer(tenantId, input) {
       const result = await database
         .insert(issuers)
-        .values({ ...input, tenantId: Number(tenantId) });
+        .values({
+          ...input,
+          tenantId: Number(tenantId),
+          paymentTermDays: input.paymentTermDays ?? 14,
+        });
       const row = await database
         .select()
         .from(issuers)
@@ -73,11 +77,12 @@ export function createDrizzleBillingRepository(db: unknown): BillingRepository {
       )[0];
       if (!issuer) throw new Error("Aussteller nicht gefunden");
       const year = new Date().getFullYear();
-      const sequence = issuer.nextNumber;
+      const sequence = issuer.numberYear === year ? issuer.nextNumber : 1;
       await database
         .update(issuers)
-        .set({ nextNumber: sql`${issuers.nextNumber} + 1` })
+        .set({ nextNumber: sequence + 1, numberYear: year })
         .where(eq(issuers.id, issuer.id));
+      if (sequence > 9999) throw new Error("Nummernkreis erschöpft");
       const invoiceNumber = `${issuer.invoicePrefix}-${year}-${String(sequence).padStart(4, "0")}`;
       const result = await database.insert(invoices).values({
         tenantId: Number(tenantId),

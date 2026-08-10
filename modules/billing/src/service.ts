@@ -4,7 +4,8 @@ import {
   type EventExecutor,
 } from "@xmaster-center/kernel";
 import type { Pdf } from "@xmaster-center/integrations";
-import { dunningCharges, dueDate, totals } from "./formulas.js";
+import { dunningCharges, dueDate, positionAmount, totals } from "./formulas.js";
+import { addMoney } from "./money.js";
 import type {
   BillingRepository,
   CreateInvoiceInput,
@@ -40,7 +41,11 @@ export function createBillingService(deps: BillingServiceDeps) {
       deps.repository.listDunningEntries(tenantId),
     getInvoice: (tenantId: string, id: number) =>
       deps.repository.getInvoice(tenantId, id),
-    async createIssuer(tenantId: string, input: CreateIssuerInput) {
+    async createIssuer(
+      tenantId: string,
+      input: CreateIssuerInput,
+      actor: Actor,
+    ) {
       return deps.transaction(async (db) => {
         const repository = deps.repositoryFor(db);
         const audit = deps.auditFor(db);
@@ -50,8 +55,8 @@ export function createBillingService(deps: BillingServiceDeps) {
           action: "issuer.created",
           entityType: "issuer",
           entityId: issuer.id,
-          actorId: null,
-          actorName: null,
+          actorId: actor.actorId,
+          actorName: actor.actorName,
           detailsJson: JSON.stringify(input),
         });
         return issuer;
@@ -69,9 +74,19 @@ export function createBillingService(deps: BillingServiceDeps) {
           (item) => item.id === input.issuerId,
         );
         if (!issuer) throw new Error("Aussteller nicht gefunden");
-        const invoiceTotals = totals(input.subtotal, issuer.vatTreatment);
+        const items = input.items.map((item) => ({
+          ...item,
+          amount: positionAmount(item.quantity, item.unitPrice),
+        }));
+        const subtotal = items.reduce(
+          (sum, item) => addMoney(sum, item.amount),
+          "0.00",
+        );
+        const invoiceTotals = totals(subtotal, issuer.vatTreatment);
         const adjustedInput = {
           ...input,
+          items,
+          subtotal,
           currency: issuer.currency,
           vatTreatment: issuer.vatTreatment,
           vatRate: invoiceTotals.rate,
@@ -108,12 +123,19 @@ export function createBillingService(deps: BillingServiceDeps) {
         const audit = deps.auditFor(db);
         const current = await repository.getInvoice(tenantId, id);
         if (!current) throw new Error("Rechnung nicht gefunden");
+        if (current.status !== "draft") {
+          throw new Error("Nur Entwürfe können ausgestellt werden");
+        }
+        const issuer = (await repository.listIssuers(tenantId)).find(
+          (item) => item.id === current.issuerId,
+        );
+        if (!issuer) throw new Error("Aussteller nicht gefunden");
         const issuedAt = new Date();
         const invoice = await repository.setInvoiceIssued(
           tenantId,
           id,
           issuedAt,
-          dueDate(issuedAt),
+          dueDate(issuedAt, issuer.paymentTermDays),
         );
         const entry = await appendAudit(audit, {
           tenantId,
@@ -152,6 +174,15 @@ export function createBillingService(deps: BillingServiceDeps) {
       return deps.transaction(async (db) => {
         const repository = deps.repositoryFor(db);
         const audit = deps.auditFor(db);
+        const current = await repository.getInvoice(tenantId, id);
+        if (!current) throw new Error("Rechnung nicht gefunden");
+        if (!["issued", "partially_paid"].includes(current.status)) {
+          throw new Error("Nur ausgestellte Rechnungen sind zahlbar");
+        }
+        const outstanding = addMoney(current.total, `-${current.paidAmount}`);
+        if (addMoney(outstanding, `-${input.amount}`).startsWith("-")) {
+          throw new Error("Zahlung übersteigt offenen Betrag");
+        }
         const payment = await repository.addPayment(tenantId, id, {
           amount: input.amount,
           paidAt: input.paidAt,
@@ -170,14 +201,19 @@ export function createBillingService(deps: BillingServiceDeps) {
             amount: input.amount,
           }),
         });
+        const updated = await repository.getInvoice(tenantId, id);
+        const eventName =
+          updated?.status === "paid"
+            ? "invoice.paid"
+            : "invoice.partially_paid";
         await deps.publish(
           {
-            name: "invoice.paid",
+            name: eventName,
             tenantId,
             aggregateType: "invoice",
             aggregateId: String(id),
             payload: { invoiceId: id, paymentId: payment.id },
-            idempotencyKey: `invoice.paid:${entry.hash}`,
+            idempotencyKey: `${eventName}:${entry.hash}`,
           },
           deps.eventExecutorFor(db),
         );
@@ -196,19 +232,24 @@ export function createBillingService(deps: BillingServiceDeps) {
           !["issued", "partially_paid"].includes(invoice.status)
         )
           continue;
-        const level = levels.find(
-          (item) =>
-            !entries.some(
-              (entry) =>
-                entry.invoiceId === invoice.id && entry.level === item.level,
-            ),
-        );
+        const invoiceEntries = entries
+          .filter((entry) => entry.invoiceId === invoice.id)
+          .sort((left, right) => left.level - right.level);
+        const lastEntry = invoiceEntries.at(-1);
+        const level = levels
+          .slice()
+          .sort((left, right) => left.level - right.level)
+          .find((item) => item.level > (lastEntry?.level ?? 0));
         if (!level) continue;
+        const referenceDate = lastEntry?.createdAt ?? invoice.dueDate;
         const days = Math.floor(
-          (Date.now() - invoice.dueDate.getTime()) / 86_400_000,
+          (Date.now() - referenceDate.getTime()) / 86_400_000,
         );
+        if (days < level.daysAfterDue) continue;
+        const outstanding = addMoney(invoice.total, `-${invoice.paidAmount}`);
+        if (outstanding === "0.00") continue;
         const charges = dunningCharges(
-          invoice.total,
+          outstanding,
           days,
           level.feeAmount,
           level.interestRate,

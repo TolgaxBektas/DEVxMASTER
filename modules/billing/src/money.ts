@@ -2,14 +2,25 @@ export type Currency = "EUR" | "GBP";
 
 function scaled(value: string, digits: number): bigint {
   const normalized = value.trim().replace(",", ".");
+  if (!/^[+-]?\d+(\.\d+)?$/.test(normalized)) {
+    throw new Error("Ungültiger Dezimalbetrag");
+  }
   const sign = normalized.startsWith("-") ? -1n : 1n;
   const unsigned = normalized.replace(/^[+-]/, "");
   const [whole, fraction = ""] = unsigned.split(".");
+  if (fraction.length > digits) {
+    throw new Error(`Zu viele Nachkommastellen; maximal ${digits} erlaubt`);
+  }
   const padded = (fraction + "0".repeat(digits)).slice(0, digits);
   return (
     sign *
     (BigInt(whole || "0") * 10n ** BigInt(digits) + BigInt(padded || "0"))
   );
+}
+
+function roundQuotient(numerator: bigint, denominator: bigint): bigint {
+  if (numerator < 0n) return -roundQuotient(-numerator, denominator);
+  return (numerator + denominator / 2n) / denominator;
 }
 
 function decimal(value: bigint, digits: number): string {
@@ -35,12 +46,12 @@ export function addMoney(...values: string[]): string {
 
 export function multiplyMoney(value: string, quantity: string): string {
   const product = cents(value) * scaled(quantity, 2);
-  return money((product + 50n) / 100n);
+  return money(roundQuotient(product, 100n));
 }
 
 export function percentMoney(value: string, rate: string): string {
   const product = cents(value) * scaled(rate, 2);
-  return money((product + 5000n) / 10000n);
+  return money(roundQuotient(product, 10000n));
 }
 
 export function annualInterest(
@@ -48,9 +59,9 @@ export function annualInterest(
   annualRate: string,
   days: number,
 ): string {
-  const rateForDays =
-    (scaled(annualRate, 2) * BigInt(Math.max(0, days))) / 365n;
-  return money((cents(value) * rateForDays + 5000n) / 10000n);
+  const numerator =
+    cents(value) * scaled(annualRate, 4) * BigInt(Math.max(0, days));
+  return money(roundQuotient(numerator, 1000000n * 365n));
 }
 
 export function vatFor(

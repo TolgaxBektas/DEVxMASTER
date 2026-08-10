@@ -40,6 +40,7 @@ export type CreateIssuerInput = {
   bic?: string | undefined;
   logoUrl?: string | undefined;
   letterhead?: string | undefined;
+  paymentTermDays?: number | undefined;
   currency: "EUR" | "GBP";
   vatTreatment: "RC" | "VAT19" | "VAT0";
 };

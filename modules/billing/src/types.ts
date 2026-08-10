@@ -8,6 +8,8 @@ export type Issuer = {
   email: string | null;
   invoicePrefix: string;
   nextNumber: number;
+  numberYear: number | null;
+  paymentTermDays: number;
   bankName: string | null;
   iban: string | null;
   bic: string | null;
@@ -73,4 +75,5 @@ export type DunningEntry = {
   totalDue: string;
   subject: string;
   body: string;
+  createdAt?: Date;
 };

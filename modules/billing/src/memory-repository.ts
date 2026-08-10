@@ -34,6 +34,8 @@ export class MemoryBillingRepository implements BillingRepository {
       id: ++this.issuerId,
       tenantId,
       nextNumber: 1,
+      numberYear: null,
+      paymentTermDays: input.paymentTermDays ?? 14,
       address: input.address ?? null,
       email: input.email ?? null,
       bankName: input.bankName ?? null,
@@ -67,6 +69,10 @@ export class MemoryBillingRepository implements BillingRepository {
     );
     if (!issuer) throw new Error("Aussteller nicht gefunden");
     const year = new Date().getFullYear();
+    if (issuer.numberYear !== year) {
+      issuer.numberYear = year;
+      issuer.nextNumber = 1;
+    }
     const number = issuer.nextNumber++;
     const invoice: Invoice = {
       id: ++this.invoiceId,
@@ -162,7 +168,7 @@ export class MemoryBillingRepository implements BillingRepository {
   }
 
   async createDunningEntry(_tenantId: string, entry: Omit<DunningEntry, "id">) {
-    const result = { ...entry, id: ++this.dunningId };
+    const result = { ...entry, id: ++this.dunningId, createdAt: new Date() };
     this.dunning.push(result);
     return result;
   }

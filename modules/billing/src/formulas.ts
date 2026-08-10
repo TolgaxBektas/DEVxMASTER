@@ -48,6 +48,9 @@ export function invoiceNumber(
   year: number,
   sequence: number,
 ): string {
+  if (!Number.isInteger(sequence) || sequence < 1 || sequence > 9999) {
+    throw new Error("Nummernkreis erschöpft");
+  }
   return `${prefix}-${year}-${String(sequence).padStart(4, "0")}`;
 }
 
