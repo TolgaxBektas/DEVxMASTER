@@ -85,7 +85,7 @@ export async function persistDocumentBytes(
           aggregateType: "document",
           aggregateId: String(created.document.id),
           payload: { documentId: created.document.id },
-          idempotencyKey: `document.ingested:${sha256}`,
+          idempotencyKey: `document.ingested:${input.tenantId}:${sha256}`,
         }, createDrizzleEventRepository(db));
         return created;
       });

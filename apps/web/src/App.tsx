@@ -13,6 +13,7 @@ import {
   ingestionPages,
   IngestionPage,
   OccurrencesPage,
+  SourcesPage,
 } from "@xmaster-center/module-ingestion/ui";
 import { assistantPages, AssistantPage } from "@xmaster-center/module-assistant/ui";
 import { ApiError, logout, moduleApi, sessionRequest } from "./api.js";
@@ -59,7 +60,12 @@ const pages: Page[] = [
     title,
     path,
     permission,
-    component: path === "/ingestion/occurrences" ? OccurrencesPage : IngestionPage,
+    component:
+      path === "/ingestion/occurrences"
+        ? OccurrencesPage
+        : path === "/ingestion/sources"
+          ? SourcesPage
+          : IngestionPage,
   })),
   ...assistantPages.map(([id, title, path, permission]) => ({
     id,

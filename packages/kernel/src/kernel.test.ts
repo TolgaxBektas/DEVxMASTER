@@ -8,6 +8,7 @@ import {
   type AuditRepository,
 } from "./audit.js";
 import { createEventBus, MemoryEventRepository } from "./events.js";
+import { isDuplicateKeyError } from "./events-drizzle.js";
 import { createRegistry, defineModule } from "./module-registry.js";
 import { can, PermissionRegistry, tenantScope } from "./rbac.js";
 import { router } from "./trpc.js";
@@ -181,6 +182,12 @@ describe("RBAC und Modulregister", () => {
 });
 
 describe("Event-Outbox", () => {
+  it("erkennt verschachtelte MySQL-Duplikatfehler als idempotente Wiederholung", () => {
+    expect(isDuplicateKeyError({ cause: { errno: 1062 } })).toBe(true);
+    expect(isDuplicateKeyError({ cause: { code: "ER_DUP_ENTRY" } })).toBe(true);
+    expect(isDuplicateKeyError({ cause: { errno: 1213 } })).toBe(false);
+  });
+
   it("stellt mindestens einmal zu und kann idempotent konsumiert werden", async () => {
     const repository = new MemoryEventRepository();
     const seen = new Set<string>();

@@ -227,7 +227,7 @@ export function createIngestionModule(deps: {
                       company: occurrence.company,
                       preview: occurrence.preview,
                     },
-                    idempotencyKey: `advertisement.detected:${tenantId}:${document.sha256}:${occurrence.company}`,
+                    idempotencyKey: `advertisement.detected:${tenantId}:${document.sha256}:${occurrence.id}`,
                   }, executor);
                 }
                 if (deps.audit) {

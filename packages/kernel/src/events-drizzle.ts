@@ -3,6 +3,27 @@ import type { EventEnvelope } from "@xmaster-center/contracts";
 import { eventOutbox } from "./db/schema.js";
 import type { EventRepository } from "./events.js";
 
+export function isDuplicateKeyError(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    const candidate = current as {
+      code?: unknown;
+      errno?: unknown;
+      cause?: unknown;
+    };
+    if (
+      candidate.errno === 1062
+      || candidate.code === 1062
+      || candidate.code === "ER_DUP_ENTRY"
+      || candidate.code === "ER_DUP_KEY"
+    ) return true;
+    current = candidate.cause;
+  }
+  return /duplicate|unique|ER_DUP_ENTRY/i.test(String(error));
+}
+
 export function createDrizzleEventRepository(db: any): EventRepository {
   return {
     async append(event) {
@@ -32,7 +53,7 @@ export function createDrizzleEventRepository(db: any): EventRepository {
         });
         return event;
       } catch (error) {
-        if (!/duplicate|unique|ER_DUP_ENTRY/i.test(String(error))) throw error;
+        if (!isDuplicateKeyError(error)) throw error;
         const row = (
           await db
             .select()
