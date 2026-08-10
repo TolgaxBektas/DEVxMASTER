@@ -18,6 +18,11 @@ import { LeaseQueue, DrizzleQueueRepository } from "@xmaster-center/jobs";
 import { createCrmModule } from "@xmaster-center/module-crm";
 import { createSystemModule } from "@xmaster-center/module-system";
 import { createBillingModule } from "@xmaster-center/module-billing";
+import { createIngestionModule } from "@xmaster-center/module-ingestion";
+import { createAssistantModule } from "@xmaster-center/module-assistant";
+import { appendAudit } from "@xmaster-center/kernel";
+import { invoices } from "@xmaster-center/module-billing";
+import { customers } from "@xmaster-center/module-crm";
 import type { ModuleRegistry } from "@xmaster-center/kernel";
 
 const env = parseEnv();
@@ -35,6 +40,8 @@ const system = createSystemModule({
     { id: "system", status: "healthy" },
     { id: "crm", status: "healthy" },
     { id: "billing", status: "healthy" },
+    { id: "ingestion", status: "healthy" },
+    { id: "assistant", status: "healthy" },
   ],
   navigation: (permissions) => registry.navigation({ permissions }),
 });
@@ -50,7 +57,35 @@ const billing = createBillingModule({
   publish: (input, executor) => eventBus.publish(input, executor),
   transaction: (callback) => db.transaction(callback),
 });
-registry = createRegistry([system, crm, billing]);
+const ingestion = createIngestionModule({
+  publish: (input) => eventBus.publish(input),
+});
+const assistant = createAssistantModule({
+  briefing: async (tenantId) => {
+    const overdue = await db.select().from(invoices);
+    const leads = await db.select().from(customers);
+    return {
+      overdueInvoices: overdue.filter((invoice) => invoice.status === "issued" || invoice.status === "partially_paid").length,
+      newLeads: leads.filter((customer) => (customer.tags ?? []).includes("lead")).length,
+      deadLetters: 0,
+      costsMicros: 0,
+      tenantId,
+    };
+  },
+  chat: async (_tenantId, text) => `ALEXIS Mock: ${text}`,
+  audit: async (input) => {
+    await appendAudit(audit, {
+      tenantId: input.tenantId,
+      action: input.action,
+      entityType: "assistant",
+      entityId: input.entityId,
+      actorId: "1",
+      actorName: "ALEXIS",
+      detailsJson: JSON.stringify(input.details),
+    });
+  },
+});
+registry = createRegistry([system, crm, billing, ingestion, assistant]);
 eventBus = createEventBus(
   eventRepository,
   [...registry.events.entries()].flatMap(([name, items]) =>

@@ -26,6 +26,10 @@ const permissions = [
   "billing.issuer.read", "billing.issuer.write", "billing.invoice.read",
   "billing.invoice.write", "billing.invoice.issue", "billing.payment.write",
   "billing.dunning.read", "billing.dunning.run", "billing.creditnote.write",
+  "ingestion.source.read", "ingestion.document.read", "ingestion.document.write",
+  "ingestion.occurrence.read",
+  "assistant.briefing.read", "assistant.chat", "assistant.proposal.read",
+  "assistant.proposal.approve", "assistant.proposal.execute",
 ];
 if (!role) {
   const roleId = Number((await db.insert(roles).values({

@@ -2,6 +2,7 @@ import {
   createDrizzleAuditRepository,
   createDrizzleEventRepository,
   defineModule,
+  appendAudit,
   type EventExecutor,
   type ModuleDefinition,
 } from "@xmaster-center/kernel";
@@ -121,6 +122,45 @@ export function createCrmModule(deps: {
               payload: payload.payload,
             })
             .then(() => undefined);
+        },
+      },
+      {
+        name: "advertisement.detected",
+        direction: "subscribed",
+        handle: async (event) => {
+          const input = event as {
+            tenantId: string;
+            payload: {
+              occurrenceId: number;
+              documentId: number;
+              company: string;
+              preview: string;
+            };
+          };
+          try {
+            await deps.db.transaction(async (db: unknown) => {
+            const repository = createDrizzleCrmRepository(db);
+            const audit = createDrizzleAuditRepository(db);
+            const customer = await repository.createCustomer(input.tenantId, {
+              name: input.payload.company,
+              company: input.payload.company,
+              notes: `Quelle Dokument ${input.payload.documentId}, Fundstelle ${input.payload.occurrenceId}: ${input.payload.preview}`,
+              tags: ["lead", "ingestion"],
+            });
+            await appendAudit(audit, {
+              tenantId: input.tenantId,
+              action: "lead.created",
+              entityType: "customer",
+              entityId: String((customer as { id?: number } | null)?.id ?? ""),
+              actorId: "1",
+              actorName: "Ingestion-Verarbeitung",
+              detailsJson: JSON.stringify(input.payload),
+            });
+            });
+          } catch (error) {
+            console.error("[crm] advertisement lead failed", error);
+            throw error;
+          }
         },
       },
     ],

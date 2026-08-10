@@ -15,6 +15,8 @@ import {
 import { createCrmModule } from "@xmaster-center/module-crm";
 import { createSystemModule } from "@xmaster-center/module-system";
 import { createBillingModule } from "@xmaster-center/module-billing";
+import { createIngestionModule } from "@xmaster-center/module-ingestion";
+import { createAssistantModule } from "@xmaster-center/module-assistant";
 import type { ModuleRegistry } from "@xmaster-center/kernel";
 
 const env = parseEnv();
@@ -32,6 +34,8 @@ const system = createSystemModule({
     { id: "system", status: "healthy" },
     { id: "crm", status: "healthy" },
     { id: "billing", status: "healthy" },
+    { id: "ingestion", status: "healthy" },
+    { id: "assistant", status: "healthy" },
   ],
   navigation: (permissions) => registry.navigation({ permissions }),
 });
@@ -47,7 +51,15 @@ const billing = createBillingModule({
   publish: (input, executor) => eventBus.publish(input, executor),
   transaction: (callback) => db.transaction(callback),
 });
-registry = createRegistry([system, crm, billing]);
+const ingestion = createIngestionModule({
+  publish: (input) => eventBus.publish(input),
+});
+const assistant = createAssistantModule({
+  briefing: async () => ({ overdueInvoices: 0, newLeads: 0, deadLetters: 0, costsMicros: 0 }),
+  chat: async (_tenantId, text) => `ALEXIS Mock: ${text}`,
+  audit: async () => undefined,
+});
+registry = createRegistry([system, crm, billing, ingestion, assistant]);
 eventBus = createEventBus(
   eventRepository,
   [...registry.events.entries()].flatMap(([name, items]) =>

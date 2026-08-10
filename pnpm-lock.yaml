@@ -41,12 +41,18 @@ importers:
       '@xmaster-center/kernel':
         specifier: workspace:*
         version: link:../../packages/kernel
+      '@xmaster-center/module-assistant':
+        specifier: workspace:*
+        version: link:../../modules/assistant
       '@xmaster-center/module-billing':
         specifier: workspace:*
         version: link:../../modules/billing
       '@xmaster-center/module-crm':
         specifier: workspace:*
         version: link:../../modules/crm
+      '@xmaster-center/module-ingestion':
+        specifier: workspace:*
+        version: link:../../modules/ingestion
       '@xmaster-center/module-system':
         specifier: workspace:*
         version: link:../../modules/system
@@ -111,12 +117,18 @@ importers:
       '@xmaster-center/kernel':
         specifier: workspace:*
         version: link:../../packages/kernel
+      '@xmaster-center/module-assistant':
+        specifier: workspace:*
+        version: link:../../modules/assistant
       '@xmaster-center/module-billing':
         specifier: workspace:*
         version: link:../../modules/billing
       '@xmaster-center/module-crm':
         specifier: workspace:*
         version: link:../../modules/crm
+      '@xmaster-center/module-ingestion':
+        specifier: workspace:*
+        version: link:../../modules/ingestion
       '@xmaster-center/module-system':
         specifier: workspace:*
         version: link:../../modules/system
@@ -178,12 +190,18 @@ importers:
       '@xmaster-center/kernel':
         specifier: workspace:*
         version: link:../../packages/kernel
+      '@xmaster-center/module-assistant':
+        specifier: workspace:*
+        version: link:../../modules/assistant
       '@xmaster-center/module-billing':
         specifier: workspace:*
         version: link:../../modules/billing
       '@xmaster-center/module-crm':
         specifier: workspace:*
         version: link:../../modules/crm
+      '@xmaster-center/module-ingestion':
+        specifier: workspace:*
+        version: link:../../modules/ingestion
       '@xmaster-center/module-system':
         specifier: workspace:*
         version: link:../../modules/system
@@ -200,6 +218,28 @@ importers:
       vitest:
         specifier: 2.1.4
         version: 2.1.4(@types/node@24.7.0)(lightningcss@1.29.2)
+
+  modules/assistant:
+    dependencies:
+      '@xmaster-center/kernel':
+        specifier: workspace:*
+        version: link:../../packages/kernel
+      '@xmaster-center/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
+      react:
+        specifier: 19.2.1
+        version: 19.2.1
+      zod:
+        specifier: 4.1.12
+        version: 4.1.12
+    devDependencies:
+      '@types/react':
+        specifier: 19.2.1
+        version: 19.2.1
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
 
   modules/billing:
     dependencies:
@@ -289,6 +329,34 @@ importers:
       vitest:
         specifier: 2.1.4
         version: 2.1.4(@types/node@24.7.0)(lightningcss@1.29.2)
+
+  modules/ingestion:
+    dependencies:
+      '@xmaster-center/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@xmaster-center/kernel':
+        specifier: workspace:*
+        version: link:../../packages/kernel
+      '@xmaster-center/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
+      drizzle-orm:
+        specifier: 0.44.5
+        version: 0.44.5(mysql2@3.15.0)
+      react:
+        specifier: 19.2.1
+        version: 19.2.1
+      zod:
+        specifier: 4.1.12
+        version: 4.1.12
+    devDependencies:
+      '@types/react':
+        specifier: 19.2.1
+        version: 19.2.1
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
 
   modules/system:
     dependencies:
