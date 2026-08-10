@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
+import { desc } from "drizzle-orm";
+import { auditLog } from "./db/schema.js";
 
 export const GENESIS_HASH = "0".repeat(64);
 
 export type AuditEntry = {
   seq: number;
-  tenantId?: string | null;
+  tenantId: string | null;
   action: string;
   entityType: string;
   entityId?: string | number | null;
@@ -13,7 +15,7 @@ export type AuditEntry = {
   actorName?: string | null;
   prevHash: string;
   hash: string;
-  createdAt?: Date;
+  createdAt: Date;
 };
 
 export type AuditRepository = {
@@ -22,16 +24,22 @@ export type AuditRepository = {
   list(): Promise<AuditEntry[]>;
 };
 
-export function computeAuditHash(
-  entry: Omit<AuditEntry, "hash" | "createdAt">,
+export function normalizeAuditEntityId(
+  entityId: string | number | null | undefined,
 ): string {
+  return entityId == null ? "" : String(entityId);
+}
+
+export function computeAuditHash(entry: Omit<AuditEntry, "hash">): string {
   const payload = [
     entry.seq,
+    entry.tenantId ?? "",
     entry.action,
     entry.entityType,
-    entry.entityId ?? "",
+    normalizeAuditEntityId(entry.entityId),
     entry.detailsJson ?? "",
     entry.actorId ?? "",
+    entry.createdAt.toISOString(),
     entry.prevHash,
   ].join("|");
   return createHash("sha256").update(payload, "utf8").digest("hex");
@@ -39,11 +47,14 @@ export function computeAuditHash(
 
 export async function appendAudit(
   repository: AuditRepository,
-  params: Omit<AuditEntry, "seq" | "prevHash" | "hash" | "createdAt">,
+  params: Omit<AuditEntry, "seq" | "prevHash" | "hash" | "createdAt"> & {
+    createdAt?: Date;
+  },
   options: {
     maxAttempts?: number;
     sleep?: (ms: number) => Promise<void>;
     random?: () => number;
+    now?: () => Date;
   } = {},
 ): Promise<AuditEntry> {
   const maxAttempts = options.maxAttempts ?? 5;
@@ -52,6 +63,7 @@ export async function appendAudit(
     ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   const random = options.random ?? Math.random;
   const detailsJson = params.detailsJson ?? null;
+  const createdAt = params.createdAt ?? options.now?.() ?? new Date();
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const latest = await repository.latest();
     const prevHash = latest?.hash ?? GENESIS_HASH;
@@ -59,10 +71,16 @@ export async function appendAudit(
     const entry: AuditEntry = {
       ...params,
       detailsJson,
+      createdAt,
       seq,
       prevHash,
-      hash: computeAuditHash({ ...params, detailsJson, seq, prevHash }),
-      createdAt: new Date(),
+      hash: computeAuditHash({
+        ...params,
+        detailsJson,
+        createdAt,
+        seq,
+        prevHash,
+      }),
     };
     try {
       await repository.insert(entry);
@@ -106,7 +124,7 @@ export class MemoryAuditRepository implements AuditRepository {
   forceNextCollision(): void {
     this.forcedCollision = true;
   }
-  async latest() {
+  async latest(): Promise<Pick<AuditEntry, "seq" | "hash"> | null> {
     return this.entries.at(-1) ?? null;
   }
   async insert(entry: AuditEntry) {
@@ -121,4 +139,54 @@ export class MemoryAuditRepository implements AuditRepository {
   async list() {
     return [...this.entries];
   }
+}
+
+export function createDrizzleAuditRepository(db: any): AuditRepository {
+  return {
+    async latest() {
+      return (
+        (
+          await db
+            .select({
+              seq: auditLog.seq,
+              hash: auditLog.hash,
+            })
+            .from(auditLog)
+            .orderBy(desc(auditLog.seq))
+            .limit(1)
+        )[0] ?? null
+      );
+    },
+    async insert(entry) {
+      await db.insert(auditLog).values({
+        seq: entry.seq,
+        tenantId: entry.tenantId ? Number(entry.tenantId) : null,
+        action: entry.action,
+        entityType: entry.entityType,
+        entityId: entry.entityId == null ? null : String(entry.entityId),
+        detailsJson: entry.detailsJson ?? null,
+        actorId: entry.actorId == null ? null : Number(entry.actorId),
+        actorName: entry.actorName ?? null,
+        prevHash: entry.prevHash,
+        hash: entry.hash,
+        createdAt: entry.createdAt,
+      });
+    },
+    async list() {
+      const rows = await db.select().from(auditLog).orderBy(auditLog.seq);
+      return rows.map((row: any) => ({
+        seq: Number(row.seq),
+        tenantId: row.tenantId == null ? null : String(row.tenantId),
+        action: String(row.action),
+        entityType: String(row.entityType),
+        entityId: row.entityId,
+        detailsJson: row.detailsJson,
+        actorId: row.actorId,
+        actorName: row.actorName,
+        prevHash: String(row.prevHash),
+        hash: String(row.hash),
+        createdAt: new Date(row.createdAt),
+      }));
+    },
+  };
 }

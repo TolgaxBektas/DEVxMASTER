@@ -1,4 +1,6 @@
 import type { Express } from "express";
+import { router as createTrpcRouter } from "./trpc.js";
+import type { AnyRouter } from "@trpc/server";
 import type { Permission } from "@xmaster-center/contracts";
 import { PermissionRegistry, type PermissionDefinition } from "./rbac.js";
 
@@ -8,6 +10,7 @@ export type NavEntry = {
   href: string;
   icon?: string;
   permission?: Permission;
+  order?: number;
 };
 
 export type ModuleHealth = {
@@ -36,7 +39,7 @@ export type ModuleDefinition = {
   icon: string;
   version: string;
   schema: Record<string, unknown>;
-  router: unknown;
+  router: AnyRouter;
   rest?: (app: Express) => void;
   nav: readonly NavEntry[];
   permissions: readonly (PermissionDefinition | Permission)[];
@@ -46,9 +49,33 @@ export type ModuleDefinition = {
 };
 
 export function defineModule(definition: ModuleDefinition): ModuleDefinition {
-  if (!/^[a-z][a-z0-9-]*$/.test(definition.id))
+  if (!/^[a-z][a-z0-9-]*$/.test(definition.id)) {
     throw new Error(`Ungültige Modul-ID: ${definition.id}`);
+  }
   return Object.freeze({ ...definition });
+}
+
+function mergeSchemas(modules: readonly ModuleDefinition[]) {
+  const schema: Record<string, unknown> = {};
+  for (const module of modules) {
+    for (const [key, table] of Object.entries(module.schema)) {
+      const tableName = drizzleTableName(table) ?? key;
+      if (schema[tableName]) {
+        throw new Error(`Tabelle bereits registriert: ${tableName}`);
+      }
+      schema[tableName] = table;
+    }
+  }
+  return schema;
+}
+
+function drizzleTableName(table: unknown): string | null {
+  if (!table || typeof table !== "object") return null;
+  const symbol = Object.getOwnPropertySymbols(table).find((item) =>
+    item.description?.toLowerCase().includes("name"),
+  );
+  const value = symbol ? (table as Record<symbol, unknown>)[symbol] : undefined;
+  return typeof value === "string" ? value : null;
 }
 
 export function createRegistry(modules: readonly ModuleDefinition[]) {
@@ -57,8 +84,9 @@ export function createRegistry(modules: readonly ModuleDefinition[]) {
   const jobs = new Map<string, ModuleJob>();
   const events = new Map<string, ModuleEvent[]>();
   for (const module of modules) {
-    if (ids.has(module.id))
+    if (ids.has(module.id)) {
       throw new Error(`Modul-ID bereits registriert: ${module.id}`);
+    }
     ids.add(module.id);
     permissionRegistry.register(
       module.permissions.map((permission) =>
@@ -79,18 +107,33 @@ export function createRegistry(modules: readonly ModuleDefinition[]) {
   const routers = Object.fromEntries(
     modules.map((module) => [module.id, module.router]),
   );
+  const rootRouter = createTrpcRouter({ modules: routers });
   return {
     modules: [...modules],
-    router: { modules: routers },
+    schema: mergeSchemas(modules),
+    router: rootRouter,
     permissions: permissionRegistry,
     jobs,
     events,
     navigation(context: { permissions: ReadonlySet<string> }) {
       return modules
-        .flatMap((module) => module.nav)
-        .filter(
-          (item) =>
-            !item.permission || context.permissions.has(item.permission),
+        .flatMap((module) =>
+          module.nav
+            .filter(
+              (item) =>
+                !item.permission || context.permissions.has(item.permission),
+            )
+            .map((item) => ({
+              ...item,
+              moduleId: module.id,
+              moduleTitle: module.title,
+            })),
+        )
+        .sort(
+          (a, b) =>
+            a.moduleId.localeCompare(b.moduleId) ||
+            (a.order ?? 0) - (b.order ?? 0) ||
+            a.label.localeCompare(b.label, "de"),
         );
     },
     async health(): Promise<ModuleHealth[]> {
@@ -98,3 +141,5 @@ export function createRegistry(modules: readonly ModuleDefinition[]) {
     },
   };
 }
+
+export type ModuleRegistry = ReturnType<typeof createRegistry>;

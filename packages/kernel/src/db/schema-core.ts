@@ -6,6 +6,7 @@ import {
   mysqlEnum,
   mysqlTable,
   text,
+  timestamp,
   uniqueIndex,
   varchar,
 } from "drizzle-orm/mysql-core";
@@ -19,8 +20,8 @@ export const tenants = mysqlTable(
     code: varchar("code", { length: 64 }).notNull(),
     name: varchar("name", { length: 255 }).notNull(),
     status: mysqlEnum("status", status).default("active").notNull(),
-    createdAt: datetime("created_at").default(new Date()).notNull(),
-    updatedAt: datetime("updated_at").default(new Date()).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },
   (table) => ({ codeUnique: uniqueIndex("tenants_code_uq").on(table.code) }),
 );
@@ -30,8 +31,8 @@ export const users = mysqlTable("users", {
   email: varchar("email", { length: 320 }),
   displayName: varchar("display_name", { length: 255 }).notNull(),
   status: mysqlEnum("status", status).default("active").notNull(),
-  createdAt: datetime("created_at").default(new Date()).notNull(),
-  updatedAt: datetime("updated_at").default(new Date()).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
 });
 
 export const userIdentities = mysqlTable(
@@ -44,7 +45,7 @@ export const userIdentities = mysqlTable(
     secretHash: varchar("secret_hash", { length: 128 }),
     metadata: json("metadata"),
     expiresAt: datetime("expires_at"),
-    createdAt: datetime("created_at").default(new Date()).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => ({
     providerExternalUnique: uniqueIndex(
@@ -72,7 +73,7 @@ export const roleAssignments = mysqlTable(
     userId: int("user_id").notNull(),
     tenantId: int("tenant_id").notNull(),
     roleId: int("role_id").notNull(),
-    createdAt: datetime("created_at").default(new Date()).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => ({
     assignmentUnique: uniqueIndex("role_assignments_user_tenant_role_uq").on(
@@ -94,7 +95,7 @@ export const settings = mysqlTable(
     tenantId: int("tenant_id").notNull(),
     key: varchar("key", { length: 128 }).notNull(),
     value: text("value"),
-    updatedAt: datetime("updated_at").default(new Date()).notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },
   (table) => ({
     tenantKeyUnique: uniqueIndex("settings_tenant_key_uq").on(
@@ -118,7 +119,7 @@ export const auditLog = mysqlTable(
     actorName: varchar("actor_name", { length: 255 }),
     prevHash: varchar("prev_hash", { length: 64 }).notNull(),
     hash: varchar("hash", { length: 64 }).notNull(),
-    createdAt: datetime("created_at").default(new Date()).notNull(),
+    createdAt: timestamp("created_at", { fsp: 3 }).defaultNow().notNull(),
   },
   (table) => ({
     seqUnique: uniqueIndex("audit_log_seq_uq").on(table.seq),

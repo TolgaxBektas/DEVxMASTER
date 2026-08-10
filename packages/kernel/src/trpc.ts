@@ -29,7 +29,7 @@ export function permissionProcedure(permission: Permission) {
         cause: { permission },
       });
     }
-    return next();
+    return next({ ctx: { ...ctx, auth: ctx.auth } });
   });
 }
 

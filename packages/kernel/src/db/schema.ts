@@ -43,8 +43,12 @@ export const eventOutbox = mysqlTable(
     idempotencyKey: varchar("idempotency_key", { length: 255 }).notNull(),
     publishedAt: datetime("published_at"),
     attempts: int("attempts").default(0).notNull(),
+    deliveryAttempts: int("delivery_attempts").default(0).notNull(),
+    nextAttemptAt: datetime("next_attempt_at"),
+    deadLetter: boolean("dead_letter").default(false).notNull(),
+    successfulHandlers: json("successful_handlers").$type<string[]>().notNull(),
     lastError: text("last_error"),
-    createdAt: datetime("created_at").default(new Date()).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => ({
     eventUnique: uniqueIndex("event_outbox_event_uq").on(table.eventId),
@@ -76,12 +80,12 @@ export const jobs = mysqlTable(
       .notNull(),
     attempts: int("attempts").default(0).notNull(),
     maxAttempts: int("max_attempts").default(5).notNull(),
-    availableAt: datetime("available_at").default(new Date()).notNull(),
+    availableAt: timestamp("available_at").defaultNow().notNull(),
     leaseToken: varchar("lease_token", { length: 36 }),
     leaseExpiresAt: datetime("lease_expires_at"),
     lastError: text("last_error"),
-    createdAt: datetime("created_at").default(new Date()).notNull(),
-    updatedAt: datetime("updated_at").default(new Date()).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },
   (table) => ({
     claimIdx: index("jobs_claim_idx").on(
@@ -116,7 +120,7 @@ export const aiUsageLedger = mysqlTable(
     costMicros: int("cost_micros").default(0).notNull(),
     objectType: varchar("object_type", { length: 128 }),
     objectId: varchar("object_id", { length: 128 }),
-    createdAt: datetime("created_at").default(new Date()).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => ({
     tenantCreatedIdx: index("ai_usage_tenant_created_idx").on(
@@ -138,7 +142,7 @@ export const promptVersions = mysqlTable(
     status: mysqlEnum("status", ["draft", "approved", "retired"])
       .default("draft")
       .notNull(),
-    createdAt: datetime("created_at").default(new Date()).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => ({
     promptVersionUnique: uniqueIndex("prompt_versions_key_version_uq").on(

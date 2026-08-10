@@ -1,0 +1,22 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: xmaster-center-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: xmaster_center
+      MYSQL_USER: xmaster
+      MYSQL_PASSWORD: xmaster_dev_password
+      MYSQL_ROOT_PASSWORD: xmaster_root_password
+    ports:
+      - "3307:3306"
+    volumes:
+      - xmaster_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-pxmaster_root_password"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  xmaster_mysql_data:

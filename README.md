@@ -18,6 +18,11 @@ Fachtexte bleiben deutsch; Quellcode und Bezeichner sind englisch.
   Kosten-Ledger, Budget-Hardstops, Jury und Content Anchors.
 - `packages/integrations` — Storage, Mail, Telegram, PDF und signierte
   Webhooks hinter austauschbaren Interfaces.
+- `apps/api` — Express-/tRPC-Gateway mit lokaler Anmeldung und Health-Endpunkt.
+- `apps/worker` — Lease-Worker, Scheduler und Event-Dispatcher.
+- `modules/system` — Betriebsübersicht für Audit, Jobs, KI-Kosten und Policies.
+- `modules/crm` — Mandantenbezogenes CRM für Kunden, Adressen, Branchen und
+  Projekte.
 
 ## Start
 
@@ -35,6 +40,28 @@ pnpm build
 Für Tests wird keine Datenbank und kein Netzwerk benötigt. Die Tests verwenden
 In-Memory-Repositories und No-Op-Adapter. Der produktive MySQL-Adapter wird erst
 von einer späteren App oder einem Worker instanziiert.
+
+## Lokale Plattform
+
+MySQL läuft reproduzierbar über Docker Compose auf Port `3307`:
+
+```bash
+docker compose up -d mysql
+export DATABASE_URL=mysql://xmaster:xmaster_dev_password@127.0.0.1:3307/xmaster_center
+export JWT_SECRET=replace-with-a-long-random-secret
+export PUBLIC_APP_ORIGIN=http://localhost:3000
+export ADMIN_PIN=1907
+pnpm db:generate
+pnpm db:migrate
+pnpm db:seed
+pnpm dev:api
+# in einem zweiten Terminal:
+pnpm dev:worker
+```
+
+Die API lauscht auf `PORT` (standardmäßig `3000`). `GET /api/health` ist ohne
+Anmeldung erreichbar. Die lokale Anmeldung erfolgt mit `externalId=admin` und
+dem Wert aus `ADMIN_PIN`; sie setzt das HttpOnly-Cookie `xmc_session`.
 
 ## Neues Modul andocken
 

@@ -10,6 +10,7 @@ export const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   JWT_SECRET: z.string().min(16),
   JWT_EXPIRY: z.string().default("8h"),
+  ADMIN_PIN: z.string().min(4).default("1907"),
   PUBLIC_APP_ORIGIN: z.string().url(),
   S3_ENDPOINT: optionalUrl,
   S3_ACCESS_KEY: z.string().optional(),
