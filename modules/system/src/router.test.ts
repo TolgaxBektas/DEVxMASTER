@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AuthContext } from "@xmaster-center/contracts";
 import {
+  appendAudit,
   MemoryAuditRepository,
   MemoryEventRepository,
 } from "@xmaster-center/kernel";
@@ -170,4 +171,50 @@ describe("System-Mandantengrenzen", () => {
     expect(await caller.audit.list()).toEqual(tenantRows);
     expect(whereCalls).toBe(1);
   });
+
+  it("prüft global nur mit dem ausdrücklichen Recht", async () => {
+    const audit = new MemoryAuditRepository();
+    await appendAuditForTest(audit, "1");
+    await appendAuditForTest(audit, "2");
+    const base = setup();
+    base.context.permissions = new Set(["system.audit.read"]);
+    const scoped = createSystemRouter({
+      db: base.db,
+      audit,
+      events: base.events,
+      queue: base.queue,
+      health: async () => [],
+      navigation: () => [],
+    }).createCaller({ auth: base.context });
+    expect(await scoped.audit.verify()).toMatchObject({
+      scoped: true,
+      complete: false,
+      totalEntries: 1,
+    });
+    base.context.permissions = new Set([
+      "system.audit.read",
+      "system.audit.global.verify",
+    ]);
+    const global = createSystemRouter({
+      db: base.db,
+      audit,
+      events: base.events,
+      queue: base.queue,
+      health: async () => [],
+      navigation: () => [],
+    }).createCaller({ auth: base.context });
+    expect(await global.audit.verify()).toMatchObject({
+      scoped: false,
+      complete: true,
+      totalEntries: 2,
+    });
+  });
 });
+
+async function appendAuditForTest(repository: MemoryAuditRepository, tenantId: string) {
+  await appendAudit(repository, {
+    tenantId,
+    action: "test",
+    entityType: "test",
+  });
+}

@@ -19,6 +19,7 @@ export {
   roleAssignments,
   settings,
   auditLog,
+  auditChainHeads,
 } from "./schema-core.js";
 import {
   tenants,
@@ -28,6 +29,7 @@ import {
   roleAssignments,
   settings,
   auditLog,
+  auditChainHeads,
 } from "./schema-core.js";
 
 export const eventOutbox = mysqlTable(

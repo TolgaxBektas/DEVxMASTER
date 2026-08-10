@@ -57,6 +57,20 @@
       "when": 1786347200000,
       "tag": "0007_ingestion_upload_permission",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1786349000000,
+      "tag": "0008_audit_chain_head",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1786349100000,
+      "tag": "0009_global_audit_verify_permission",
+      "breakpoints": true
     }
   ]
 }

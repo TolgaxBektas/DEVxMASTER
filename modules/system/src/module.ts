@@ -75,6 +75,10 @@ export function createSystemModule(deps: {
     permissions: [
       { permission: "system.health.read", title: "Betriebsstatus lesen" },
       { permission: "system.audit.read", title: "Audit lesen" },
+      {
+        permission: "system.audit.global.verify",
+        title: "Globale Audit-Kette prüfen",
+      },
       { permission: "system.jobs.read", title: "Jobs lesen" },
       { permission: "system.jobs.requeue", title: "Jobs erneut einreihen" },
       { permission: "system.events.read", title: "Ereignisse lesen" },

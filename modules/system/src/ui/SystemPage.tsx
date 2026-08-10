@@ -99,6 +99,7 @@ export function SystemPage({ api }: ModulePageProps) {
   const title = titles[path] ?? "Betriebsübersicht";
   const canRequeueJobs = permissions.data?.includes("system.jobs.requeue");
   const canRequeueEvents = permissions.data?.includes("system.events.requeue");
+  const canVerifyGlobal = permissions.data?.includes("system.audit.global.verify");
   const requeueJob = async (id: string) => {
     setMessage("");
     try {
@@ -150,7 +151,7 @@ export function SystemPage({ api }: ModulePageProps) {
             <h2>Audit-Log</h2>
             {path === "/system/audit" && (
               <Button variant="secondary" onClick={verify}>
-                Kette prüfen
+                {canVerifyGlobal ? "Globale Kette prüfen" : "Kette prüfen"}
               </Button>
             )}
           </div>

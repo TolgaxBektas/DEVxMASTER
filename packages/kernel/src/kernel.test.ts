@@ -65,25 +65,32 @@ describe("Audit-Hashkette", () => {
     let latestCalls = 0;
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
+    const writers = 16;
     const concurrent: AuditRepository = {
       latest: async () => {
         latestCalls += 1;
-        if (latestCalls === 2) release();
-        if (latestCalls <= 2) await gate;
+        if (latestCalls === writers) release();
+        if (latestCalls <= writers) await gate;
         return repository.entries.at(-1) ?? null;
       },
       insert: (entry) => repository.insert(entry),
       list: (tenantId) => repository.list(tenantId),
     };
-    await Promise.all([
-      appendAudit(concurrent, { tenantId: "1", action: "a", entityType: "x" }, {
-        sleep: async () => undefined,
-      }),
-      appendAudit(concurrent, { tenantId: "2", action: "b", entityType: "x" }, {
-        sleep: async () => undefined,
-      }),
-    ]);
-    expect(repository.entries.map((entry) => entry.seq)).toEqual([1, 2]);
+    await Promise.all(
+      Array.from({ length: writers }, (_, index) =>
+        appendAudit(
+          concurrent,
+          { tenantId: String(index + 1), action: `a${index}`, entityType: "x" },
+          {
+            maxAttempts: 32,
+            sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+          },
+        ),
+      ),
+    );
+    expect(repository.entries.map((entry) => entry.seq)).toEqual(
+      Array.from({ length: writers }, (_, index) => index + 1),
+    );
     expect((await verifyAuditChain(repository)).ok).toBe(true);
   });
 

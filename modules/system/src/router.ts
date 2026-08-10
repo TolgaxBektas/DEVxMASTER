@@ -44,7 +44,12 @@ export function createSystemRouter(deps: {
           .limit(100),
       ),
       verify: permissionProcedure("system.audit.read").query(({ ctx }) =>
-        verifyAuditChain(deps.audit, ctx.auth.tenantId),
+        verifyAuditChain(
+          deps.audit,
+          ctx.auth.permissions.has("system.audit.global.verify")
+            ? undefined
+            : ctx.auth.tenantId,
+        ),
       ),
     }),
     jobs: router({

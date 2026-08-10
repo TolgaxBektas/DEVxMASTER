@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { desc, eq } from "drizzle-orm";
-import { auditLog } from "./db/schema.js";
+import { auditChainHeads, auditLog } from "./db/schema.js";
 
 export const GENESIS_HASH = "0".repeat(64);
 
@@ -22,6 +22,10 @@ export type AuditRepository = {
   latest(): Promise<Pick<AuditEntry, "seq" | "hash"> | null>;
   insert(entry: AuditEntry): Promise<void>;
   list(tenantId?: string): Promise<AuditEntry[]>;
+  appendAtomic?(
+    params: Omit<AuditEntry, "seq" | "prevHash" | "hash" | "createdAt">,
+    createdAt: Date,
+  ): Promise<AuditEntry>;
 };
 
 export function isRetryableAuditWriteError(error: unknown): boolean {
@@ -90,6 +94,17 @@ export async function appendAudit(
   const random = options.random ?? Math.random;
   const detailsJson = params.detailsJson ?? null;
   const createdAt = params.createdAt ?? options.now?.() ?? new Date();
+  if (repository.appendAtomic) {
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      try {
+        return await repository.appendAtomic({ ...params, detailsJson }, createdAt);
+      } catch (error) {
+        if (!isRetryableAuditWriteError(error) || attempt === maxAttempts - 1)
+          throw error;
+        await sleep(25 + Math.floor(random() * 150) * (attempt + 1));
+      }
+    }
+  }
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const latest = await repository.latest();
     const prevHash = latest?.hash ?? GENESIS_HASH;
@@ -178,6 +193,58 @@ export class MemoryAuditRepository implements AuditRepository {
 }
 
 export function createDrizzleAuditRepository(db: any): AuditRepository {
+  const appendWithHead = async (
+    database: any,
+    params: Omit<AuditEntry, "seq" | "prevHash" | "hash" | "createdAt">,
+    createdAt: Date,
+  ): Promise<AuditEntry> => {
+    const head = (
+      await database
+        .select({
+          seq: auditChainHeads.seq,
+          hash: auditChainHeads.hash,
+        })
+        .from(auditChainHeads)
+        .where(eq(auditChainHeads.id, 1))
+        .for("update")
+        .limit(1)
+    )[0];
+    if (!head) throw new Error("Audit-Kettenkopf fehlt");
+    const seq = Number(head.seq) + 1;
+    const prevHash = String(head.hash);
+    const entry: AuditEntry = {
+      ...params,
+      detailsJson: params.detailsJson ?? null,
+      createdAt,
+      seq,
+      prevHash,
+      hash: computeAuditHash({
+        ...params,
+        detailsJson: params.detailsJson ?? null,
+        createdAt,
+        seq,
+        prevHash,
+      }),
+    };
+    await database.insert(auditLog).values({
+      seq: entry.seq,
+      tenantId: entry.tenantId ? Number(entry.tenantId) : null,
+      action: entry.action,
+      entityType: entry.entityType,
+      entityId: entry.entityId == null ? null : String(entry.entityId),
+      detailsJson: entry.detailsJson ?? null,
+      actorId: entry.actorId == null ? null : Number(entry.actorId),
+      actorName: entry.actorName ?? null,
+      prevHash: entry.prevHash,
+      hash: entry.hash,
+      createdAt: entry.createdAt,
+    });
+    await database
+      .update(auditChainHeads)
+      .set({ seq: entry.seq, hash: entry.hash })
+      .where(eq(auditChainHeads.id, 1));
+    return entry;
+  };
   return {
     async latest() {
       return (
@@ -207,6 +274,14 @@ export function createDrizzleAuditRepository(db: any): AuditRepository {
         hash: entry.hash,
         createdAt: entry.createdAt,
       });
+    },
+    async appendAtomic(params, createdAt) {
+      if (typeof db.transaction === "function") {
+        return db.transaction((transaction: any) =>
+          appendWithHead(transaction, params, createdAt),
+        );
+      }
+      return appendWithHead(db, params, createdAt);
     },
     async list(tenantId) {
       const rows = await db

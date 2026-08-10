@@ -6,6 +6,7 @@ import {
   mysqlEnum,
   mysqlTable,
   text,
+  tinyint,
   timestamp,
   uniqueIndex,
   varchar,
@@ -127,6 +128,13 @@ export const auditLog = mysqlTable(
   }),
 );
 
+export const auditChainHeads = mysqlTable("audit_chain_heads", {
+  id: tinyint("id").primaryKey(),
+  seq: int("seq").notNull(),
+  hash: varchar("hash", { length: 64 }).notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+});
+
 export const coreSchema = {
   tenants,
   users,
@@ -135,4 +143,5 @@ export const coreSchema = {
   roleAssignments,
   settings,
   auditLog,
+  auditChainHeads,
 };
