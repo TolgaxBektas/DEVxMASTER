@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MemoryQueueRepository } from "./memory-repository.js";
 import { LeaseQueue } from "./queue.js";
 import { retryDelay } from "./backoff.js";
@@ -81,5 +81,42 @@ describe("Lease-Queue", () => {
     worker.stop();
     await run;
     expect(failures).toEqual([{ tenantId: null, message: "dauerhaft fehlgeschlagen" }]);
+  });
+
+  it("setzt die Arbeit nach einem Fehler in der Fehlerbehandlung fort", async () => {
+    const repository = new MemoryQueueRepository();
+    const queue = new LeaseQueue(repository);
+    const first = await queue.enqueue({
+      name: "failing",
+      payload: {},
+      maxAttempts: 1,
+    });
+    const second = await queue.enqueue({
+      name: "next",
+      payload: {},
+      maxAttempts: 1,
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const worker = new Worker(queue, new Map([
+      ["failing", {
+        name: "failing",
+        handle: async () => { throw new Error("job fehlgeschlagen"); },
+        onFailure: async () => { throw new Error("fehlerbehandlung fehlgeschlagen"); },
+      }],
+      ["next", {
+        name: "next",
+        handle: async () => undefined,
+      }],
+    ]));
+    const controller = new AbortController();
+    const run = worker.run({ workerId: "test", pollMs: 1, signal: controller.signal });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    controller.abort();
+    worker.stop();
+    await run;
+    expect((await repository.get(first.id))?.status).toBe("dead");
+    expect((await repository.get(second.id))?.status).toBe("completed");
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 });

@@ -40,8 +40,7 @@ function jobTenantId(context: unknown) {
 
 function jobDocumentId(payload: unknown) {
   const documentId = (payload as { documentId?: unknown }).documentId;
-  if (typeof documentId !== "number") throw new Error("Dokument für Job fehlt");
-  return documentId;
+  return typeof documentId === "number" ? documentId : null;
 }
 
 export function createIngestionModule(deps: {
@@ -194,6 +193,7 @@ export function createIngestionModule(deps: {
         onFailure: async (error, context) => {
           const tenantId = jobTenantId(context);
           const documentId = jobDocumentId((context as { job: { payload: unknown } }).job.payload);
+          if (documentId === null) return;
           const message = error instanceof Error ? error.message : "Verarbeitung fehlgeschlagen";
           const document = await repository.getDocument(tenantId, documentId);
           if (document.state !== "failed") {

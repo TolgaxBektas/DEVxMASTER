@@ -51,11 +51,20 @@ export class Worker {
           error,
           maxAttempts,
         );
-        if (terminal) await handler.onFailure?.(error, createJobHandlerContext(
-          this.queue,
-          job,
-          controller.signal,
-        ));
+        if (terminal && handler.onFailure) {
+          try {
+            await handler.onFailure(error, createJobHandlerContext(
+              this.queue,
+              job,
+              controller.signal,
+            ));
+          } catch (failureError) {
+            console.error(
+              `[worker] terminal failure handling failed for ${job.name} ${job.id}`,
+              failureError,
+            );
+          }
+        }
       } finally {
         if (timer) clearTimeout(timer);
       }

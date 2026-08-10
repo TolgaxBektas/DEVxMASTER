@@ -146,7 +146,8 @@ scheduler.start(
       name: job.name,
       intervalMs: 86_400_000,
       tenantId: "1",
-      payload: { tenantId: "1" },
+      // Scheduled runs currently cover only the first tenant.
+      payload: {},
     })),
 );
 void worker.run({
