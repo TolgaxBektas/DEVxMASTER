@@ -65,16 +65,16 @@ export function SystemPage({ api }: ModulePageProps) {
       />
     );
   }
-  const title =
-    path === "/system/jobs"
-      ? "Jobs & Warteschlange"
-      : path === "/system/ai"
-        ? "KI-Kosten"
-        : path === "/system/flags"
-          ? "Feature Flags"
-          : path === "/system/policies"
-            ? "Automations-Policies"
-            : "Betriebsübersicht";
+  const titles: Record<string, string> = {
+    "/system": "Betriebsübersicht",
+    "/system/modules": "Modulübersicht",
+    "/system/audit": "Audit-Log",
+    "/system/jobs": "Jobs & Warteschlange",
+    "/system/ai": "KI-Kosten",
+    "/system/flags": "Feature Flags",
+    "/system/policies": "Automations-Policies",
+  };
+  const title = titles[path] ?? "Betriebsübersicht";
   return (
     <div className="stack">
       <div className="page-heading">
@@ -83,9 +83,6 @@ export function SystemPage({ api }: ModulePageProps) {
           <h1>{title}</h1>
           <p>Transparenz für Betrieb, Audit und Automatisierung.</p>
         </div>
-        {path.includes("audit") && (
-          <Button onClick={verify}>Kette prüfen</Button>
-        )}
       </div>
       {(path === "/system" || path === "/system/modules") && (
         <Card>
@@ -106,11 +103,13 @@ export function SystemPage({ api }: ModulePageProps) {
         <Card>
           <div className="card-heading">
             <h2>Audit-Log</h2>
-            <Button variant="secondary" onClick={verify}>
-              Kette prüfen
-            </Button>
+            {path === "/system/audit" && (
+              <Button variant="secondary" onClick={verify}>
+                Kette prüfen
+              </Button>
+            )}
           </div>
-          {verification && (
+          {path === "/system/audit" && verification && (
             <div className="verify-result">
               <Badge tone={verification.ok ? "success" : "danger"}>
                 {verification.ok ? "Kette intakt" : "Kette beschädigt"}
