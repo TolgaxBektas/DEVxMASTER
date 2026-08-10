@@ -16,10 +16,14 @@ export function createSystemRouter(deps: {
   db: any;
   audit: AuditRepository;
   health(): Promise<unknown>;
+  navigation(permissions: ReadonlySet<string>): unknown[];
 }) {
   return router({
     health: permissionProcedure("system.health.read").query(() =>
       deps.health(),
+    ),
+    navigation: permissionProcedure("system.health.read").query(({ ctx }) =>
+      deps.navigation(ctx.auth.permissions),
     ),
     audit: router({
       list: permissionProcedure("system.audit.read").query(() =>

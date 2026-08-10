@@ -33,6 +33,14 @@ export type ModuleEvent = {
   handle?: (event: unknown) => Promise<void>;
 };
 
+export type ModulePage = {
+  id: string;
+  title: string;
+  path: string;
+  permission?: Permission;
+  component: unknown;
+};
+
 export type ModuleDefinition = {
   id: string;
   title: string;
@@ -42,6 +50,7 @@ export type ModuleDefinition = {
   router: AnyRouter;
   rest?: (app: Express) => void;
   nav: readonly NavEntry[];
+  pages: readonly ModulePage[];
   permissions: readonly (PermissionDefinition | Permission)[];
   jobs: readonly ModuleJob[];
   events: readonly ModuleEvent[];
@@ -115,6 +124,9 @@ export function createRegistry(modules: readonly ModuleDefinition[]) {
     permissions: permissionRegistry,
     jobs,
     events,
+    pages: modules.flatMap((module) =>
+      module.pages.map((page) => ({ ...page, moduleId: module.id })),
+    ),
     navigation(context: { permissions: ReadonlySet<string> }) {
       return modules
         .flatMap((module) =>

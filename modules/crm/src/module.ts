@@ -8,6 +8,9 @@ import {
 import { createCrmRouter } from "./router.js";
 import { crmSchema } from "./schema.js";
 import { createDrizzleCrmRepository } from "./repository.js";
+import { crmPages, CrmPage } from "./ui/index.js";
+
+export { crmPages } from "./ui/index.js";
 
 export function createCrmModule(deps: {
   db: any;
@@ -74,6 +77,13 @@ export function createCrmModule(deps: {
         order: 40,
       },
     ],
+    pages: crmPages.map(([id, title, path, permission]) => ({
+      id,
+      title,
+      path,
+      permission,
+      component: CrmPage,
+    })),
     permissions: [
       { permission: "crm.customer.read", title: "Kunden lesen" },
       { permission: "crm.customer.write", title: "Kunden ändern" },

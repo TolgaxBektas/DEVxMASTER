@@ -85,6 +85,7 @@ describe("RBAC und Modulregister", () => {
         schema: {},
         router: router({}),
         nav: [{ id: `${id}.home`, label: id, href: `/${id}` }],
+        pages: [],
         permissions: [{ permission: `${id}.read` }],
         jobs: [],
         events: [],

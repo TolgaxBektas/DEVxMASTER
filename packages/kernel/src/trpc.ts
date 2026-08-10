@@ -33,4 +33,7 @@ export function permissionProcedure(permission: Permission) {
   });
 }
 
-export type AppRouter = ReturnType<typeof router>;
+export type AppRouter = ReturnType<
+  typeof router<{ modules: import("@trpc/server").AnyRouter }>
+>;
+export type ClientRouter = ReturnType<typeof router<{}>>;

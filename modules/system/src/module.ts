@@ -1,10 +1,14 @@
 import { defineModule, type ModuleDefinition } from "@xmaster-center/kernel";
 import { createSystemRouter } from "./router.js";
+import { systemPages, SystemPage } from "./ui/index.js";
+
+export { systemPages } from "./ui/index.js";
 
 export function createSystemModule(deps: {
   db: any;
   audit: any;
   health(): Promise<unknown>;
+  navigation(permissions: ReadonlySet<string>): unknown[];
 }): ModuleDefinition {
   return defineModule({
     id: "system",
@@ -57,6 +61,13 @@ export function createSystemModule(deps: {
         order: 60,
       },
     ],
+    pages: systemPages.map(([id, title, path, permission]) => ({
+      id,
+      title,
+      path,
+      permission,
+      component: SystemPage,
+    })),
     permissions: [
       { permission: "system.health.read", title: "Betriebsstatus lesen" },
       { permission: "system.audit.read", title: "Audit lesen" },

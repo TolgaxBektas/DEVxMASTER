@@ -17,6 +17,7 @@ import { createEventBus } from "@xmaster-center/kernel";
 import { LeaseQueue, DrizzleQueueRepository } from "@xmaster-center/jobs";
 import { createCrmModule } from "@xmaster-center/module-crm";
 import { createSystemModule } from "@xmaster-center/module-system";
+import type { ModuleRegistry } from "@xmaster-center/kernel";
 
 const env = parseEnv();
 const dbFactory = createDbFactory(env);
@@ -25,10 +26,12 @@ const audit = createDrizzleAuditRepository(db);
 const eventRepository = createDrizzleEventRepository(db);
 const queue = new LeaseQueue(new DrizzleQueueRepository(db));
 let eventBus: ReturnType<typeof createEventBus>;
+let registry: ModuleRegistry;
 const system = createSystemModule({
   db,
   audit,
   health: async () => [{ id: "system", status: "healthy" }],
+  navigation: (permissions) => registry.navigation({ permissions }),
 });
 const crm = createCrmModule({
   db,
@@ -36,7 +39,7 @@ const crm = createCrmModule({
   publish: (input, executor) => eventBus.publish(input, executor),
   enqueue: (input) => queue.enqueue(input),
 });
-const registry = createRegistry([system, crm]);
+registry = createRegistry([system, crm]);
 eventBus = createEventBus(
   eventRepository,
   [...registry.events.entries()].flatMap(([name, items]) =>
