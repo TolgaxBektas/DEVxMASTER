@@ -88,3 +88,31 @@ class Job(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[str | None] = mapped_column(Text)
+
+
+class Source(Base):
+    __tablename__ = "sources"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    base_url: Mapped[str] = mapped_column(Text, unique=True)
+    label: Mapped[str] = mapped_column(String(255))
+    enabled: Mapped[bool] = mapped_column(default=True)
+    crawl_strategy: Mapped[str] = mapped_column(String(20), default="html")
+    last_crawled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    candidates: Mapped[list["DiscoveredCandidate"]] = relationship(
+        back_populates="source", cascade="all, delete-orphan"
+    )
+
+
+class DiscoveredCandidate(Base):
+    __tablename__ = "discovered_candidates"
+    __table_args__ = (UniqueConstraint("normalized_url"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("sources.id"), index=True)
+    url: Mapped[str] = mapped_column(Text)
+    normalized_url: Mapped[str] = mapped_column(Text)
+    discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    state: Mapped[str] = mapped_column(String(20), default="discovered")
+    error: Mapped[str | None] = mapped_column(Text)
+    content_sha256: Mapped[str | None] = mapped_column(String(64))
+    document_id: Mapped[int | None] = mapped_column(ForeignKey("documents.id"))
+    source: Mapped[Source] = relationship(back_populates="candidates")

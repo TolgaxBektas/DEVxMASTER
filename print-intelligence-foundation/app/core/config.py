@@ -23,6 +23,15 @@ class Settings(BaseSettings):
     stage_timeout_seconds: float = 300.0
     redis_url: str = "redis://localhost:6379/0"
     redis_queue: str = "print-intelligence:documents"
+    redis_visibility_timeout: float = 60.0
+    redis_max_attempts: int = 3
+    redis_backoff_seconds: float = 1.0
+    discovery_max_depth: int = 2
+    discovery_max_pages: int = 50
+    discovery_max_entries: int = 100
+    discovery_timeout_seconds: float = 60.0
+    discovery_request_delay: float = 0.25
+    discovery_user_agent: str = "print-intelligence-foundation/1.0"
     s3_endpoint_url: str | None = None
     s3_bucket: str = "print"
     s3_access_key: str | None = None
