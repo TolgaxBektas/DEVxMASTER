@@ -23,6 +23,14 @@ Fachtexte bleiben deutsch; Quellcode und Bezeichner sind englisch.
 - `modules/system` — Betriebsübersicht für Audit, Jobs, KI-Kosten und Policies.
 - `modules/crm` — Mandantenbezogenes CRM für Kunden, Adressen, Branchen und
   Projekte.
+- `modules/billing` — Aussteller, Rechnungen, Zahlungen und Mahnwesen mit
+  unveränderlichen Belegen und Decimal-String-Arithmetik.
+- `modules/ingestion` — Quellen, Dokumente und erkannte Anzeigen-Fundstellen;
+  der PIF-Dienst bleibt als Python-Verarbeitungsmaschine gekapselt.
+- `modules/assistant` — ALEXIS-Briefing, Chat und policy-gesteuerte
+  Aktionsvorschläge.
+- `services/print-ingest` — übernommener Python-Dienst für PDF, OCR,
+  Verarbeitung und SSRF-geschützten Abruf.
 
 ## Start
 
@@ -110,3 +118,48 @@ Event-Abonnements und aggregierte Health-Daten.
 Die Plattform-Datenbank ist MySQL/TiDB mit Drizzle und `mysqlTable`. Der Kernel
 definiert ausschließlich die zentralen Tabellen; Fachtabellen gehören in die
 jeweiligen Module. `DATABASE_URL` wird beim Erzeugen des DB-Clients benötigt.
+
+## Laufzeit und Wertstrom
+
+Der Web-Dev-Server läuft auf Port `3020`:
+
+```bash
+npm exec --yes pnpm@10.4.1 -- --filter @xmaster-center/web dev
+```
+
+Der Print-Ingest-Dienst läuft intern auf Port `8000` und wird lokal nur über
+`127.0.0.1:8010` veröffentlicht:
+
+```bash
+docker compose up -d mysql print-ingest
+```
+
+Geschützte PIF-Aufrufe verwenden den Header `x-service-token`. Der Downloader
+prüft URLs vor dem Abruf gegen private, Loopback-, Link-Local- und reservierte
+Adressen und validiert jeden Redirect erneut. Die Pytest-Suite läuft mit:
+
+```bash
+services/print-ingest/.venv/bin/pytest services/print-ingest/tests -q
+```
+
+`ingestion` publiziert `document.ingested` und `advertisement.detected`. Das
+CRM abonniert die Fundstelle und legt daraus einen Lead mit Herkunftsnachweis
+auf Dokument und Fundstelle an. ALEXIS liest Modulzusammenfassungen über
+schmale Abfragen, zeigt überfällige Rechnungen und neue Leads und protokolliert
+Freigabe sowie Ausführung von Vorschlägen in der globalen Audit-Kette. Für
+lokale Demos steht ein Mock-Provider zur Verfügung.
+
+## Grenzen des Fundaments
+
+- Die Ingestion-Browserdemo erzeugt derzeit ein Demo-Dokument; ein vollständiger
+  Upload-/Download-Workflow aus der Weboberfläche folgt als Ausbau.
+- Ingestion-Bestand und ALEXIS-Demo-Zustand verwenden für die Oberfläche
+  In-Memory-Repositories; für Hochverfügbarkeit und Worker-Neustarts müssen
+  persistente Adapter ergänzt werden.
+- Der Python-Dienst ist pytest-verifiziert, aber die Docker-Ausführung und ein
+  realer externer PDF-Download sind wegen fehlender externer Quellen nicht
+  fachlich durchgetestet.
+- Der Mock-KI-Provider prüft Orchestrierung, Prompt-/Policy-Verträge und
+  Auditierung, nicht die Qualität oder Kosten realer Provider.
+- SEPA, E-Rechnung, DATEV/GoBD-Export, Angebote und Settlement-Import bleiben
+  spätere Ausbaustufen.
