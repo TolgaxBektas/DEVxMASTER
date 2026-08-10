@@ -88,7 +88,7 @@ const ingestion = createIngestionModule({
   },
   fetchSource: async ({ url }) => {
     if (!env.PIF_SERVICE_TOKEN) throw new Error("PIF-Service-Token fehlt");
-    const response = await fetch(`${env.PIF_BASE_URL}/api/v1/stateless/fetch`, {
+    const response = await fetch(`${env.PIF_BASE_URL}/api/v1/fetch`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-service-token": env.PIF_SERVICE_TOKEN },
       body: JSON.stringify({ url }),

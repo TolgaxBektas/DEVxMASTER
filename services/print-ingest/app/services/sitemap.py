@@ -2,7 +2,7 @@ from urllib.parse import urljoin, urlparse
 import xml.etree.ElementTree as ET
 import requests
 from app.core.config import settings
-from app.services.policy import DiscoveryBudget, check_url_policy, read_limited_response, request_checked
+from app.services.policy import DiscoveryBudget, check_url_policy, close_checked_response, read_limited_response, request_checked
 
 
 def discover_sitemaps(base_url: str, *, budget: DiscoveryBudget | None = None, depth: int = 0) -> list[str]:
@@ -22,6 +22,7 @@ def discover_sitemaps(base_url: str, *, budget: DiscoveryBudget | None = None, d
             )
             if r.ok and 'xml' in r.headers.get('content-type','').lower():
                 out.append(u)
+            close_checked_response(r)
         except requests.RequestException:
             pass
     return out
@@ -40,6 +41,7 @@ def extract_pdf_urls_from_sitemap(sitemap_url: str, max_urls: int=5000, *, budge
     if "xml" not in content_type:
         raise RuntimeError("unexpected_content_type")
     root=ET.fromstring(read_limited_response(r, settings.max_response_mb * 1024 * 1024))
+    close_checked_response(r)
     locs=[(el.text or '').strip() for el in root.iter() if el.tag.endswith('loc') and el.text]
     return [
         u for u in locs[:max_urls]

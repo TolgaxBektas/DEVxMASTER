@@ -1,4 +1,4 @@
-import { permissionProcedure, router } from "@xmaster-center/kernel";
+import { permissionProcedure, protectedProcedure, router } from "@xmaster-center/kernel";
 import { z } from "zod";
 import type { IngestionRepository } from "./repository.js";
 
@@ -19,6 +19,11 @@ export function createIngestionRouter(
 ) {
   return router({
     sources: router({
+      capabilities: protectedProcedure.query(({ ctx }) => ({
+        search: ctx.auth.permissions.has("ingestion.source.search"),
+        approve: ctx.auth.permissions.has("ingestion.source.approve"),
+        fetch: ctx.auth.permissions.has("ingestion.source.fetch"),
+      })),
       list: permissionProcedure("ingestion.source.read").query(({ ctx }) =>
         repository.listSources(ctx.auth.tenantId),
       ),

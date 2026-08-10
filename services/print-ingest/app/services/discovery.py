@@ -2,7 +2,7 @@ from urllib.parse import urljoin, urlparse
 import re, requests
 from bs4 import BeautifulSoup
 from app.core.config import settings
-from app.services.policy import DiscoveryBudget, check_url_policy, read_limited_response, request_checked
+from app.services.policy import DiscoveryBudget, check_url_policy, close_checked_response, read_limited_response, request_checked
 
 PUBLICATION_TERMS = {
  'seniorenwegweiser','seniorenratgeber','bürgerinformation','buergerinformation',
@@ -35,6 +35,7 @@ def discover_pdf_links(page_url: str, *, budget: DiscoveryBudget | None = None, 
     if "html" not in content_type and "xhtml" not in content_type:
         raise RuntimeError("unexpected_content_type")
     html = read_limited_response(r, settings.max_response_mb * 1024 * 1024)
+    close_checked_response(r)
     soup=BeautifulSoup(html,'html.parser')
     found={}
     for a in soup.find_all('a', href=True):

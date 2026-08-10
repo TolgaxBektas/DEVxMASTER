@@ -131,7 +131,17 @@ def request_checked(url: str, *, policy: PolicyResult | None = None, budget: Dis
     ))
     headers = dict(kwargs.pop("headers", {}) or {})
     headers.setdefault("User-Agent", settings.crawl_user_agent)
-    return session.request("GET", url, headers=headers, **kwargs)
+    response = session.request("GET", url, headers=headers, **kwargs)
+    response._xmaster_session = session
+    return response
+
+def close_checked_response(response):
+    close = getattr(response, "close", None)
+    if close is not None:
+        close()
+    session = getattr(response, "_xmaster_session", None)
+    if session is not None:
+        session.close()
 
 def read_limited_response(response, max_bytes: int) -> bytes:
     chunks = []

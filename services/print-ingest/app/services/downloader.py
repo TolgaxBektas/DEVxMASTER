@@ -2,7 +2,7 @@ import hashlib, mimetypes
 from urllib.parse import urljoin, urlparse
 import requests
 from app.core.config import settings
-from app.services.policy import check_url_policy, request_checked
+from app.services.policy import check_url_policy, close_checked_response, request_checked
 
 class DownloadError(RuntimeError):
     pass
@@ -25,9 +25,6 @@ def download_pdf(url: str, *, max_redirects: int | None = None) -> tuple[bytes, 
             target = r.headers.get('location')
             if not target:
                 raise DownloadError('redirect_without_location')
-            redirect_policy = check_url_policy(target)
-            if redirect_policy['status'] != 'APPROVED':
-                raise DownloadError(f"policy blocked: {redirect_policy['reason']}")
             remaining = settings.max_redirects if max_redirects is None else max_redirects
             if remaining <= 0:
                 raise DownloadError('redirect_limit_exceeded')
@@ -35,6 +32,7 @@ def download_pdf(url: str, *, max_redirects: int | None = None) -> tuple[bytes, 
             target_policy = check_url_policy(target)
             if target_policy['status'] != 'APPROVED':
                 raise DownloadError(f"policy blocked: {target_policy['reason']}")
+            close_checked_response(r)
             return download_pdf(target, max_redirects=remaining - 1)
         r.raise_for_status()
         chunks=[]; total=0
@@ -45,6 +43,7 @@ def download_pdf(url: str, *, max_redirects: int | None = None) -> tuple[bytes, 
                 raise DownloadError('file_too_large')
             chunks.append(chunk)
     data=b''.join(chunks)
+    close_checked_response(r)
     if not data.startswith(b'%PDF-'):
         raise DownloadError('not_a_real_pdf_signature')
     digest=hashlib.sha256(data).hexdigest()

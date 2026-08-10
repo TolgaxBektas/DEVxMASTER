@@ -74,6 +74,36 @@ def test_redirect_limit_blocks_exhaustion(monkeypatch):
         downloader.download_pdf("https://public.example/start.pdf", max_redirects=0)
 
 
+def test_relative_redirect_is_resolved_before_policy_check(monkeypatch):
+    seen = []
+    allowed = {"status": "APPROVED", "hostname": "public.example", "address": "93.184.216.34"}
+    monkeypatch.setattr(downloader, "check_url_policy", lambda url: (seen.append(url) or allowed))
+    responses = iter([
+        FakeResponse(b"", "application/pdf", 302, {"location": "/next.pdf"}),
+        FakeResponse(b"%PDF-1.7\nbody", "application/pdf", 200),
+    ])
+    monkeypatch.setattr(downloader, "request_checked", lambda *args, **kwargs: next(responses))
+    data, _metadata = downloader.download_pdf("https://public.example/start.pdf")
+    assert data.startswith(b"%PDF-")
+    assert "https://public.example/next.pdf" in seen
+    assert all("://" in url for url in seen)
+
+
+def test_checked_response_closes_its_session():
+    class Session:
+        def close(self):
+            self.closed = True
+
+    response = FakeResponse()
+    response.close = lambda: setattr(response, "closed", True)
+    response._xmaster_session = Session()
+    from app.services.policy import close_checked_response
+
+    close_checked_response(response)
+    assert response.closed
+    assert response._xmaster_session.closed
+
+
 def test_pdf_signature_is_authoritative(monkeypatch):
     allowed = {"status": "APPROVED", "hostname": "public.example", "address": "93.184.216.34"}
     monkeypatch.setattr(downloader, "check_url_policy", lambda _url: allowed)
