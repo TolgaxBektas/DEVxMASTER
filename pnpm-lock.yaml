@@ -221,6 +221,12 @@ importers:
 
   modules/assistant:
     dependencies:
+      '@xmaster-center/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
+      '@xmaster-center/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@xmaster-center/kernel':
         specifier: workspace:*
         version: link:../../packages/kernel

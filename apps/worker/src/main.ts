@@ -52,6 +52,7 @@ const billing = createBillingModule({
   transaction: (callback) => db.transaction(callback),
 });
 const ingestion = createIngestionModule({
+  db,
   publish: (input) => eventBus.publish(input),
 });
 const assistant = createAssistantModule({

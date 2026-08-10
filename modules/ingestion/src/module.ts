@@ -2,9 +2,12 @@ import { defineModule, type ModuleDefinition } from "@xmaster-center/kernel";
 import { ingestionSchema } from "./schema.js";
 import { createIngestionRouter } from "./router.js";
 import { MemoryIngestionRepository } from "./memory-repository.js";
+import { createDrizzleIngestionRepository } from "./drizzle-repository.js";
 import { ingestionPages, IngestionPage } from "./ui/index.js";
 
 export function createIngestionModule(deps: {
+  db?: unknown;
+  enqueue?: (input: { name: string; tenantId?: string | null; payload: unknown }) => Promise<unknown>;
   publish(input: {
     name: string;
     tenantId: string;
@@ -14,7 +17,9 @@ export function createIngestionModule(deps: {
     idempotencyKey: string;
   }): Promise<unknown>;
 }): ModuleDefinition {
-  const repository = new MemoryIngestionRepository();
+  const repository = deps.db
+    ? createDrizzleIngestionRepository(deps.db)
+    : new MemoryIngestionRepository();
   return defineModule({
     id: "ingestion",
     title: "Dokumente",
@@ -33,7 +38,35 @@ export function createIngestionModule(deps: {
       { permission: "ingestion.document.write", title: "Dokumente aufnehmen" },
       { permission: "ingestion.occurrence.read", title: "Fundstellen lesen" },
     ],
-    jobs: [],
+    jobs: [
+      {
+        name: "ingestion.discovery.run",
+        schedule: "daily",
+        handle: async (payload) => {
+          const tenantId = String((payload as { tenantId?: string }).tenantId ?? "1");
+          const result = await repository.ingestDemo(tenantId);
+          await deps.publish({
+            name: "document.ingested",
+            tenantId,
+            aggregateType: "document",
+            aggregateId: String(result.document.id),
+            payload: { documentId: result.document.id },
+            idempotencyKey: `document.ingested:${result.document.sha256}`,
+          });
+        },
+      },
+      {
+        name: "ingestion.processing.run",
+        schedule: "daily",
+        handle: async (payload) => {
+          const tenantId = String((payload as { tenantId?: string }).tenantId ?? "1");
+          const documents = await repository.listDocuments(tenantId);
+          for (const document of documents.filter((item) => item.state === "discovered")) {
+            await repository.setDocumentState(tenantId, document.id, "processed");
+          }
+        },
+      },
+    ],
     events: [
       { name: "document.ingested", direction: "published" },
       { name: "advertisement.detected", direction: "published" },

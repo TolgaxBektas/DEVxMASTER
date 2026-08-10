@@ -153,9 +153,15 @@ lokale Demos steht ein Mock-Provider zur Verfügung.
 
 - Die Ingestion-Browserdemo erzeugt derzeit ein Demo-Dokument; ein vollständiger
   Upload-/Download-Workflow aus der Weboberfläche folgt als Ausbau.
-- Ingestion-Bestand und ALEXIS-Demo-Zustand verwenden für die Oberfläche
-  In-Memory-Repositories; für Hochverfügbarkeit und Worker-Neustarts müssen
-  persistente Adapter ergänzt werden.
+- Der Ingestion-Bestand liegt jetzt persistent in MySQL; der Inhalts-Hash ist
+  je Mandant eindeutig und überlebt API-/Worker-Neustarts. Die Browseraufnahme
+  bleibt für diese Stufe ein Demo-Dokument.
+- Die Discovery- und Verarbeitungsläufe sind als Scheduler-Jobs registriert
+  und werden vom Worker verarbeitet; echte externe Quellen und ein vollständiger
+  Upload-Workflow bleiben noch aus.
+- ALEXIS verwendet für die lokale Demo einen Mock-Kontext und einfache
+  Modulzusammenfassungen; produktive Providerqualität und vollständige
+  Modulaktionen müssen noch ausgebaut werden.
 - Der Python-Dienst ist pytest-verifiziert, aber die Docker-Ausführung und ein
   realer externer PDF-Download sind wegen fehlender externer Quellen nicht
   fachlich durchgetestet.

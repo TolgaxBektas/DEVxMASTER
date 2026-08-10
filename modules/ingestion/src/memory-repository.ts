@@ -25,6 +25,12 @@ export class MemoryIngestionRepository implements IngestionRepository {
     return this.occurrences.filter((occurrence) => documents.has(occurrence.documentId));
   }
   async ingestDemo(tenantId: string) {
+    const existing = this.documents.find((item) => item.sha256 === `demo-${tenantId}-1`);
+    if (existing) {
+      const source = this.sources.find((item) => item.id === existing.sourceId);
+      const occurrence = this.occurrences.find((item) => item.documentId === existing.id);
+      if (source && occurrence) return { source, document: existing, occurrence };
+    }
     const source = { id: ++this.sourceId, url: `${tenantId}:demo://publication`, status: "discovered" };
     const document = {
       id: ++this.documentId,
@@ -45,5 +51,26 @@ export class MemoryIngestionRepository implements IngestionRepository {
     this.documents.push(document);
     this.occurrences.push(occurrence);
     return { source, document, occurrence };
+  }
+
+  async setDocumentState(
+    tenantId: string,
+    documentId: number,
+    state: string,
+    error: string | null = null,
+  ) {
+    const document = (await this.listDocuments(tenantId)).find((item) => item.id === documentId);
+    if (!document) throw new Error("Dokument nicht gefunden");
+    const allowed: Record<string, string[]> = {
+      discovered: ["processing", "failed"],
+      processing: ["processed", "failed"],
+      failed: ["processing"],
+      processed: [],
+    };
+    if (!allowed[document.state]?.includes(state))
+      throw new Error(`Ungültiger Dokumentzustand: ${document.state} -> ${state}`);
+    document.state = state;
+    document.error = error;
+    return { ...document };
   }
 }

@@ -1,4 +1,4 @@
-import { int, mysqlTable, text, timestamp, varchar } from "drizzle-orm/mysql-core";
+import { int, mysqlTable, text, timestamp, uniqueIndex, varchar } from "drizzle-orm/mysql-core";
 
 export const sources = mysqlTable("ingestion_sources", {
   id: int("id").autoincrement().primaryKey(),
@@ -16,7 +16,9 @@ export const documents = mysqlTable("ingestion_documents", {
   state: varchar("state", { length: 32 }).notNull(),
   error: text("error"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => ({
+  tenantHash: uniqueIndex("ingestion_documents_tenant_hash").on(table.tenantId, table.sha256),
+}));
 export const pages = mysqlTable("ingestion_pages", {
   id: int("id").autoincrement().primaryKey(),
   documentId: int("document_id").notNull(),

@@ -23,4 +23,10 @@ export type IngestionRepository = {
     document: IngestionDocument;
     occurrence: IngestionOccurrence;
   }>;
+  setDocumentState(
+    tenantId: string,
+    documentId: number,
+    state: string,
+    error?: string | null,
+  ): Promise<IngestionDocument>;
 };
