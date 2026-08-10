@@ -35,4 +35,7 @@ def make_pipeline(session, settings: Settings):
         settings.stage_timeout_seconds,
         settings.local_work_dir,
         settings.bbox_iou_threshold,
+        settings.artwork_dpi,
+        settings.artwork_padding,
+        settings.artwork_trim_margin,
     )

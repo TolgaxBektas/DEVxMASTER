@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     ollama_model: str = "qwen3-vl:4b"
     ollama_timeout: float = 120.0
     render_dpi: int = 120
+    artwork_dpi: int = 300
+    artwork_padding: int = 8
+    artwork_trim_margin: int = 4
     confidence_threshold: float = 0.7
     max_download_bytes: int = 50_000_000
     bbox_iou_threshold: float = 0.85

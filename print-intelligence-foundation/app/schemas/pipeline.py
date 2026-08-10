@@ -3,7 +3,12 @@ from pydantic import BaseModel, Field
 
 class AdFields(BaseModel):
     company: str | None = None
+    contact_person: str | None = None
+    street: str | None = None
+    postal_code: str | None = None
+    city: str | None = None
     phone: str | None = None
+    fax: str | None = None
     raw_phone: str | None = None
     email: str | None = None
     domain: str | None = None

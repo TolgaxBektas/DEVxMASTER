@@ -16,3 +16,9 @@ def render_pdf(
         bitmap.to_pil().convert("RGB").save(path, format="PNG", optimize=False)
         paths.append(path)
     return paths
+
+
+def render_page(pdf_path: str | Path, page_number: int, dpi: int):
+    pdf = pdfium.PdfDocument(str(pdf_path))
+    bitmap = pdf[page_number - 1].render(scale=dpi / 72)
+    return bitmap.to_pil().convert("RGB")

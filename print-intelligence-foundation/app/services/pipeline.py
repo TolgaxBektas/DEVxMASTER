@@ -9,12 +9,13 @@ from sqlalchemy.orm import Session
 from app.models import AdOccurrence, Company, Document, Page, ReviewItem
 from app.services.bbox import Box, deduplicate_boxes, normalize_bbox
 from app.services.classify import classify_page
-from app.services.crop import crop_ad
+from app.services.crop import crop_ad, restore_artwork
 from app.services.dedupe import contact_key, normalize_name
 from app.services.extraction import extract_contact_fields
 from app.services.ingest import content_lock, validate_pdf
 from app.services.jobs import get_or_create, retry, run_stage
-from app.services.render import render_pdf
+from app.services.order_forms import merge_form_and_ad_fields, parse_order_form
+from app.services.render import render_page, render_pdf
 from app.services.storage import sha256
 from app.services.text_layer import (
     page_texts_in_boxes,
@@ -37,6 +38,9 @@ class Pipeline:
         stage_timeout_seconds=300,
         local_work_dir="./work",
         bbox_iou_threshold=0.85,
+        artwork_dpi=300,
+        artwork_padding=8,
+        artwork_trim_margin=4,
     ):
         self.session, self.provider, self.storage = session, provider, storage
         self.render_dpi, self.confidence_threshold = render_dpi, confidence_threshold
@@ -46,6 +50,9 @@ class Pipeline:
         )
         self.local_work_dir = Path(local_work_dir)
         self.bbox_iou_threshold = bbox_iou_threshold
+        self.artwork_dpi = artwork_dpi
+        self.artwork_padding = artwork_padding
+        self.artwork_trim_margin = artwork_trim_margin
 
     def _run(self, document_id, stage, action, force=False):
         job = get_or_create(self.session, document_id, stage, self.max_attempts)
@@ -112,7 +119,9 @@ class Pipeline:
         self._run(
             doc.id,
             "detect",
-            lambda deadline: self._detect_pages(doc, page_paths_by_number, digest, local_root, deadline),
+            lambda deadline: self._detect_pages(
+                doc, source, page_paths_by_number, digest, local_root, deadline
+            ),
             force,
         )
         self._run(doc.id, "extract", lambda deadline: self._extract_missing(doc, source, deadline), force)
@@ -143,19 +152,21 @@ class Pipeline:
             )
             classification = classify_page(source, number)
             if page is None:
-                self.session.add(
-                    Page(
-                        document_id=doc.id,
-                        page_number=number,
-                        image_path=str(path),
-                        classification=classification,
-                    )
+                page = Page(
+                    document_id=doc.id,
+                    page_number=number,
+                    image_path=str(path),
+                    classification=classification,
                 )
+                self.session.add(page)
             else:
                 page.image_path, page.classification = str(path), classification
+            form = parse_order_form(source, number)
+            page.is_order_form = form.is_order_form
+            page.form_header_json = form.as_json()
         self.session.commit()
 
-    def _detect_pages(self, doc, page_paths, digest, local_root, deadline):
+    def _detect_pages(self, doc, source, page_paths, digest, local_root, deadline):
         for number, path in page_paths.items():
             self._check_deadline(deadline)
             page = self.session.scalar(
@@ -166,6 +177,7 @@ class Pipeline:
             ads = self.provider.detect_ads(str(path), number)
             with Image.open(path) as image:
                 size = image.size
+            artwork_page = render_page(source, number, self.artwork_dpi) if ads else None
             candidates = []
             for advert in ads:
                 box = normalize_bbox(
@@ -182,12 +194,17 @@ class Pipeline:
                 self._check_deadline(deadline)
                 advert = next(ad for candidate, ad in candidates if candidate == box)
                 key = f"{box.left},{box.top},{box.right},{box.bottom}"
-                if self.session.scalar(
+                existing = self.session.scalar(
                     select(AdOccurrence).where(
                         AdOccurrence.page_id == page.id,
                         AdOccurrence.occurrence_key == key,
                     )
-                ):
+                )
+                if existing:
+                    if artwork_page is not None and not existing.artwork_path:
+                        self._write_artwork(
+                            existing, artwork_page, box, size, digest, number, index
+                        )
                     continue
                 crop_path = crop_ad(
                     path, box, local_root / "crops" / f"page_{number}_{index}.png"
@@ -207,17 +224,75 @@ class Pipeline:
                         {"text": "", "fields": fields}, ensure_ascii=False
                     ),
                     confidence=float(advert.get("confidence", 0)),
+                    is_order_form=page.is_order_form,
                 )
                 self.session.add(occurrence)
                 self.session.flush()
+                if artwork_page is not None and (
+                    not page.is_order_form
+                    or occurrence.confidence >= self.confidence_threshold
+                ):
+                    self._write_artwork(
+                        occurrence, artwork_page, box, size, digest, number, index
+                    )
                 company_name = fields.get("company") or advert.get("company_name")
-                if company_name:
+                if company_name and not page.is_order_form:
                     self._assign_company(occurrence, company_name, fields)
                 if occurrence.confidence < self.confidence_threshold:
-                    self.session.add(
-                        ReviewItem(ad_id=occurrence.id, reason="low confidence")
-                    )
+                    self._add_review(occurrence, "low confidence")
+                if page.is_order_form and (
+                    artwork_page is None
+                    or occurrence.confidence < self.confidence_threshold
+                ):
+                    self._add_review(occurrence, "order-form advert frame not located")
             self.session.commit()
+
+    def _write_artwork(
+        self, occurrence, artwork_page, box, detector_size, digest, number, index
+    ):
+        scale_x = artwork_page.width / detector_size[0]
+        scale_y = artwork_page.height / detector_size[1]
+        artwork_box = Box(
+            round(box.left * scale_x),
+            round(box.top * scale_y),
+            round(box.right * scale_x),
+            round(box.bottom * scale_y),
+        )
+        output = self.local_work_dir / digest / "artwork" / f"page_{number}_{index}.png"
+        trimmed = (
+            self.local_work_dir
+            / digest
+            / "artwork"
+            / f"page_{number}_{index}_trimmed.png"
+        )
+        _, _, padded_box = restore_artwork(
+            artwork_page,
+            artwork_box,
+            output,
+            trimmed,
+            self.artwork_padding,
+            self.artwork_trim_margin,
+        )
+        occurrence.artwork_path = self.storage.put_file(
+            output, f"{digest}/artwork/page_{number}_{index}.png"
+        )
+        occurrence.artwork_trimmed_path = self.storage.put_file(
+            trimmed, f"{digest}/artwork/page_{number}_{index}_trimmed.png"
+        )
+        occurrence.artwork_metadata_json = json.dumps(
+            {
+                "detector_bbox": [box.left, box.top, box.right, box.bottom],
+                "artwork_bbox": [
+                    padded_box.left,
+                    padded_box.top,
+                    padded_box.right,
+                    padded_box.bottom,
+                ],
+                "source_dpi": self.artwork_dpi,
+                "padding": self.artwork_padding,
+                "trim_margin": self.artwork_trim_margin,
+            }
+        )
 
     def _extract_missing(self, doc, source, deadline):
         for page in self.session.scalars(
@@ -249,23 +324,51 @@ class Pipeline:
                     text, occurrence.company.name if occurrence.company else None
                 ).model_dump(exclude_none=True)
                 fields.update({k: v for k, v in data.get("fields", {}).items() if v})
-                data["text"], data["fields"] = text, fields
-                occurrence.fields_json = json.dumps(data, ensure_ascii=False)
-                if fields.get("company") and not occurrence.company:
-                    self._assign_company(occurrence, fields["company"], fields)
-                if (
-                    not fields.get("phone")
-                    and not fields.get("email")
-                    and not self.session.scalar(
-                        select(ReviewItem).where(ReviewItem.ad_id == occurrence.id)
-                    )
-                ):
-                    self.session.add(
-                        ReviewItem(
-                            ad_id=occurrence.id, reason="incomplete contact fields"
+                data["text"], data["advert_fields"] = text, fields
+                if page.is_order_form:
+                    form = parse_order_form(source, page.page_number)
+                    data["form_header"] = {
+                        "fields": form.fields,
+                        "metadata": form.metadata,
+                        "complete": form.complete,
+                    }
+                    merged, conflicts = merge_form_and_ad_fields(form.fields, fields)
+                    data["fields"], data["field_conflicts"] = merged, conflicts
+                    occurrence.is_order_form = True
+                    for key, conflict in conflicts.items():
+                        self._add_review(
+                            occurrence,
+                            f"header/advert conflict for {key}: "
+                            f"{conflict['header']} != {conflict['advert']}",
                         )
-                    )
+                    if not form.complete:
+                        self._add_review(
+                            occurrence, "incomplete or missing order-form header"
+                        )
+                    elif form.fields.get("company") and not occurrence.company:
+                        self._assign_company(
+                            occurrence, form.fields["company"], form.fields
+                        )
+                else:
+                    data["fields"] = fields
+                    if fields.get("company") and not occurrence.company:
+                        self._assign_company(occurrence, fields["company"], fields)
+                    if (
+                        not fields.get("phone")
+                        and not fields.get("email")
+                        and not self.session.scalar(
+                            select(ReviewItem).where(ReviewItem.ad_id == occurrence.id)
+                        )
+                    ):
+                        self._add_review(occurrence, "incomplete contact fields")
+                occurrence.fields_json = json.dumps(data, ensure_ascii=False)
         self.session.commit()
+
+    def _add_review(self, occurrence, reason):
+        if not self.session.scalar(
+            select(ReviewItem).where(ReviewItem.ad_id == occurrence.id)
+        ):
+            self.session.add(ReviewItem(ad_id=occurrence.id, reason=reason))
 
     def _assign_company(self, occurrence, name, fields):
         normalized, key = normalize_name(name), contact_key(fields)

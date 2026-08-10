@@ -36,6 +36,8 @@ class Page(Base):
     page_number: Mapped[int] = mapped_column(Integer)
     image_path: Mapped[str | None] = mapped_column(Text)
     classification: Mapped[str | None] = mapped_column(String(50))
+    is_order_form: Mapped[bool] = mapped_column(default=False)
+    form_header_json: Mapped[str] = mapped_column(Text, default="{}")
     document: Mapped[Document] = relationship(back_populates="pages")
     ads: Mapped[list["AdOccurrence"]] = relationship(
         back_populates="page", cascade="all, delete-orphan"
@@ -59,6 +61,10 @@ class AdOccurrence(Base):
     occurrence_key: Mapped[str] = mapped_column(String(128))
     bbox: Mapped[str] = mapped_column(String(100))
     crop_path: Mapped[str | None] = mapped_column(Text)
+    artwork_path: Mapped[str | None] = mapped_column(Text)
+    artwork_trimmed_path: Mapped[str | None] = mapped_column(Text)
+    artwork_metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    is_order_form: Mapped[bool] = mapped_column(default=False)
     company_id: Mapped[int | None] = mapped_column(ForeignKey("companies.id"))
     fields_json: Mapped[str] = mapped_column(Text, default="{}")
     confidence: Mapped[float] = mapped_column(Float, default=0.0)

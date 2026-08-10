@@ -1,10 +1,11 @@
 import json
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
 from sqlalchemy import select
 from app.api.auth import require_auth
 from app.api.dependencies import pipeline_dependency, session_dependency
 from app.core.config import get_settings
 from app.models import Document, Page
+from app.models import AdOccurrence
 from app.services.downloader import download
 from app.services.ingest import validate_pdf
 from app.services.storage import sha256
@@ -81,6 +82,8 @@ def document(document_id: int, session=Depends(session_dependency)):
                 "id": p.id,
                 "page_number": p.page_number,
                 "classification": p.classification,
+                "is_order_form": p.is_order_form,
+                "form_header": json.loads(p.form_header_json or "{}"),
                 "ads": [
                     {
                         "id": a.id,
@@ -88,6 +91,14 @@ def document(document_id: int, session=Depends(session_dependency)):
                         "fields": json.loads(a.fields_json or "{}").get("fields", {}),
                         "text": json.loads(a.fields_json or "{}").get("text", ""),
                         "bbox": a.bbox,
+                        "is_order_form": a.is_order_form,
+                        "artwork": {
+                            "path": a.artwork_path,
+                            "trimmed_path": a.artwork_trimmed_path,
+                            "metadata": json.loads(
+                                a.artwork_metadata_json or "{}"
+                            ),
+                        },
                     }
                     for a in p.ads
                 ],
@@ -95,3 +106,16 @@ def document(document_id: int, session=Depends(session_dependency)):
             for p in pages
         ],
     }
+
+
+@router.get("/{document_id}/ads/{ad_id}/artwork")
+def artwork(document_id: int, ad_id: int, session=Depends(session_dependency)):
+    occurrence = session.scalar(
+        select(AdOccurrence)
+        .join(Page)
+        .where(AdOccurrence.id == ad_id, Page.document_id == document_id)
+    )
+    if not occurrence or not occurrence.artwork_path:
+        raise HTTPException(404, "restored artwork is not available")
+    content = pipeline_dependency(session).storage.get(occurrence.artwork_path)
+    return Response(content=content, media_type="image/png")

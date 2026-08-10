@@ -6,11 +6,11 @@ Greenfield FastAPI pipeline for extracting advertisements from German print medi
 
 `app/core` contains settings; `db` and `models` contain SQLAlchemy persistence; `services` contains discovery, download/SSRF checks, local storage, PDF rendering, bounding-box/crop math, parsing, extraction, dedupe, and the synchronous pipeline. Vision is behind `VisionProvider`, with recorded fixtures for CI and Ollama Qwen3-VL for the Mac runtime. `api` exposes health, upload, document, review, discovery, and queue endpoints, and `workers` is the Redis worker entry point.
 
-Pipeline: discover → download → deduplicate → render → classify → detect ads → crop → extract fields → structure → dedupe companies → store → review.
+Pipeline: discover → download → deduplicate → render → classify → detect ads → crop → restore artwork → extract fields → structure → dedupe companies → store → review.
 
 ## Configuration and running
 
-Copy `.env.example` to `.env`. Configuration includes `DATABASE_URL`, `STORAGE_BACKEND`, `STORAGE_PATH`, `LOCAL_WORK_DIR`, `S3_ENDPOINT_URL`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_REGION`, `VISION_PROVIDER=recorded|ollama`, `VISION_RECORDED_DIR`, `OLLAMA_URL`, `OLLAMA_MODEL`, `OLLAMA_TIMEOUT`, `RENDER_DPI`, `CONFIDENCE_THRESHOLD`, `MAX_DOWNLOAD_BYTES`, `BBOX_IOU_THRESHOLD`, `MAX_JOB_ATTEMPTS`, `STAGE_TIMEOUT_SECONDS`, `REDIS_URL`, and `REDIS_QUEUE`.
+Copy `.env.example` to `.env`. Configuration includes `DATABASE_URL`, `STORAGE_BACKEND`, `STORAGE_PATH`, `LOCAL_WORK_DIR`, `S3_ENDPOINT_URL`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_REGION`, `VISION_PROVIDER=recorded|ollama`, `VISION_RECORDED_DIR`, `OLLAMA_URL`, `OLLAMA_MODEL`, `OLLAMA_TIMEOUT`, `RENDER_DPI`, `ARTWORK_DPI`, `ARTWORK_PADDING`, `ARTWORK_TRIM_MARGIN`, `CONFIDENCE_THRESHOLD`, `MAX_DOWNLOAD_BYTES`, `BBOX_IOU_THRESHOLD`, `MAX_JOB_ATTEMPTS`, `STAGE_TIMEOUT_SECONDS`, `REDIS_URL`, and `REDIS_QUEUE`.
 
 On the Mac, install Docker Desktop and Ollama, pull `qwen3-vl:4b` (or 8b), set `VISION_PROVIDER=ollama`, then run `docker compose up --build`. Ollama stays outside Compose at `http://host.docker.internal:11434`. The worker can also be run directly with `.venv/bin/python -m app.workers.worker`.
 
@@ -50,11 +50,35 @@ list. Duplicate enqueue requests are deduplicated while an item is outstanding.
 SIGTERM/SIGINT releases the current reservation before stopping. The synchronous
 document API remains available independently of the worker.
 
+### Auftrag forms and restored artwork
+
+Pages with labelled order-form headers are recorded as `is_order_form` pages and
+ads on those pages expose the parsed customer header under `form_header`. The
+parser accepts extendable label aliases such as `ASP.`/`Ansprechpartner`,
+`PLZ/ORT`/`PLZ-Ort`, and `E-MAIL`/`E-mail`. Publisher response/footer data is
+excluded using region and label context, with a maintained publisher blocklist
+as defence in depth. A contact person belongs to ad-occurrence fields, not the
+company deduplication key, so different contacts do not split one company.
+
+Each ad retains its detector crop and may also have a restored artwork artifact.
+Restored artwork is rendered from the source PDF at `ARTWORK_DPI` (300 by
+default), cropped with `ARTWORK_PADDING`, and stored as lossless PNG. A
+conservative trimmed copy is stored separately; the untrimmed copy is retained.
+Fetch it with `GET /documents/{document_id}/ads/{ad_id}/artwork`. Restoration
+does not upscale source detail, remove backgrounds, sharpen, or add
+transparency. Order-form artwork is only exported when the framed advert has
+sufficient detector confidence; otherwise the ad goes to review.
+
 ## Remaining limitations
 
 Coarse 0–1000 bounding boxes and duplicated or clipped glyph copies in source PDFs make text-layer attribution approximate at ad-box boundaries. The page-11 AWO extraction still contains garbled fragments from the source PDF's duplicated text layer.
 
 Authentication requires `SERVICE_TOKEN` in deployed environments. Set `AUTH_DISABLED=true` only for explicit local development. Uploads are streamed and capped before pipeline processing. URL downloads validate every resolved A/AAAA address and every redirect target, including reserved, link-local, unspecified, multicast, and IPv4-mapped addresses. httpx connection pinning is not currently practical here, so a DNS-rebinding race remains a residual risk. Ollama inference is not exercised on this VM because it has no Ollama service or GPU. Discovery does not persist a complete per-request crawl log; malformed pages and dead links are tolerated and candidate download failures are retained on the candidate. Redis queue counters are process-agnostic Redis counters, but alerting and operational dead-letter replay policy remain deployment concerns. S3/MinIO storage is implemented behind the storage interface, while artifact lifecycle/retention policies remain deployment concerns. No OpenAI provider is implemented. Text-layer extraction is deterministic where the PDF has text; image-only ads still depend on the configured vision provider or review. Stage deadlines are cooperative and checked between pages/advertisements; long-running single operations cannot be forcibly interrupted.
+Embedded PDF image extraction is deliberately not used for restored artwork:
+the measured documents compose ads from multiple XObjects and vector content,
+while some ads are vector-only. High-DPI page rendering plus cropping is the
+correctness path. Deskew, transparency, background removal, sharpening, and
+automatic artwork reconstruction are intentionally left out.
 
 ## Changelog
 
