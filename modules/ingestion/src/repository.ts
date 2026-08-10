@@ -26,6 +26,7 @@ export type IngestionDocument = {
 export type IngestionOccurrence = {
   id: number;
   documentId: number;
+  pageNumber?: number;
   company: string;
   preview: string;
   status: string;

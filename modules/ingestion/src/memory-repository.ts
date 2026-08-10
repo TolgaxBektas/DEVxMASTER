@@ -112,6 +112,7 @@ export class MemoryIngestionRepository implements IngestionRepository {
     const created = processedPages.flatMap((page) => page.occurrences.map((item) => ({
       id: ++this.occurrenceId,
       documentId: document.id,
+      pageNumber: page.pageNumber,
       company: item.company,
       preview: item.preview,
       status: "detected",

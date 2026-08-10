@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { MemoryEventRepository } from "@xmaster-center/kernel";
 import { MemoryIngestionRepository } from "./memory-repository.js";
-import { createIngestionModule } from "./module.js";
+import { advertisementEventIdempotencyKey, createIngestionModule } from "./module.js";
 
 const context = (tenantId: string | null, payload: unknown) => ({
   job: { tenantId, payload },
@@ -69,6 +69,7 @@ describe("Ingestion-Bestand", () => {
       origin: "upload",
     });
     let calls = 0;
+    const publishedKeys: string[] = [];
     const module = createIngestionModule({
       repository,
       repositoryForTransaction: () => repository,
@@ -90,7 +91,9 @@ describe("Ingestion-Bestand", () => {
           }],
         }];
       },
-      publish: async () => undefined,
+        publish: async (event) => {
+          publishedKeys.push(event.idempotencyKey);
+        },
     });
     const job = module.jobs.find((item) => item.name === "ingestion.processing.run");
     if (!job) throw new Error("Verarbeitungsjob fehlt");
@@ -98,12 +101,38 @@ describe("Ingestion-Bestand", () => {
       { documentId: document.document.id },
       context("1", { documentId: document.document.id }),
     );
+    document.document.state = "uploaded";
     await job.handle(
       { documentId: document.document.id },
       context("1", { documentId: document.document.id }),
     );
-    expect(calls).toBe(1);
+    expect(calls).toBe(2);
     expect(repository.occurrences).toHaveLength(1);
+    expect(publishedKeys).toHaveLength(2);
+    expect(publishedKeys[0]).toBe(publishedKeys[1]);
+  });
+
+  it("bildet Fundstellen ohne Laufzeit-ID stabil und unterscheidet gleiche Firmen auf einer Seite", () => {
+    const first = advertisementEventIdempotencyKey("1", "hash", {
+      pageNumber: 4,
+      company: "  Muster   GmbH ",
+      preview: "Muster GmbH   Telefon",
+      bbox: { x: 1.1111, y: 2, width: 3, height: 4 },
+    });
+    const retry = advertisementEventIdempotencyKey("1", "hash", {
+      pageNumber: 4,
+      company: "muster gmbh",
+      preview: "Muster GmbH Telefon",
+      bbox: { height: 4, width: 3, y: 2, x: 1.1112 },
+    });
+    const secondPlacement = advertisementEventIdempotencyKey("1", "hash", {
+      pageNumber: 4,
+      company: "Muster GmbH",
+      preview: "Muster GmbH Telefon",
+      bbox: { x: 20, y: 2, width: 3, height: 4 },
+    });
+    expect(first).toBe(retry);
+    expect(secondPlacement).not.toBe(first);
   });
 
   it("setzt ein Dokument bei nicht erreichbarer Verarbeitung auf Fehler", async () => {

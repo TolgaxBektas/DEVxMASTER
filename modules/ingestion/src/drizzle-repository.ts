@@ -130,6 +130,7 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
           created.push({
             id: Number(occurrenceRow[0]?.insertId),
             documentId,
+            pageNumber: processed.pageNumber,
             company: occurrence.company,
             preview: occurrence.preview,
             status: "detected",

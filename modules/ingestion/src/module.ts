@@ -6,6 +6,7 @@ import {
   type EventExecutor,
   type ModuleDefinition,
 } from "@xmaster-center/kernel";
+import { createHash } from "node:crypto";
 import type { Storage } from "@xmaster-center/integrations";
 import { ingestionSchema } from "./schema.js";
 import { createIngestionRouter } from "./router.js";
@@ -32,6 +33,44 @@ export type ProcessedPage = {
 };
 
 type JobContext = { job: { tenantId: string | null } };
+
+function normalizeOccurrenceText(value: string): string {
+  return value.normalize("NFKC").toLocaleLowerCase("de-DE").trim().replace(/\s+/g, " ");
+}
+
+function occurrenceFingerprint(occurrence: {
+  pageNumber?: number;
+  company: string;
+  preview: string;
+  bbox?: Record<string, number> | null;
+}): string {
+  const bbox = Object.entries(occurrence.bbox ?? {})
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}=${Math.round(value * 1000) / 1000}`)
+    .join(",");
+  return createHash("sha256")
+    .update([
+      occurrence.pageNumber ?? "",
+      normalizeOccurrenceText(occurrence.company),
+      normalizeOccurrenceText(occurrence.preview),
+      bbox,
+    ].join("\u001f"))
+    .digest("hex")
+    .slice(0, 24);
+}
+
+export function advertisementEventIdempotencyKey(
+  tenantId: string,
+  documentSha256: string,
+  occurrence: {
+    pageNumber?: number;
+    company: string;
+    preview: string;
+    bbox?: Record<string, number> | null;
+  },
+): string {
+  return `advertisement.detected:${tenantId}:${documentSha256}:page-${occurrence.pageNumber ?? "unknown"}:${occurrenceFingerprint(occurrence)}`;
+}
 
 function jobTenantId(context: unknown) {
   const tenantId = (context as JobContext).job?.tenantId;
@@ -227,7 +266,11 @@ export function createIngestionModule(deps: {
                       company: occurrence.company,
                       preview: occurrence.preview,
                     },
-                    idempotencyKey: `advertisement.detected:${tenantId}:${document.sha256}:${occurrence.id}`,
+                    idempotencyKey: advertisementEventIdempotencyKey(
+                      tenantId,
+                      document.sha256,
+                      occurrence,
+                    ),
                   }, executor);
                 }
                 if (deps.audit) {
