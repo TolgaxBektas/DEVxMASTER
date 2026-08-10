@@ -31,6 +31,7 @@ export const errorCodeSchema = z.enum([
   "FORBIDDEN",
   "NOT_FOUND",
   "CONFLICT",
+  "RATE_LIMITED",
   "PROVIDER_NOT_CONFIGURED",
   "BUDGET_EXCEEDED",
   "CONTENT_ANCHOR_VIOLATION",

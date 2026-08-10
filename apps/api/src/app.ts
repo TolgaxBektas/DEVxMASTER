@@ -100,7 +100,7 @@ export function createApiApp(runtime: Runtime): Express {
       const attempt = loginAttempts.get(attemptKey);
       if (attempt && attempt.lockedUntil > Date.now()) {
         response.status(429).json({
-          code: "CONFLICT",
+          code: "RATE_LIMITED",
           message: "Zu viele Anmeldeversuche; später erneut versuchen",
         });
         return;
@@ -150,6 +150,21 @@ export function createApiApp(runtime: Runtime): Express {
     } catch (error) {
       next(error);
     }
+  });
+  app.get("/api/auth/session", (request, response) => {
+    const auth = (request as Request & { auth?: AuthContext | null }).auth;
+    if (!auth) {
+      response.status(401).json({
+        code: "UNAUTHORIZED",
+        message: "Anmeldung erforderlich",
+      });
+      return;
+    }
+    response.json({ user: auth.user, tenantId: auth.tenantId });
+  });
+  app.post("/api/auth/logout", (_request, response) => {
+    response.clearCookie("xmc_session", { httpOnly: true, sameSite: "lax" });
+    response.status(204).end();
   });
   app.use(
     "/api/trpc",
