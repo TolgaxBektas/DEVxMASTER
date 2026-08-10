@@ -1,6 +1,6 @@
 import express from "express";
 import { createServer } from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryAuditRepository } from "@xmaster-center/kernel";
 import { NoopStorage } from "@xmaster-center/integrations";
 import type { AuditRepository } from "@xmaster-center/kernel";
@@ -13,7 +13,7 @@ afterEach(() => {
   for (const server of servers.splice(0)) server.close();
 });
 
-async function start(permission = true) {
+async function start(permission = true, transaction = async <T>(callback: (db: unknown) => Promise<T>) => callback({})) {
   const app = express();
   app.use((request, _response, next) => {
     (request as typeof request & { auth?: unknown }).auth = {
@@ -32,7 +32,7 @@ async function start(permission = true) {
     storage: new NoopStorage(),
     audit,
     auditFor: () => audit,
-    transaction: async (callback) => callback({}),
+    transaction,
     publish: async () => undefined,
     enqueue: async () => undefined,
     maxUploadBytes: 32,
@@ -91,5 +91,20 @@ describe("Ingestion-Upload", () => {
     expect(firstBody.deduplicated).toBe(false);
     expect(secondBody.deduplicated).toBe(true);
     expect(server.repository.documents).toHaveLength(1);
+  });
+
+  it("zeigt bei einem Datenbankfehler keine internen SQL-Details", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const server = await start(true, async () => {
+      throw new Error("Failed query: insert into audit_log params: 184");
+    });
+    const response = await fetch(`${server.url}/api/ingestion/documents/upload`, {
+      method: "POST",
+      body: form("%PDF-1.7"),
+    });
+    expect(response.status).toBe(500);
+    expect((await response.json()).message).toBe("Upload konnte nicht gespeichert werden");
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 });

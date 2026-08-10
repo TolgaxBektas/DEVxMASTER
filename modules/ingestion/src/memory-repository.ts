@@ -56,6 +56,11 @@ export class MemoryIngestionRepository implements IngestionRepository {
     if (!document) throw new Error("Dokument nicht gefunden");
     return document;
   }
+  async getDocumentById(documentId: number) {
+    const document = this.documents.find((item) => item.id === documentId);
+    if (!document) throw new Error("Dokument nicht gefunden");
+    return document;
+  }
   async replaceProcessedDocument(tenantId: string, documentId: number, processedPages: Array<{
     pageNumber: number;
     text: string;

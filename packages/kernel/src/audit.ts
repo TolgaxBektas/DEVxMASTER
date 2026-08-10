@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { desc } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
 import { auditLog } from "./db/schema.js";
 
 export const GENESIS_HASH = "0".repeat(64);
@@ -21,7 +21,11 @@ export type AuditEntry = {
 export type AuditRepository = {
   latest(): Promise<Pick<AuditEntry, "seq" | "hash"> | null>;
   insert(entry: AuditEntry): Promise<void>;
-  list(): Promise<AuditEntry[]>;
+  list(tenantId?: string): Promise<AuditEntry[]>;
+  appendAtomic?(
+    params: Omit<AuditEntry, "seq" | "prevHash" | "hash" | "createdAt">,
+    createdAt: Date,
+  ): Promise<AuditEntry>;
 };
 
 export function normalizeAuditEntityId(
@@ -64,6 +68,9 @@ export async function appendAudit(
   const random = options.random ?? Math.random;
   const detailsJson = params.detailsJson ?? null;
   const createdAt = params.createdAt ?? options.now?.() ?? new Date();
+  if (repository.appendAtomic) {
+    return repository.appendAtomic({ ...params, detailsJson }, createdAt);
+  }
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const latest = await repository.latest();
     const prevHash = latest?.hash ?? GENESIS_HASH;
@@ -100,21 +107,29 @@ export async function appendAudit(
   );
 }
 
-export async function verifyAuditChain(repository: AuditRepository) {
-  const entries = (await repository.list()).sort((a, b) => a.seq - b.seq);
+export async function verifyAuditChain(repository: AuditRepository, tenantId?: string) {
+  const entries = (await repository.list(tenantId)).sort((a, b) => a.seq - b.seq);
   let previous = GENESIS_HASH;
   for (const entry of entries) {
     const expected = computeAuditHash(entry);
-    if (entry.prevHash !== previous || entry.hash !== expected) {
+    if (entry.hash !== expected || (!tenantId && entry.prevHash !== previous)) {
       return {
         ok: false,
         totalEntries: entries.length,
         brokenAtSeq: entry.seq,
+        scoped: Boolean(tenantId),
+        complete: !tenantId,
       };
     }
-    previous = entry.hash;
+    if (!tenantId) previous = entry.hash;
   }
-  return { ok: true, totalEntries: entries.length, brokenAtSeq: null };
+  return {
+    ok: true,
+    totalEntries: entries.length,
+    brokenAtSeq: null,
+    scoped: Boolean(tenantId),
+    complete: !tenantId,
+  };
 }
 
 export class MemoryAuditRepository implements AuditRepository {
@@ -136,8 +151,11 @@ export class MemoryAuditRepository implements AuditRepository {
       throw new Error("Duplicate entry for seq");
     this.entries.push(entry);
   }
-  async list() {
-    return [...this.entries];
+  async list(tenantId?: string) {
+    const entries = tenantId
+      ? this.entries.filter((entry) => entry.tenantId === tenantId)
+      : this.entries;
+    return [...entries];
   }
 }
 
@@ -172,8 +190,55 @@ export function createDrizzleAuditRepository(db: any): AuditRepository {
         createdAt: entry.createdAt,
       });
     },
-    async list() {
-      const rows = await db.select().from(auditLog).orderBy(auditLog.seq);
+    async appendAtomic(params, createdAt) {
+      await db.execute(sql`SELECT GET_LOCK('xmaster_center_audit_chain', 30)`);
+      try {
+        const latest = (
+          await db
+            .select({ seq: auditLog.seq, hash: auditLog.hash })
+            .from(auditLog)
+            .orderBy(desc(auditLog.seq))
+            .limit(1)
+        )[0] ?? null;
+        const seq = Number(latest?.seq ?? 0) + 1;
+        const entry: AuditEntry = {
+          ...params,
+          detailsJson: params.detailsJson ?? null,
+          createdAt,
+          seq,
+          prevHash: latest?.hash ?? GENESIS_HASH,
+          hash: computeAuditHash({
+            ...params,
+            detailsJson: params.detailsJson ?? null,
+            createdAt,
+            seq,
+            prevHash: latest?.hash ?? GENESIS_HASH,
+          }),
+        };
+        await db.insert(auditLog).values({
+          seq: entry.seq,
+          tenantId: entry.tenantId ? Number(entry.tenantId) : null,
+          action: entry.action,
+          entityType: entry.entityType,
+          entityId: entry.entityId == null ? null : String(entry.entityId),
+          detailsJson: entry.detailsJson ?? null,
+          actorId: entry.actorId == null ? null : Number(entry.actorId),
+          actorName: entry.actorName ?? null,
+          prevHash: entry.prevHash,
+          hash: entry.hash,
+          createdAt: entry.createdAt,
+        });
+        return entry;
+      } finally {
+        await db.execute(sql`SELECT RELEASE_LOCK('xmaster_center_audit_chain')`);
+      }
+    },
+    async list(tenantId) {
+      const rows = await db
+        .select()
+        .from(auditLog)
+        .where(tenantId ? eq(auditLog.tenantId, Number(tenantId)) : undefined)
+        .orderBy(auditLog.seq);
       return rows.map((row: any) => ({
         seq: Number(row.seq),
         tenantId: row.tenantId == null ? null : String(row.tenantId),

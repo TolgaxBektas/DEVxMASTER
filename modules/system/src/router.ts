@@ -35,11 +35,16 @@ export function createSystemRouter(deps: {
       [...ctx.auth.permissions],
     ),
     audit: router({
-      list: permissionProcedure("system.audit.read").query(() =>
-        deps.db.select().from(auditLog).orderBy(desc(auditLog.seq)).limit(100),
+      list: permissionProcedure("system.audit.read").query(({ ctx }) =>
+        deps.db
+          .select()
+          .from(auditLog)
+          .where(eq(auditLog.tenantId, Number(ctx.auth.tenantId)))
+          .orderBy(desc(auditLog.seq))
+          .limit(100),
       ),
-      verify: permissionProcedure("system.audit.read").query(() =>
-        verifyAuditChain(deps.audit),
+      verify: permissionProcedure("system.audit.read").query(({ ctx }) =>
+        verifyAuditChain(deps.audit, ctx.auth.tenantId),
       ),
     }),
     jobs: router({
@@ -128,29 +133,28 @@ export function createSystemRouter(deps: {
     }),
     ai: router({
       costs: permissionProcedure("system.ai.read")
-        .input(
-          z
-            .object({
-              tenantId: z.number().int().positive().optional(),
-            })
-            .optional(),
-        )
-        .query(({ input }) => {
-          const query = deps.db
+        .query(({ ctx }) =>
+          deps.db
             .select()
             .from(aiUsageLedger)
+            .where(eq(aiUsageLedger.tenantId, Number(ctx.auth.tenantId)))
             .orderBy(desc(aiUsageLedger.createdAt))
-            .limit(100);
-          return input?.tenantId
-            ? query.where(eq(aiUsageLedger.tenantId, input.tenantId))
-            : query;
-        }),
+            .limit(100),
+        ),
     }),
-    flags: permissionProcedure("system.flags.read").query(() =>
-      deps.db.select().from(featureFlags).limit(100),
+    flags: permissionProcedure("system.flags.read").query(({ ctx }) =>
+      deps.db
+        .select()
+        .from(featureFlags)
+        .where(eq(featureFlags.tenantId, Number(ctx.auth.tenantId)))
+        .limit(100),
     ),
-    policies: permissionProcedure("system.policies.read").query(() =>
-      deps.db.select().from(automationPolicies).limit(100),
+    policies: permissionProcedure("system.policies.read").query(({ ctx }) =>
+      deps.db
+        .select()
+        .from(automationPolicies)
+        .where(eq(automationPolicies.tenantId, Number(ctx.auth.tenantId)))
+        .limit(100),
     ),
   });
 }

@@ -63,6 +63,8 @@ export function SystemPage({ api }: ModulePageProps) {
   const [verification, setVerification] = useState<{
     ok: boolean;
     totalEntries: number;
+    scoped: boolean;
+    complete: boolean;
   } | null>(null);
   const [message, setMessage] = useState("");
   const verify = async () =>
@@ -155,9 +157,16 @@ export function SystemPage({ api }: ModulePageProps) {
           {path === "/system/audit" && verification && (
             <div className="verify-result">
               <Badge tone={verification.ok ? "success" : "danger"}>
-                {verification.ok ? "Kette intakt" : "Kette beschädigt"}
+                {verification.ok
+                  ? verification.complete
+                    ? "Kette intakt"
+                    : "Mandantenabschnitt intakt"
+                  : "Kette beschädigt"}
               </Badge>
-              <span>{verification.totalEntries} Einträge geprüft</span>
+              <span>
+                {verification.totalEntries} Einträge geprüft
+                {!verification.complete && " (globale Kette nicht geprüft)"}
+              </span>
             </div>
           )}
           <DataTable

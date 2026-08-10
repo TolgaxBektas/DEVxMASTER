@@ -191,10 +191,20 @@ export function createIngestionModule(deps: {
           }
         },
         onFailure: async (error, context) => {
-          const tenantId = jobTenantId(context);
           const documentId = jobDocumentId((context as { job: { payload: unknown } }).job.payload);
           if (documentId === null) return;
-          const message = error instanceof Error ? error.message : "Verarbeitung fehlgeschlagen";
+          const message = error instanceof Error
+            ? error.message
+            : typeof error === "string"
+              ? error
+              : "Verarbeitung fehlgeschlagen";
+          let tenantId: string;
+          try {
+            tenantId = jobTenantId(context);
+          } catch {
+            const document = await repository.getDocumentById(documentId);
+            tenantId = document.tenantId;
+          }
           const document = await repository.getDocument(tenantId, documentId);
           if (document.state !== "failed") {
             await repository.setDocumentState(tenantId, documentId, "failed", message);

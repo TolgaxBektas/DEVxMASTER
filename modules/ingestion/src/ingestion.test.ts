@@ -203,4 +203,29 @@ describe("Ingestion-Bestand", () => {
     expect(failed.state).toBe("failed");
     expect(failed.error).toBe("PIF dauerhaft nicht erreichbar");
   });
+
+  it("markiert ein Dokument auch bei fehlendem Job-Mandanten als fehlgeschlagen", async () => {
+    const repository = new MemoryIngestionRepository();
+    const document = await repository.createUploadedDocument("2", {
+      filename: "unknown-tenant.pdf",
+      sha256: "0".repeat(64),
+      storageKey: "tenants/2/originals/0/unknown-tenant.pdf",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "upload",
+    });
+    const module = createIngestionModule({
+      repository,
+      transaction: async (callback) => callback({}),
+      processDocument: async () => { throw new Error("Mandant für Job fehlt"); },
+      publish: async () => undefined,
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.processing.run");
+    if (!job || !job.onFailure) throw new Error("Verarbeitungsjob fehlt");
+    const failureContext = context(null, { documentId: document.document.id });
+    await job.onFailure("Mandant für Job fehlt", failureContext);
+    const failed = await repository.getDocument("2", document.document.id);
+    expect(failed.state).toBe("failed");
+    expect(failed.error).toBe("Mandant für Job fehlt");
+  });
 });

@@ -60,6 +60,12 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
       if (!document) throw new Error("Dokument nicht gefunden");
       return document as never;
     },
+    async getDocumentById(documentId) {
+      const document = (await database.select().from(documents)
+        .where(eq(documents.id, documentId)).limit(1))[0];
+      if (!document) throw new Error("Dokument nicht gefunden");
+      return document as never;
+    },
     async replaceProcessedDocument(tenantId, documentId, processedPages) {
       const document = await this.getDocument(tenantId, documentId);
       await database.delete(occurrences).where(eq(occurrences.documentId, documentId));

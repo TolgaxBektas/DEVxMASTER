@@ -112,10 +112,15 @@ async function handleUpload(
     });
   } catch (error) {
     const reason = error instanceof Error ? error.message : "upload_failed";
-    const status = reason === "file_too_large" ? 413 : 400;
+    const userError = reason === "file_too_large"
+      || reason === "Keine gültige PDF-Datei"
+      || reason === "Multipart-Upload erforderlich"
+      || reason === "Dateifeld fehlt";
+    if (!userError) console.error("[ingestion] upload failed", error);
+    const status = reason === "file_too_large" ? 413 : userError ? 400 : 500;
     const message = reason === "file_too_large"
       ? `Datei zu groß (maximal ${formatUploadLimit(deps.maxUploadBytes)})`
-      : reason === "upload_failed" ? "Upload fehlgeschlagen" : reason;
+      : userError ? reason : "Upload konnte nicht gespeichert werden";
     response.status(status).json({ code: "UPLOAD_REJECTED", message });
   }
 }

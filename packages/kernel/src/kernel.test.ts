@@ -5,6 +5,7 @@ import {
   GENESIS_HASH,
   MemoryAuditRepository,
   verifyAuditChain,
+  type AuditRepository,
 } from "./audit.js";
 import { createEventBus, MemoryEventRepository } from "./events.js";
 import { createRegistry, defineModule } from "./module-registry.js";
@@ -57,6 +58,47 @@ describe("Audit-Hashkette", () => {
     expect(computeAuditHash({ ...normalized, entityId: 1 })).toBe(
       computeAuditHash({ ...normalized, entityId: "1" }),
     );
+  });
+
+  it("vergibt bei parallelen Schreibern lückenlose Sequenzen", async () => {
+    const repository = new MemoryAuditRepository();
+    let latestCalls = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const concurrent: AuditRepository = {
+      latest: async () => {
+        latestCalls += 1;
+        if (latestCalls === 2) release();
+        if (latestCalls <= 2) await gate;
+        return repository.entries.at(-1) ?? null;
+      },
+      insert: (entry) => repository.insert(entry),
+      list: (tenantId) => repository.list(tenantId),
+    };
+    await Promise.all([
+      appendAudit(concurrent, { tenantId: "1", action: "a", entityType: "x" }, {
+        sleep: async () => undefined,
+      }),
+      appendAudit(concurrent, { tenantId: "2", action: "b", entityType: "x" }, {
+        sleep: async () => undefined,
+      }),
+    ]);
+    expect(repository.entries.map((entry) => entry.seq)).toEqual([1, 2]);
+    expect((await verifyAuditChain(repository)).ok).toBe(true);
+  });
+
+  it("prüft einen Mandantenausschnitt ohne fremde Ketteneinträge", async () => {
+    const repository = new MemoryAuditRepository();
+    await appendAudit(repository, { tenantId: "1", action: "a", entityType: "x" });
+    await appendAudit(repository, { tenantId: "2", action: "b", entityType: "x" });
+    await appendAudit(repository, { tenantId: "1", action: "c", entityType: "x" });
+    const result = await verifyAuditChain(repository, "1");
+    expect(result).toMatchObject({
+      ok: true,
+      totalEntries: 2,
+      scoped: true,
+      complete: false,
+    });
   });
 });
 

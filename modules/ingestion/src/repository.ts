@@ -38,6 +38,7 @@ export type IngestionRepository = {
     },
   ): Promise<{ document: IngestionDocument; deduplicated: boolean }>;
   getDocument(tenantId: string, documentId: number): Promise<IngestionDocument>;
+  getDocumentById(documentId: number): Promise<IngestionDocument>;
   replaceProcessedDocument(
     tenantId: string,
     documentId: number,

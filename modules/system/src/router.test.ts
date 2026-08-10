@@ -142,3 +142,32 @@ describe("System-Wiedervorlage", () => {
     ).rejects.toThrow("Nur Dead Letters");
   });
 });
+
+describe("System-Mandantengrenzen", () => {
+  it("liefert im Audit nur Einträge des aufrufenden Mandanten", async () => {
+    let whereCalls = 0;
+    const tenantRows = [{ seq: 2, tenantId: 2, action: "eigene" }];
+    const builder = {
+      from() { return this; },
+      where() { whereCalls += 1; return this; },
+      orderBy() { return this; },
+      limit() { return Promise.resolve(tenantRows); },
+    };
+    const auth: AuthContext = {
+      user: { id: "2", email: null, displayName: "Mandant 2" },
+      tenantId: "2",
+      permissions: new Set(["system.audit.read"]),
+      provider: "local",
+    };
+    const caller = createSystemRouter({
+      db: { select: () => builder } as never,
+      audit: new MemoryAuditRepository(),
+      events: new MemoryEventRepository(),
+      queue: {} as never,
+      health: async () => [],
+      navigation: () => [],
+    }).createCaller({ auth });
+    expect(await caller.audit.list()).toEqual(tenantRows);
+    expect(whereCalls).toBe(1);
+  });
+});
