@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { desc, eq, sql } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { auditLog } from "./db/schema.js";
 
 export const GENESIS_HASH = "0".repeat(64);
@@ -22,11 +22,33 @@ export type AuditRepository = {
   latest(): Promise<Pick<AuditEntry, "seq" | "hash"> | null>;
   insert(entry: AuditEntry): Promise<void>;
   list(tenantId?: string): Promise<AuditEntry[]>;
-  appendAtomic?(
-    params: Omit<AuditEntry, "seq" | "prevHash" | "hash" | "createdAt">,
-    createdAt: Date,
-  ): Promise<AuditEntry>;
 };
+
+export function isRetryableAuditWriteError(error: unknown): boolean {
+  const candidate = error as {
+    code?: unknown;
+    errno?: unknown;
+    message?: unknown;
+    cause?: unknown;
+  };
+  if (
+    candidate.code === "ER_DUP_ENTRY"
+    || candidate.code === 1062
+    || candidate.errno === 1062
+    || candidate.code === "ER_LOCK_DEADLOCK"
+    || candidate.errno === 1213
+    || candidate.code === "ER_LOCK_WAIT_TIMEOUT"
+    || candidate.errno === 1205
+  ) return true;
+  if (
+    candidate.cause
+    && candidate.cause !== error
+    && isRetryableAuditWriteError(candidate.cause)
+  ) return true;
+  return /duplicate|unique|ER_DUP_ENTRY/i.test(
+    String(candidate.message ?? error),
+  );
+}
 
 export function normalizeAuditEntityId(
   entityId: string | number | null | undefined,
@@ -61,28 +83,13 @@ export async function appendAudit(
     now?: () => Date;
   } = {},
 ): Promise<AuditEntry> {
-  const maxAttempts = options.maxAttempts ?? 5;
+  const maxAttempts = options.maxAttempts ?? 8;
   const sleep =
     options.sleep ??
     ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   const random = options.random ?? Math.random;
   const detailsJson = params.detailsJson ?? null;
   const createdAt = params.createdAt ?? options.now?.() ?? new Date();
-  if (repository.appendAtomic) {
-    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-      try {
-        return await repository.appendAtomic({ ...params, detailsJson }, createdAt);
-      } catch (error) {
-        const message = String((error as Error)?.message ?? error);
-        if (!/duplicate|unique|ER_DUP_ENTRY/i.test(message)
-          || attempt === maxAttempts - 1) throw error;
-        await sleep(25 + Math.floor(random() * 150) * (attempt + 1));
-      }
-    }
-    throw new Error(
-      "Audit-Eintrag konnte nach mehreren Versuchen nicht geschrieben werden",
-    );
-  }
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const latest = await repository.latest();
     const prevHash = latest?.hash ?? GENESIS_HASH;
@@ -105,9 +112,8 @@ export async function appendAudit(
       await repository.insert(entry);
       return entry;
     } catch (error) {
-      const message = String((error as Error)?.message ?? error);
       if (
-        !/duplicate|unique|ER_DUP_ENTRY/i.test(message) ||
+        !isRetryableAuditWriteError(error) ||
         attempt === maxAttempts - 1
       )
         throw error;
@@ -201,49 +207,6 @@ export function createDrizzleAuditRepository(db: any): AuditRepository {
         hash: entry.hash,
         createdAt: entry.createdAt,
       });
-    },
-    async appendAtomic(params, createdAt) {
-      await db.execute(sql`SELECT GET_LOCK('xmaster_center_audit_chain', 30)`);
-      try {
-        const latest = (
-          await db
-            .select({ seq: auditLog.seq, hash: auditLog.hash })
-            .from(auditLog)
-            .orderBy(desc(auditLog.seq))
-            .limit(1)
-        )[0] ?? null;
-        const seq = Number(latest?.seq ?? 0) + 1;
-        const entry: AuditEntry = {
-          ...params,
-          detailsJson: params.detailsJson ?? null,
-          createdAt,
-          seq,
-          prevHash: latest?.hash ?? GENESIS_HASH,
-          hash: computeAuditHash({
-            ...params,
-            detailsJson: params.detailsJson ?? null,
-            createdAt,
-            seq,
-            prevHash: latest?.hash ?? GENESIS_HASH,
-          }),
-        };
-        await db.insert(auditLog).values({
-          seq: entry.seq,
-          tenantId: entry.tenantId ? Number(entry.tenantId) : null,
-          action: entry.action,
-          entityType: entry.entityType,
-          entityId: entry.entityId == null ? null : String(entry.entityId),
-          detailsJson: entry.detailsJson ?? null,
-          actorId: entry.actorId == null ? null : Number(entry.actorId),
-          actorName: entry.actorName ?? null,
-          prevHash: entry.prevHash,
-          hash: entry.hash,
-          createdAt: entry.createdAt,
-        });
-        return entry;
-      } finally {
-        await db.execute(sql`SELECT RELEASE_LOCK('xmaster_center_audit_chain')`);
-      }
     },
     async list(tenantId) {
       const rows = await db

@@ -87,6 +87,38 @@ describe("Audit-Hashkette", () => {
     expect((await verifyAuditChain(repository)).ok).toBe(true);
   });
 
+  it("wertet den MySQL-Duplikatcode aus und liest den Vorgänger erneut", async () => {
+    const repository = new MemoryAuditRepository();
+    let collisions = 0;
+    const retrying: AuditRepository = {
+      latest: () => repository.latest(),
+      insert: async (entry) => {
+        if (collisions++ === 0) {
+          const cause = new Error("duplicate");
+          Object.assign(cause, { errno: 1062 });
+          const error = new Error("DrizzleQueryError", { cause });
+          throw error;
+        }
+        await repository.insert(entry);
+      },
+      list: (tenantId) => repository.list(tenantId),
+    };
+    const waits: number[] = [];
+    const entry = await appendAudit(
+      retrying,
+      { tenantId: "1", action: "retry", entityType: "test" },
+      {
+        sleep: async (ms) => {
+          waits.push(ms);
+        },
+        random: () => 0.5,
+      },
+    );
+    expect(entry.seq).toBe(1);
+    expect(waits).toHaveLength(1);
+    expect(waits[0]).toBeGreaterThan(25);
+  });
+
   it("prüft einen Mandantenausschnitt ohne fremde Ketteneinträge", async () => {
     const repository = new MemoryAuditRepository();
     await appendAudit(repository, { tenantId: "1", action: "a", entityType: "x" });

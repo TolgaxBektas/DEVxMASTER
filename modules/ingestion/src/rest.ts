@@ -6,6 +6,7 @@ import {
   appendAudit,
   createDrizzleAuditRepository,
   createDrizzleEventRepository,
+  isRetryableAuditWriteError,
   type AuditRepository,
   type EventExecutor,
 } from "@xmaster-center/kernel";
@@ -63,40 +64,52 @@ async function handleUpload(
     const sha256 = createHash("sha256").update(upload.bytes).digest("hex");
     const storageKey = `tenants/${auth.tenantId}/originals/${sha256}/${safeFilename(upload.filename)}`;
     await deps.storage.put(storageKey, upload.bytes, "application/pdf");
-    const result = await deps.transaction(async (db) => {
-      const repository = deps.repositoryFor?.(db) ?? deps.repository;
-      const created = await repository.createUploadedDocument(auth.tenantId, {
-        filename: upload.filename,
-        sha256,
-        storageKey,
-        sizeBytes: upload.bytes.length,
-        mimeType: "application/pdf",
-        origin: "upload",
-      });
-      if (created.deduplicated) return created;
-      const audit = deps.auditFor?.(db) ?? deps.audit;
-      await appendAudit(audit, {
-        tenantId: auth.tenantId,
-        action: "ingestion.document.uploaded",
-        entityType: "ingestion_document",
-        entityId: created.document.id,
-        actorId: auth.userId,
-        actorName: auth.displayName,
-        detailsJson: JSON.stringify({ sha256, filename: upload.filename }),
-      });
-      await deps.publish(
-        {
-          name: "document.ingested",
-          tenantId: auth.tenantId,
-          aggregateType: "document",
-          aggregateId: String(created.document.id),
-          payload: { documentId: created.document.id },
-          idempotencyKey: `document.ingested:${sha256}`,
-        },
-        createDrizzleEventRepository(db),
-      );
-      return created;
-    });
+    let result: Awaited<ReturnType<IngestionRepository["createUploadedDocument"]>> | undefined;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        result = await deps.transaction(async (db) => {
+          const repository = deps.repositoryFor?.(db) ?? deps.repository;
+          const created = await repository.createUploadedDocument(auth.tenantId, {
+            filename: upload.filename,
+            sha256,
+            storageKey,
+            sizeBytes: upload.bytes.length,
+            mimeType: "application/pdf",
+            origin: "upload",
+          });
+          if (created.deduplicated) return created;
+          const audit = deps.auditFor?.(db) ?? deps.audit;
+          await appendAudit(audit, {
+            tenantId: auth.tenantId,
+            action: "ingestion.document.uploaded",
+            entityType: "ingestion_document",
+            entityId: created.document.id,
+            actorId: auth.userId,
+            actorName: auth.displayName,
+            detailsJson: JSON.stringify({ sha256, filename: upload.filename }),
+          }, { maxAttempts: 1 });
+          await deps.publish(
+            {
+              name: "document.ingested",
+              tenantId: auth.tenantId,
+              aggregateType: "document",
+              aggregateId: String(created.document.id),
+              payload: { documentId: created.document.id },
+              idempotencyKey: `document.ingested:${sha256}`,
+            },
+            createDrizzleEventRepository(db),
+          );
+          return created;
+        });
+        break;
+      } catch (error) {
+        if (!isRetryableAuditWriteError(error) || attempt === 4) throw error;
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 25 + Math.floor(Math.random() * 150) * (attempt + 1));
+        });
+      }
+    }
+    if (!result) throw new Error("Upload konnte nicht gespeichert werden");
     if (!result.deduplicated) {
       await deps.enqueue({
         name: "ingestion.processing.run",

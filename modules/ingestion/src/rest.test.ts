@@ -104,7 +104,28 @@ describe("Ingestion-Upload", () => {
     });
     expect(response.status).toBe(500);
     expect((await response.json()).message).toBe("Upload konnte nicht gespeichert werden");
+    expect(server.repository.documents).toHaveLength(0);
     expect(errorSpy).toHaveBeenCalled();
     errorSpy.mockRestore();
+  });
+
+  it("wiederholt die gesamte Transaktion bei einer Audit-Sequenzkollision", async () => {
+    let calls = 0;
+    const server = await start(true, async (callback) => {
+      calls += 1;
+      if (calls === 1) {
+        const cause = new Error("duplicate");
+        Object.assign(cause, { errno: 1062 });
+        throw new Error("Audit insert failed", { cause });
+      }
+      return callback({});
+    });
+    const response = await fetch(`${server.url}/api/ingestion/documents/upload`, {
+      method: "POST",
+      body: form("%PDF-1.7", "retry.pdf"),
+    });
+    expect(response.status).toBe(201);
+    expect(calls).toBe(2);
+    expect(server.repository.documents).toHaveLength(1);
   });
 });
