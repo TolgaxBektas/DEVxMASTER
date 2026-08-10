@@ -14,6 +14,7 @@ import {
 } from "@xmaster-center/jobs";
 import { createCrmModule } from "@xmaster-center/module-crm";
 import { createSystemModule } from "@xmaster-center/module-system";
+import { createBillingModule } from "@xmaster-center/module-billing";
 import type { ModuleRegistry } from "@xmaster-center/kernel";
 
 const env = parseEnv();
@@ -27,7 +28,11 @@ let registry: ModuleRegistry;
 const system = createSystemModule({
   db,
   audit,
-  health: async () => [{ id: "system", status: "healthy" }],
+  health: async () => [
+    { id: "system", status: "healthy" },
+    { id: "crm", status: "healthy" },
+    { id: "billing", status: "healthy" },
+  ],
   navigation: (permissions) => registry.navigation({ permissions }),
 });
 const crm = createCrmModule({
@@ -36,7 +41,13 @@ const crm = createCrmModule({
   publish: (input, executor) => eventBus.publish(input, executor),
   enqueue: (input) => queue.enqueue(input),
 });
-registry = createRegistry([system, crm]);
+const billing = createBillingModule({
+  db,
+  audit,
+  publish: (input, executor) => eventBus.publish(input, executor),
+  transaction: (callback) => db.transaction(callback),
+});
+registry = createRegistry([system, crm, billing]);
 eventBus = createEventBus(
   eventRepository,
   [...registry.events.entries()].flatMap(([name, items]) =>
@@ -73,7 +84,15 @@ const dispatchLoop = async () => {
   }
 };
 console.log("[worker] starting job loop and event dispatcher");
-scheduler.start([]);
+scheduler.start(
+  [...registry.jobs.values()]
+    .filter((job) => job.schedule === "daily")
+    .map((job) => ({
+      name: job.name,
+      intervalMs: 86_400_000,
+      payload: { tenantId: "1" },
+    })),
+);
 void worker.run({
   workerId: `worker-${process.pid}`,
   signal: abort.signal,

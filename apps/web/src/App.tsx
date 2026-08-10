@@ -8,6 +8,7 @@ import type { ClientRouter } from "@xmaster-center/kernel";
 import { AppShell, EmptyState, type ModulePageProps } from "@xmaster-center/ui";
 import { crmPages, CrmPage } from "@xmaster-center/module-crm/ui";
 import { systemPages, SystemPage } from "@xmaster-center/module-system/ui";
+import { billingPages, BillingPage } from "@xmaster-center/module-billing/ui";
 import { ApiError, logout, moduleApi, sessionRequest } from "./api.js";
 import { LoginPage } from "./LoginPage.js";
 import { useI18n } from "./i18n.js";
@@ -39,6 +40,13 @@ const pages: Page[] = [
     path,
     permission,
     component: CrmPage,
+  })),
+  ...billingPages.map(([id, title, path, permission]) => ({
+    id,
+    title,
+    path,
+    permission,
+    component: BillingPage,
   })),
 ];
 type NavigationEntry = {

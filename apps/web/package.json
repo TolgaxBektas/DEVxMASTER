@@ -18,6 +18,7 @@
     "@xmaster-center/contracts": "workspace:*",
     "@xmaster-center/kernel": "workspace:*",
     "@xmaster-center/module-crm": "workspace:*",
+    "@xmaster-center/module-billing": "workspace:*",
     "@xmaster-center/module-system": "workspace:*",
     "@xmaster-center/ui": "workspace:*",
     "lucide-react": "0.453.0",

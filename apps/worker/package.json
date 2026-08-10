@@ -12,6 +12,7 @@
     "@xmaster-center/jobs": "workspace:*",
     "@xmaster-center/kernel": "workspace:*",
     "@xmaster-center/module-crm": "workspace:*",
+    "@xmaster-center/module-billing": "workspace:*",
     "@xmaster-center/module-system": "workspace:*"
   },
   "devDependencies": {
