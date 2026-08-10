@@ -52,7 +52,8 @@ services:
     ports:
       - "127.0.0.1:8081:8080"
     volumes:
-      - searxng_data:/etc/searxng
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+      - searxng_data:/var/cache/searxng
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8080/"]
       interval: 10s
