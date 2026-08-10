@@ -70,6 +70,7 @@ const assistant = createAssistantModule({
       newLeads: leads.filter((customer) => (customer.tags ?? []).includes("lead")).length,
       deadLetters: 0,
       costsMicros: 0,
+      budgetMicros: 1_000_000,
       tenantId,
     };
   },

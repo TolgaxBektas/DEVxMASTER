@@ -10,6 +10,14 @@ export type AssistantDeps = {
 };
 export function createAssistantRouter(deps: AssistantDeps) {
   const states = new Map<string, "suggestion" | "approved" | "executed">();
+  const modeFor = (tenantId: string) =>
+    evaluateAutomation(
+      {
+        mode: async (policyTenantId, operation) =>
+          deps.policy?.(policyTenantId, operation) ?? null,
+      },
+      { tenantId, operation: "review-lead" },
+    );
   return router({
     briefing: permissionProcedure("assistant.briefing.read").query(({ ctx }) =>
       deps.briefing(ctx.auth.tenantId),
@@ -18,18 +26,22 @@ export function createAssistantRouter(deps: AssistantDeps) {
       deps.chat(ctx.auth.tenantId, input.text),
     ),
     proposals: router({
-      list: permissionProcedure("assistant.proposal.read").query(() => [
-        { id: "review-lead", title: "Neuen Lead aus Fundstelle prüfen", state: "approval_required" },
-      ]),
+      list: permissionProcedure("assistant.proposal.read").query(async ({ ctx }) => {
+        const mode = await modeFor(ctx.auth.tenantId);
+        return [
+          {
+            id: "review-lead",
+            title: "Neuen Lead aus Fundstelle prüfen",
+            state: states.get("review-lead") ?? "approval_required",
+            policy: mode,
+          },
+        ];
+      }),
       approve: permissionProcedure("assistant.proposal.approve")
         .input(z.object({ id: z.string() }))
         .mutation(async ({ ctx, input }) => {
-          const mode = await evaluateAutomation(
-            { mode: async (tenantId, operation) => deps.policy?.(tenantId, operation) ?? null },
-            { tenantId: ctx.auth.tenantId, operation: input.id },
-          );
-          if (mode === "automatic") states.set(input.id, "approved");
-          else states.set(input.id, "approved");
+          const mode = await modeFor(ctx.auth.tenantId);
+          states.set(input.id, "approved");
           await deps.audit({ tenantId: ctx.auth.tenantId, action: "assistant.proposal.approved", entityId: input.id, details: { proposalId: input.id } });
           return { id: input.id, state: mode };
         }),

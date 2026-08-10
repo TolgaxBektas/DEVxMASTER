@@ -8,7 +8,8 @@ export function IngestionPage({ api }: ModulePageProps) {
   if (documents.error || occurrences.error) return <EmptyState title="Ingestion-Daten konnten nicht geladen werden" />;
   const ingest = async () => {
     await api.mutate("modules.ingestion.documents.ingestDemo");
-    window.location.reload();
+    await api.invalidate?.("modules.ingestion.documents.list");
+    await api.invalidate?.("modules.ingestion.occurrences.list");
   };
   return <div className="stack">
     <div className="page-heading"><div><div className="eyebrow">INGESTION</div><h1>Dokumente & Fundstellen</h1><p>Quelle, Dokument, Verarbeitung und erkannte Anzeigen.</p></div><Button onClick={ingest}>Beispieldokument aufnehmen</Button></div>

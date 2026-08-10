@@ -42,6 +42,49 @@
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 12px;
 }
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+}
+.metric-card {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  background: #10262b;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.metric-card strong {
+  font-size: 24px;
+  color: var(--gold);
+}
+.metric-card span {
+  color: var(--muted);
+  font-size: 13px;
+}
+.list-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+.proposal-meta {
+  display: grid;
+  gap: 5px;
+}
+.proposal-policy,
+.proposal-state {
+  color: var(--muted);
+  font-size: 12px;
+}
+.proposal-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 .health-item {
   background: #10262b;
   border: 1px solid var(--line);

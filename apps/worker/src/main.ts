@@ -56,7 +56,13 @@ const ingestion = createIngestionModule({
   publish: (input) => eventBus.publish(input),
 });
 const assistant = createAssistantModule({
-  briefing: async () => ({ overdueInvoices: 0, newLeads: 0, deadLetters: 0, costsMicros: 0 }),
+  briefing: async () => ({
+    overdueInvoices: 0,
+    newLeads: 0,
+    deadLetters: 0,
+    costsMicros: 0,
+    budgetMicros: 1_000_000,
+  }),
   chat: async (_tenantId, text) => `ALEXIS Mock: ${text}`,
   audit: async () => undefined,
 });

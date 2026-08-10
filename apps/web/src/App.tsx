@@ -118,7 +118,16 @@ function AppContent() {
         }}
       />
     );
-  const apiProps: ModulePageProps = { api: moduleApi, navigate, t };
+  const apiProps: ModulePageProps = {
+    api: {
+      ...moduleApi,
+      invalidate: async (path) => {
+        await queryClient.invalidateQueries({ queryKey: ["trpc", path] });
+      },
+    },
+    navigate,
+    t,
+  };
   const page =
     pages.find((item) => item.path === location) ??
     (location.startsWith("/kunden/")

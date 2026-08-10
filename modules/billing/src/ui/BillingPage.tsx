@@ -65,7 +65,7 @@ export function BillingPage({ api }: ModulePageProps) {
       vatTreatment: "VAT19",
     });
     setMessage("Aussteller angelegt");
-    window.location.reload();
+    await api.invalidate?.("modules.billing.issuers.list");
   };
   const createInvoice = async (event: FormEvent) => {
     event.preventDefault();
@@ -75,14 +75,14 @@ export function BillingPage({ api }: ModulePageProps) {
       items: [{ description, quantity: "1.00", unitPrice: amount }],
     });
     setMessage("Rechnung angelegt");
-    window.location.reload();
+    await api.invalidate?.("modules.billing.invoices.list");
   };
   const issue = async () => {
     await api.mutate("modules.billing.invoices.issue", {
       id: Number(selectedInvoice),
     });
     setMessage("Rechnung ausgestellt");
-    window.location.reload();
+    await api.invalidate?.("modules.billing.invoices.list");
   };
   const pay = async () => {
     await api.mutate("modules.billing.invoices.pay", {
@@ -90,7 +90,7 @@ export function BillingPage({ api }: ModulePageProps) {
       amount,
     });
     setMessage("Zahlung erfasst");
-    window.location.reload();
+    await api.invalidate?.("modules.billing.invoices.list");
   };
   const downloadPdf = async () => {
     const result = await api.query<{ filename: string; base64: string }>(
@@ -113,7 +113,8 @@ export function BillingPage({ api }: ModulePageProps) {
   const runDunning = async () => {
     await api.mutate("modules.billing.dunning.run");
     setMessage("Mahnlauf ausgeführt");
-    window.location.reload();
+    await api.invalidate?.("modules.billing.invoices.list");
+    await api.invalidate?.("modules.billing.dunning.list");
   };
   return (
     <div className="stack">

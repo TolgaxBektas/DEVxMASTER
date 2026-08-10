@@ -88,7 +88,7 @@ export function CrmPage({ api, navigate }: ModulePageProps) {
       setEmail("");
       setEditing(null);
       setMessage("Gespeichert");
-      window.location.reload();
+      await api.invalidate?.("modules.crm.customers.list");
     } catch {
       setMessage("Speichern fehlgeschlagen");
     }
@@ -96,7 +96,7 @@ export function CrmPage({ api, navigate }: ModulePageProps) {
   const remove = async (id: number) => {
     if (!window.confirm("Kunden wirklich löschen?")) return;
     await api.mutate("modules.crm.customers.delete", { id });
-    window.location.reload();
+    await api.invalidate?.("modules.crm.customers.list");
   };
   if (detailId)
     return (

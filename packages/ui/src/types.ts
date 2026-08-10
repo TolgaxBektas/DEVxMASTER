@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 export type ModuleUiApi = {
   query<T>(path: string, input?: unknown): Promise<T>;
   mutate<T>(path: string, input?: unknown): Promise<T>;
+  invalidate?(path: string): Promise<void>;
 };
 
 export type ModulePageProps = {
