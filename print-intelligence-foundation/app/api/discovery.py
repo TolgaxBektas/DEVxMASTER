@@ -43,18 +43,6 @@ def list_sources(session=Depends(session_dependency)):
     return [_source(source) for source in session.scalars(select(Source)).all()]
 
 
-@router.post("/sources/{source_id}/{action}")
-def set_source_enabled(source_id: int, action: str, session=Depends(session_dependency)):
-    if action not in {"enable", "disable"}:
-        raise HTTPException(400, "action must be enable or disable")
-    source = session.get(Source, source_id)
-    if not source:
-        raise HTTPException(404)
-    source.enabled = action == "enable"
-    session.commit()
-    return _source(source)
-
-
 @router.post("/sources/{source_id}/crawl")
 def crawl_source(source_id: int, session=Depends(session_dependency)):
     source = session.get(Source, source_id)
@@ -84,6 +72,18 @@ def crawl_source(source_id: int, session=Depends(session_dependency)):
         queue,
     ).crawl(source)
     return result
+
+
+@router.post("/sources/{source_id}/{action}")
+def set_source_enabled(source_id: int, action: str, session=Depends(session_dependency)):
+    if action not in {"enable", "disable"}:
+        raise HTTPException(400, "action must be enable or disable")
+    source = session.get(Source, source_id)
+    if not source:
+        raise HTTPException(404)
+    source.enabled = action == "enable"
+    session.commit()
+    return _source(source)
 
 
 @router.post("/crawl")

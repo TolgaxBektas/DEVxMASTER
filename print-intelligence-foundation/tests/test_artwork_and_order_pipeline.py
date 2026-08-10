@@ -116,12 +116,20 @@ def test_page11_ads_receive_restored_artwork_artifacts(tmp_path):
             artwork_dpi=120,
             local_work_dir=tmp_path / "work",
         ).ingest(pdf)
+        pages = session.scalars(
+            select(Page).where(Page.document_id == document.id)
+        ).all()
         ads = session.scalars(
             select(AdOccurrence)
             .join(Page)
             .where(Page.document_id == document.id, Page.page_number == 11)
         ).all()
         assert len(ads) == 4
+        assert all(
+            page.form_header_json == "{}"
+            for page in pages
+            if not page.is_order_form
+        )
         assert all(ad.artwork_path and ad.artwork_trimmed_path for ad in ads)
         assert all(
             json.loads(ad.artwork_metadata_json)["source_dpi"] == 120 for ad in ads

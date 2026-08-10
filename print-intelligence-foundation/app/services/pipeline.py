@@ -170,7 +170,7 @@ class Pipeline:
                 page.image_path, page.classification = str(path), classification
             form = self._form_results[number]
             page.is_order_form = form.is_order_form
-            page.form_header_json = form.as_json()
+            page.form_header_json = form.as_json() if form.is_order_form else "{}"
         self.session.commit()
 
     def _detect_pages(self, doc, source, page_paths, digest, local_root, deadline):

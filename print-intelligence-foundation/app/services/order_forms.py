@@ -7,6 +7,7 @@ from pathlib import Path
 import pypdfium2 as pdfium
 
 from app.schemas.pipeline import AdFields
+from app.services.extraction import normalize_address, normalize_domain, normalize_phone
 
 
 # Aliases are data so new publisher spellings can be added without changing
@@ -199,6 +200,13 @@ def _extract_row_value(row: list[_Character], canonical: str) -> str | None:
             if character.left >= label_right
         )
         value = _display_clean(value)
+        value = re.sub(
+            rf"^(?:{'|'.join(re.escape(item[0]) for item in _ALIAS_INDEX if item[1] == canonical)})"
+            r"\s*[:;|,\-]?\s*",
+            "",
+            value,
+            flags=re.IGNORECASE,
+        )
         if value and not _blocked(value, canonical):
             return value
     return None
@@ -284,12 +292,23 @@ def parse_order_form(pdf_path: str | Path, page_number: int) -> FormParseResult:
 def merge_form_and_ad_fields(
     header: dict[str, str], advert: dict[str, str]
 ) -> tuple[dict[str, str], dict[str, dict[str, str]]]:
+    def comparable(key: str, value: str) -> str:
+        if key == "phone" or key == "fax":
+            return normalize_phone(value)
+        if key == "domain":
+            return normalize_domain(value)
+        if key == "email":
+            return value.strip().casefold()
+        if key == "address":
+            return re.sub(r"[\s,]+", " ", normalize_address(value)).casefold()
+        return re.sub(r"\s+", " ", value).strip().casefold()
+
     merged = dict(advert)
     conflicts: dict[str, dict[str, str]] = {}
     for key, value in header.items():
         if not value:
             continue
-        if advert.get(key) and advert[key].casefold() != value.casefold():
+        if advert.get(key) and comparable(key, advert[key]) != comparable(key, value):
             conflicts[key] = {"header": value, "advert": advert[key]}
         merged[key] = value
     return merged, conflicts

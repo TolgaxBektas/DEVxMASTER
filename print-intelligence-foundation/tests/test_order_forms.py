@@ -172,3 +172,18 @@ def test_header_and_advert_values_are_kept_as_conflicts():
         "company": {"header": "Synthetic GmbH", "advert": "Other Synthetic GmbH"},
         "phone": {"header": "01111", "advert": "02222"},
     }
+
+
+def test_form_conflict_comparison_normalizes_contact_formatting():
+    merged, conflicts = merge_form_and_ad_fields(
+        {
+            "phone": "06441 111222",
+            "address": "Musterstraße 1, 35576 Wetzlar",
+        },
+        {
+            "phone": "06441111222",
+            "address": "Musterstraße 1 35576 Wetzlar",
+        },
+    )
+    assert conflicts == {}
+    assert merged["phone"] == "06441 111222"

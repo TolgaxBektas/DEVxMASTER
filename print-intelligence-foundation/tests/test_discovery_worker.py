@@ -3,7 +3,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from app.db.base import Base
-from app.models import DiscoveredCandidate, Document, Source
+from app.models import DiscoveredCandidate, Document, Job, Source
 from app.services.discovery import DiscoveryCrawler, normalize_url
 from app.services.queue import RedisQueue
 from app.workers.worker import Worker
@@ -97,6 +97,9 @@ def test_candidate_content_hash_reuses_existing_document(monkeypatch):
         document = Document(content_sha256="a" * 64, filename="known.pdf")
         session.add_all([source, document])
         session.flush()
+        for stage in ("download", "render", "classify", "detect", "extract", "store"):
+            session.add(Job(document_id=document.id, stage=stage, state="succeeded"))
+        session.flush()
         candidate = DiscoveredCandidate(
             source_id=source.id,
             url="https://city.test/new.pdf",
@@ -113,6 +116,55 @@ def test_candidate_content_hash_reuses_existing_document(monkeypatch):
         assert DiscoveryCrawler(session).process_candidate(candidate).id == document.id
         assert candidate.state == "skipped"
         assert candidate.document_id == document.id
+
+
+def test_candidate_redelivery_resumes_incomplete_existing_document(monkeypatch):
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        source = Source(base_url="https://city.test/", label="City")
+        document = Document(content_sha256="a" * 64, filename="interrupted.pdf")
+        session.add_all([source, document])
+        session.flush()
+        for stage in ("download", "classify", "detect", "extract", "store"):
+            session.add(Job(document_id=document.id, stage=stage, state="succeeded"))
+        session.add(Job(document_id=document.id, stage="render", state="running"))
+        candidate = DiscoveredCandidate(
+            source_id=source.id,
+            url="https://city.test/retry.pdf",
+            normalized_url=normalize_url("https://city.test/retry.pdf"),
+        )
+        session.add(candidate)
+        session.commit()
+
+        monkeypatch.setattr(
+            "app.services.discovery.download", lambda url, limit: b"known bytes"
+        )
+        monkeypatch.setattr(
+            "app.services.discovery.sha256", lambda data: "a" * 64
+        )
+
+        class ResumingPipeline:
+            def ingest(self, data, source_url=None):
+                for job in session.scalars(
+                    select(Job).where(Job.document_id == document.id)
+                ):
+                    job.state = "succeeded"
+                session.flush()
+                return document
+
+        monkeypatch.setattr(
+            "app.services.discovery.make_pipeline",
+            lambda session, settings: ResumingPipeline(),
+        )
+        assert DiscoveryCrawler(session).process_candidate(candidate).id == document.id
+        assert candidate.state == "ingested"
+        assert all(
+            job.state == "succeeded"
+            for job in session.scalars(
+                select(Job).where(Job.document_id == document.id)
+            )
+        )
 
 
 def test_redis_queue_dedupes_recovers_retries_and_counts(monkeypatch):

@@ -10,7 +10,7 @@ from app.api.dependencies import session_dependency
 from app.api import health as health_router
 from app.db.base import Base
 from app.main import app
-from app.models import AdOccurrence, Document, Job, Page, ReviewItem
+from app.models import AdOccurrence, Document, Job, Page, ReviewItem, Source
 from app.services.classify import classify_page
 from app.services.pipeline import Pipeline
 from app.services.storage import LocalStorage, S3Storage
@@ -62,6 +62,59 @@ def test_health_degraded_when_dependencies_unavailable(monkeypatch):
     assert response.json()["status"] == "degraded"
     assert response.json()["vision"] is False
     assert response.json()["redis"] is False
+
+
+def test_per_source_crawl_route_is_reachable(monkeypatch, isolated_db):
+    _, factory = isolated_db
+    monkeypatch.setattr(
+        "app.api.discovery.RedisQueue.health", lambda self: False
+    )
+    monkeypatch.setattr(
+        "app.api.discovery.DiscoveryCrawler.crawl",
+        lambda self, source: {"discovered": 2, "skipped": 1},
+    )
+
+    def override():
+        with factory() as session:
+            yield session
+
+    app.dependency_overrides[session_dependency] = override
+    try:
+        with factory() as session:
+            source = Source(base_url="https://city.test/", label="City")
+            session.add(source)
+            session.commit()
+            source_id = source.id
+        with TestClient(app) as client:
+            response = client.post(f"/discovery/sources/{source_id}/crawl")
+        assert response.status_code == 200
+        assert response.json() == {"discovered": 2, "skipped": 1}
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_per_source_crawl_rejects_disabled_source(isolated_db):
+    _, factory = isolated_db
+
+    def override():
+        with factory() as session:
+            yield session
+
+    app.dependency_overrides[session_dependency] = override
+    try:
+        with factory() as session:
+            source = Source(
+                base_url="https://city.test/", label="City", enabled=False
+            )
+            session.add(source)
+            session.commit()
+            source_id = source.id
+        with TestClient(app) as client:
+            response = client.post(f"/discovery/sources/{source_id}/crawl")
+        assert response.status_code == 409
+        assert response.json()["detail"] == "source is disabled"
+    finally:
+        app.dependency_overrides.clear()
 
 
 def test_upload_duplicate_and_size_rejection(monkeypatch, isolated_db, tmp_path):

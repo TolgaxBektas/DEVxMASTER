@@ -12,7 +12,7 @@ from redis import RedisError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import DiscoveredCandidate, Document, Source
+from app.models import DiscoveredCandidate, Document, Job, Source
 from app.core.config import get_settings
 from app.services.downloader import download, fetch_url
 from app.services.factory import make_pipeline
@@ -105,9 +105,10 @@ class DiscoveryCrawler:
             if existing:
                 candidate.content_sha256 = digest
                 candidate.document_id = existing.id
-                candidate.state = "skipped"
-                self.session.commit()
-                return existing
+                if self._document_complete(existing.id):
+                    candidate.state = "skipped"
+                    self.session.commit()
+                    return existing
             settings = get_settings()
             document = make_pipeline(self.session, settings).ingest(
                 data, source_url=candidate.url
@@ -121,6 +122,16 @@ class DiscoveryCrawler:
             candidate.state, candidate.error = "failed", str(exc)
             self.session.commit()
             raise
+
+    def _document_complete(self, document_id: int) -> bool:
+        jobs = self.session.scalars(
+            select(Job).where(Job.document_id == document_id)
+        ).all()
+        states = {job.stage: job.state for job in jobs}
+        required = {"download", "render", "classify", "detect", "extract", "store"}
+        return required.issubset(states) and all(
+            states[stage] == "succeeded" for stage in required
+        )
 
     def _candidate(self, source: Source, url: str):
         normalized = normalize_url(url)
