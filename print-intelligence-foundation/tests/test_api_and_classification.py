@@ -1,4 +1,6 @@
 from unittest.mock import Mock
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 import socket
 import pytest
 from fastapi.testclient import TestClient
@@ -8,7 +10,7 @@ from app.api.dependencies import session_dependency
 from app.api import health as health_router
 from app.db.base import Base
 from app.main import app
-from app.models import ReviewItem
+from app.models import AdOccurrence, Document, Job, Page, ReviewItem
 from app.services.classify import classify_page
 from app.services.pipeline import Pipeline
 from app.services.storage import LocalStorage, S3Storage
@@ -100,6 +102,106 @@ def test_upload_duplicate_and_size_rejection(monkeypatch, isolated_db, tmp_path)
             )
             payload["file"][1].seek(0)
             assert client.post("/documents/upload", files=payload).status_code == 413
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [b"", b"not a pdf", Path("tests/fixtures/Seniorenpost_Mai_Juni_2026.pdf").read_bytes()[:100]],
+)
+def test_malformed_upload_is_rejected_before_persistence(
+    monkeypatch, isolated_db, tmp_path, payload
+):
+    _, factory = isolated_db
+    monkeypatch.setattr(
+        "app.api.documents.pipeline_dependency",
+        lambda: pytest.fail("pipeline must not run for malformed PDF"),
+    )
+
+    def override():
+        with factory() as session:
+            yield session
+
+    app.dependency_overrides[session_dependency] = override
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/documents/upload",
+                files={"file": ("broken.pdf", payload, "application/pdf")},
+            )
+            assert response.status_code == 400
+        with factory() as session:
+            assert session.query(Document).count() == 0
+            assert session.query(Job).count() == 0
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_malformed_url_ingest_is_rejected_before_persistence(
+    monkeypatch, isolated_db
+):
+    _, factory = isolated_db
+    monkeypatch.setattr(
+        "app.api.documents.download", lambda url, limit: b"truncated pdf"
+    )
+
+    def override():
+        with factory() as session:
+            yield session
+
+    app.dependency_overrides[session_dependency] = override
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/documents/url", params={"url": "https://example.test/file.pdf"}
+            )
+            assert response.status_code == 400
+        with factory() as session:
+            assert session.query(Document).count() == 0
+            assert session.query(Job).count() == 0
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_concurrent_duplicate_uploads_are_serialized(monkeypatch, isolated_db, tmp_path):
+    _, factory = isolated_db
+    monkeypatch.setattr(
+        "app.api.documents.pipeline_dependency",
+        lambda session: Pipeline(
+            session,
+            RecordedVisionProvider("tests/fixtures/qwen"),
+            LocalStorage(tmp_path / "storage"),
+            render_dpi=12,
+            local_work_dir=tmp_path / "work",
+        ),
+    )
+
+    def override():
+        with factory() as session:
+            yield session
+
+    app.dependency_overrides[session_dependency] = override
+    data = Path("tests/fixtures/Seniorenpost_Mai_Juni_2026.pdf").read_bytes()
+
+    def upload_once(_):
+        with TestClient(app) as client:
+            return client.post(
+                "/documents/upload",
+                files={"file": ("fixture.pdf", data, "application/pdf")},
+            )
+
+    try:
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            responses = list(pool.map(upload_once, range(3)))
+        assert [response.status_code for response in responses] == [200, 200, 200]
+        ids = {response.json()["document_id"] for response in responses}
+        assert len(ids) == 1
+        with factory() as session:
+            assert session.query(Document).count() == 1
+            assert session.query(Page).count() == 44
+            assert session.query(AdOccurrence).count() == 4
+            assert session.query(Job).count() == 6
     finally:
         app.dependency_overrides.clear()
 

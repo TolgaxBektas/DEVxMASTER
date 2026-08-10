@@ -4,6 +4,7 @@ from time import monotonic
 from pathlib import Path
 from PIL import Image
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.models import AdOccurrence, Company, Document, Page, ReviewItem
 from app.services.bbox import Box, deduplicate_boxes, normalize_bbox
@@ -11,6 +12,7 @@ from app.services.classify import classify_page
 from app.services.crop import crop_ad
 from app.services.dedupe import contact_key, normalize_name
 from app.services.extraction import extract_contact_fields
+from app.services.ingest import content_lock, validate_pdf
 from app.services.jobs import get_or_create, retry, run_stage
 from app.services.render import render_pdf
 from app.services.storage import sha256
@@ -60,7 +62,12 @@ class Pipeline:
         return self.ingest(pdf, filename, source_url, force=True)
 
     def ingest(self, pdf: bytes, filename="document.pdf", source_url=None, force=False):
+        validate_pdf(pdf)
         digest = sha256(pdf)
+        with content_lock(digest):
+            return self._ingest_locked(pdf, filename, source_url, force, digest)
+
+    def _ingest_locked(self, pdf, filename, source_url, force, digest):
         doc = self.session.scalar(
             select(Document).where(Document.content_sha256 == digest)
         )
@@ -69,7 +76,15 @@ class Pipeline:
                 content_sha256=digest, filename=filename, source_url=source_url
             )
             self.session.add(doc)
-            self.session.commit()
+            try:
+                self.session.commit()
+            except IntegrityError:
+                self.session.rollback()
+                doc = self.session.scalar(
+                    select(Document).where(Document.content_sha256 == digest)
+                )
+                if doc is None:
+                    raise
         local_root = self.local_work_dir / digest
         local_root.mkdir(parents=True, exist_ok=True)
         source = local_root / "source.pdf"

@@ -6,6 +6,7 @@ from app.api.dependencies import pipeline_dependency, session_dependency
 from app.core.config import get_settings
 from app.models import Document, Page
 from app.services.downloader import download
+from app.services.ingest import validate_pdf
 from app.services.storage import sha256
 
 router = APIRouter(
@@ -21,6 +22,10 @@ def upload(file: UploadFile = File(...), session=Depends(session_dependency)):
         data.extend(chunk)
         if len(data) > settings.max_download_bytes:
             raise HTTPException(413, "file too large")
+    try:
+        validate_pdf(bytes(data))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     return {
         "document_id": pipeline_dependency(session)
         .ingest(bytes(data), file.filename or "document.pdf")
@@ -33,6 +38,10 @@ def ingest_url(url: str, session=Depends(session_dependency)):
     settings = get_settings()
     try:
         data = download(url, settings.max_download_bytes)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    try:
+        validate_pdf(data)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     digest = sha256(data)
