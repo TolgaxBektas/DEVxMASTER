@@ -1,0 +1,8 @@
+from fastapi import APIRouter
+from fastapi.responses import HTMLResponse
+
+router=APIRouter()
+
+@router.get('/',response_class=HTMLResponse)
+def home():
+    return '''<!doctype html><html><head><meta charset="utf-8"><title>Print Intelligence</title><style>body{font-family:system-ui;max-width:1100px;margin:40px auto;padding:0 20px;background:#f6f7f9;color:#1d2433}h1{margin-bottom:4px}.card{background:white;border:1px solid #dde2ea;border-radius:14px;padding:20px;margin:16px 0}button{padding:10px 14px;border:0;border-radius:8px;background:#172554;color:white}input{width:75%;padding:10px}pre{white-space:pre-wrap;background:#0f172a;color:#e2e8f0;padding:16px;border-radius:10px}</style></head><body><h1>Print Intelligence Engine</h1><p>Foundation 0.1 - Discovery, PDF acquisition and review pipeline</p><div class="card"><h2>Health</h2><button onclick="get('/api/v1/health')">Check</button></div><div class="card"><h2>Download and process PDF</h2><input id="u" placeholder="https://.../publication.pdf"><button onclick="run()">Run</button></div><div class="card"><h2>Result</h2><pre id="out">Ready.</pre></div><script>async function get(u,o){let r=await fetch(u,o);let t=await r.text();document.getElementById('out').textContent=t;return JSON.parse(t)}async function run(){let url=document.getElementById('u').value;let d=await get('/api/v1/documents/download',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})});await get('/api/v1/documents/process',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({document_id:d.document_id})});await get('/api/v1/documents/'+d.document_id)}</script></body></html>'''
