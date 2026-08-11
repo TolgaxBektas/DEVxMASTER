@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.models import DiscoveredCandidate, Document, Job, Source
 from app.core.config import get_settings
-from app.services.downloader import download, fetch_url
+from app.services.downloader import download, fetch_url, validate_public_url
 from app.services.factory import make_pipeline
 from app.services.queue import RedisQueue
 from app.services.storage import sha256
@@ -94,6 +94,54 @@ class DiscoveryCrawler:
         source.last_crawled_at = datetime.now(timezone.utc)
         self.session.commit()
         return {"discovered": discovered, "skipped": skipped}
+
+    def propose(
+        self,
+        seed_pages: list[str],
+        search_terms: list[str],
+        max_results: int,
+    ) -> list[dict]:
+        proposals = []
+        seen = set()
+        for seed_page in seed_pages:
+            if len(proposals) >= max_results:
+                break
+            if urlsplit(seed_page).path.lower().endswith(".pdf"):
+                try:
+                    validate_public_url(seed_page)
+                except (ValueError, TimeoutError, httpx.HTTPError):
+                    continue
+                links = [seed_page]
+            else:
+                deadline = monotonic() + self.timeout_seconds
+                robots = self._robots(seed_page, deadline)
+                links = self._html(seed_page, robots, deadline)
+                links.extend(self._sitemap(seed_page, robots, deadline))
+            for url in links:
+                try:
+                    validate_public_url(url)
+                except ValueError:
+                    continue
+                normalized = normalize_url(url)
+                if normalized in seen:
+                    continue
+                seen.add(normalized)
+                term_hits = sum(
+                    term.lower() in url.lower()
+                    for term in search_terms
+                    if term.strip()
+                )
+                proposals.append(
+                    {
+                        "url": url,
+                        "score": float(1 + term_hits),
+                        "found_on": seed_page,
+                        "discovery": "seed_page",
+                    }
+                )
+                if len(proposals) >= max_results:
+                    break
+        return proposals
 
     def process_candidate(self, candidate: DiscoveredCandidate) -> Document:
         try:
