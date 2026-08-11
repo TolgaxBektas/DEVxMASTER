@@ -19,7 +19,7 @@ class _ChangingProvider:
         self.calls = 0
 
     def detect_ads(self, _image_path, _page_number):
-        result = self.results[self.calls]
+        result = self.results[self.calls % len(self.results)]
         self.calls += 1
         return result
 
@@ -76,6 +76,7 @@ def test_consensus_keeps_majority_and_records_unstable_detection_review(tmp_path
     try:
         pdf = _pdf(["Synthetic publication"])
         document = pipeline.ingest(pdf)
+        pipeline.reprocess(pdf)
         page = session.scalar(select(Page).where(Page.document_id == document.id))
         ads = session.scalars(
             select(AdOccurrence).where(AdOccurrence.page_id == page.id)
@@ -92,6 +93,14 @@ def test_consensus_keeps_majority_and_records_unstable_detection_review(tmp_path
         assert review is not None
         assert "detection unstable" in review.reason
         assert "False Positive" not in ads[0].fields_json
+        assert session.scalar(
+            select(ReviewItem).where(
+                ReviewItem.page_id == page.id, ReviewItem.ad_id.is_(None)
+            )
+        ).id == review.id
+        assert session.query(ReviewItem).filter(
+            ReviewItem.page_id == page.id, ReviewItem.ad_id.is_(None)
+        ).count() == 1
     finally:
         session.close()
 

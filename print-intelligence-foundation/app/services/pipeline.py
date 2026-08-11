@@ -371,12 +371,6 @@ class Pipeline:
             frequency = run_count / self.vision_consensus_runs
             confidence_weight = 1 / (self.vision_consensus_runs + 1)
             merged = {
-                "bbox": [
-                    box.left / size[0] * 1000,
-                    box.top / size[1] * 1000,
-                    box.right / size[0] * 1000,
-                    box.bottom / size[1] * 1000,
-                ],
                 "confidence": (
                     (1 - confidence_weight) * frequency
                     + confidence_weight * average_confidence

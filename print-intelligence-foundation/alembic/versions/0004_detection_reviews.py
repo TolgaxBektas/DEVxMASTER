@@ -22,10 +22,18 @@ def upgrade():
             "fk_review_items_page_id", "pages", ["page_id"], ["id"]
         )
         batch.create_index("ix_review_items_page_id", ["page_id"])
+        batch.create_index(
+            "uq_review_items_page_review",
+            ["page_id"],
+            unique=True,
+            sqlite_where=sa.text("ad_id IS NULL"),
+            postgresql_where=sa.text("ad_id IS NULL"),
+        )
 
 
 def downgrade():
     with op.batch_alter_table("review_items") as batch:
+        batch.drop_index("uq_review_items_page_review")
         batch.drop_index("ix_review_items_page_id")
         batch.drop_constraint("fk_review_items_page_id", type_="foreignkey")
         batch.drop_column("page_id")

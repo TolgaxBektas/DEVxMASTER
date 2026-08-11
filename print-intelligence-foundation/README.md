@@ -15,6 +15,10 @@ Copy `.env.example` to `.env`. Configuration includes `DATABASE_URL`, `STORAGE_B
 `VISION_CONSENSUS_RUNS` defaults to `1`, preserving the existing single-run
 behaviour. Values above one run vision detection repeatedly and retain only
 boxes seen in a majority of runs; unstable detections are sent to review.
+For multiple runs, stored confidence is a frequency-dominant agreement score
+that combines detection frequency with model confidence; it feeds review
+thresholds and compatibility-API ad probability and is not directly
+comparable with single-run model confidence.
 
 OCR fallback is enabled by default with `OCR_ENABLED=true`. Set
 `OCR_ENABLED=false` to disable it, or change `OCR_LANGUAGES` from the default

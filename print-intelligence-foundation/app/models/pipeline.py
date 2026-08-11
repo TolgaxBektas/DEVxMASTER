@@ -4,9 +4,11 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    Index,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
@@ -74,6 +76,15 @@ class AdOccurrence(Base):
 
 class ReviewItem(Base):
     __tablename__ = "review_items"
+    __table_args__ = (
+        Index(
+            "uq_review_items_page_review",
+            "page_id",
+            unique=True,
+            sqlite_where=text("ad_id IS NULL"),
+            postgresql_where=text("ad_id IS NULL"),
+        ),
+    )
     id: Mapped[int] = mapped_column(primary_key=True)
     ad_id: Mapped[int | None] = mapped_column(
         ForeignKey("ad_occurrences.id"), unique=True
