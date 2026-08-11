@@ -15,8 +15,9 @@ from sqlalchemy.orm import Session
 from app.models import DiscoveredCandidate, Document, Job, Source
 from app.core.config import get_settings
 from app.services.downloader import download, fetch_url, validate_public_url
-from app.services.factory import make_pipeline
+from app.services.factory import make_pipeline, make_search_provider
 from app.services.queue import RedisQueue
+from app.services.search import SearchProvider
 from app.services.storage import sha256
 
 logger = logging.getLogger(__name__)
@@ -56,6 +57,7 @@ class DiscoveryCrawler:
         request_delay: float = 0,
         user_agent: str = "print-intelligence-foundation/1.0",
         queue: RedisQueue | None = None,
+        search_provider: SearchProvider | None = None,
     ):
         self.session = session
         self.max_bytes = max_bytes
@@ -66,6 +68,9 @@ class DiscoveryCrawler:
         self.request_delay = request_delay
         self.user_agent = user_agent
         self.queue = queue
+        if search_provider is None:
+            search_provider = make_search_provider(get_settings())
+        self.search_provider = search_provider
         self._last_request: dict[str, float] = {}
 
     @classmethod
@@ -74,7 +79,9 @@ class DiscoveryCrawler:
 
     def _require_session(self) -> Session:
         if self.session is None:
-            raise RuntimeError("stateful discovery operation requires a database session")
+            raise RuntimeError(
+                "stateful discovery operation requires a database session"
+            )
         return self.session
 
     def crawl(self, source: Source) -> dict[str, int]:
@@ -113,20 +120,42 @@ class DiscoveryCrawler:
     ) -> list[dict]:
         proposals = []
         seen = set()
-        for seed_page in seed_pages:
+        candidate_pages = [
+            (page, {"type": "seed", "page": page}) for page in seed_pages
+        ]
+        if self.search_provider:
+            for term in search_terms:
+                candidate_pages.extend(
+                    (result.url, {"type": "search", "query": term})
+                    for result in self.search_provider.search(
+                        term, min(max_results, self.max_entries)
+                    )
+                    if result.url
+                )
+        unique_pages = []
+        page_seen = set()
+        for page, origin in candidate_pages:
+            if page not in page_seen:
+                page_seen.add(page)
+                unique_pages.append((page, origin))
+        for page_url, origin in unique_pages[: self.max_pages]:
             if len(proposals) >= max_results:
                 break
-            if urlsplit(seed_page).path.lower().endswith(".pdf"):
+            try:
+                validate_public_url(page_url)
+            except (ValueError, TimeoutError, httpx.HTTPError):
+                continue
+            if urlsplit(page_url).path.lower().endswith(".pdf"):
                 try:
-                    validate_public_url(seed_page)
+                    validate_public_url(page_url)
                 except (ValueError, TimeoutError, httpx.HTTPError):
                     continue
-                links = [seed_page]
+                links = [page_url]
             else:
                 deadline = monotonic() + self.timeout_seconds
-                robots = self._robots(seed_page, deadline)
-                links = self._html(seed_page, robots, deadline)
-                links.extend(self._sitemap(seed_page, robots, deadline))
+                robots = self._robots(page_url, deadline)
+                links = self._html(page_url, robots, deadline)
+                links.extend(self._sitemap(page_url, robots, deadline))
             for url in links:
                 try:
                     validate_public_url(url)
@@ -145,8 +174,9 @@ class DiscoveryCrawler:
                     {
                         "url": url,
                         "score": float(1 + term_hits),
-                        "found_on": seed_page,
-                        "discovery": "seed_page",
+                        "found_on": origin.get("page"),
+                        "origin": origin,
+                        "discovery": origin["type"],
                     }
                 )
                 if len(proposals) >= max_results:

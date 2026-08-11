@@ -7,6 +7,7 @@ alembic==1.14.1
 httpx==0.28.1
 pypdfium2==4.30.0
 Pillow==11.1.0
+pytesseract==0.3.13
 boto3==1.36.4
 redis==5.2.1
 fakeredis==2.26.2

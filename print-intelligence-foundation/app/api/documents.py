@@ -92,8 +92,15 @@ def document(document_id: int, session=Depends(session_dependency)):
                     {
                         "id": a.id,
                         "company": a.company.name if a.company else None,
-                        "fields": json.loads(a.fields_json or "{}").get("fields", {}),
-                        "text": json.loads(a.fields_json or "{}").get("text", ""),
+                        "fields": json.loads(a.fields_json or "{}").get(
+                            "fields", {}
+                        ),
+                        "provenance": json.loads(a.fields_json or "{}").get(
+                            "provenance", {}
+                        ),
+                        "text": json.loads(a.fields_json or "{}").get(
+                            "text", ""
+                        ),
                         "bbox": a.bbox,
                         "is_order_form": a.is_order_form,
                         "artwork": {
