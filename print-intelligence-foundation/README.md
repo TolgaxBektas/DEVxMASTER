@@ -10,7 +10,11 @@ Pipeline: discover → download → deduplicate → render → classify → dete
 
 ## Configuration and running
 
-Copy `.env.example` to `.env`. Configuration includes `DATABASE_URL`, `STORAGE_BACKEND`, `STORAGE_PATH`, `LOCAL_WORK_DIR`, `S3_ENDPOINT_URL`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_REGION`, `VISION_PROVIDER=recorded|ollama`, `VISION_RECORDED_DIR`, `OLLAMA_URL`, `OLLAMA_MODEL`, `OLLAMA_TIMEOUT`, `RENDER_DPI`, `ARTWORK_DPI`, `ARTWORK_PADDING`, `ARTWORK_TRIM_CAP`, `CONFIDENCE_THRESHOLD`, `MAX_DOWNLOAD_BYTES`, `BBOX_IOU_THRESHOLD`, `MAX_JOB_ATTEMPTS`, `STAGE_TIMEOUT_SECONDS`, `REDIS_URL`, and `REDIS_QUEUE`.
+Copy `.env.example` to `.env`. Configuration includes `DATABASE_URL`, `STORAGE_BACKEND`, `STORAGE_PATH`, `LOCAL_WORK_DIR`, `S3_ENDPOINT_URL`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_REGION`, `VISION_PROVIDER=recorded|ollama`, `VISION_RECORDED_DIR`, `OLLAMA_URL`, `OLLAMA_MODEL`, `OLLAMA_TIMEOUT`, `VISION_CONSENSUS_RUNS`, `RENDER_DPI`, `ARTWORK_DPI`, `ARTWORK_PADDING`, `ARTWORK_TRIM_CAP`, `CONFIDENCE_THRESHOLD`, `MAX_DOWNLOAD_BYTES`, `BBOX_IOU_THRESHOLD`, `MAX_JOB_ATTEMPTS`, `STAGE_TIMEOUT_SECONDS`, `REDIS_URL`, and `REDIS_QUEUE`.
+
+`VISION_CONSENSUS_RUNS` defaults to `1`, preserving the existing single-run
+behaviour. Values above one run vision detection repeatedly and retain only
+boxes seen in a majority of runs; unstable detections are sent to review.
 
 OCR fallback is enabled by default with `OCR_ENABLED=true`. Set
 `OCR_ENABLED=false` to disable it, or change `OCR_LANGUAGES` from the default

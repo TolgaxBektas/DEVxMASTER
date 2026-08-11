@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     artwork_padding: int = 8
     artwork_trim_cap: int = 4
     confidence_threshold: float = 0.7
+    vision_consensus_runs: int = 1
     max_download_bytes: int = 50_000_000
     bbox_iou_threshold: float = 0.85
     max_job_attempts: int = 3

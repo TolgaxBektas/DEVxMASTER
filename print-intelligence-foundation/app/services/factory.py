@@ -63,4 +63,5 @@ def make_pipeline(session, settings: Settings):
         settings.artwork_trim_cap,
         make_ocr_provider(settings),
         settings.ocr_confidence_threshold,
+        settings.vision_consensus_runs,
     )

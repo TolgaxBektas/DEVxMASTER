@@ -13,7 +13,13 @@ router = APIRouter(
 @router.get("")
 def queue(session=Depends(session_dependency)):
     return [
-        {"id": x.id, "ad_id": x.ad_id, "status": x.status, "reason": x.reason}
+        {
+            "id": x.id,
+            "ad_id": x.ad_id,
+            "page_id": x.page_id,
+            "status": x.status,
+            "reason": x.reason,
+        }
         for x in session.scalars(
             select(ReviewItem).where(ReviewItem.status == "pending")
         )

@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.models import AdOccurrence, Company, Document, Page, ReviewItem
-from app.services.bbox import Box, deduplicate_boxes, normalize_bbox
+from app.services.bbox import Box, deduplicate_boxes, iou, normalize_bbox
 from app.services.classify import classify_page
 from app.services.crop import crop_ad, restore_artwork
 from app.services.dedupe import contact_key, normalize_name
@@ -51,6 +51,7 @@ class Pipeline:
         artwork_trim_cap=4,
         ocr_provider=None,
         ocr_confidence_threshold=None,
+        vision_consensus_runs=1,
     ):
         self.session, self.provider, self.storage = session, provider, storage
         self.render_dpi, self.confidence_threshold = render_dpi, confidence_threshold
@@ -69,6 +70,7 @@ class Pipeline:
             if ocr_confidence_threshold is None
             else ocr_confidence_threshold
         )
+        self.vision_consensus_runs = max(1, int(vision_consensus_runs))
         self._form_results: dict[int, FormParseResult] = {}
         self._form_results_source: str | None = None
 
@@ -196,19 +198,17 @@ class Pipeline:
                     Page.document_id == doc.id, Page.page_number == number
                 )
             )
-            ads = self.provider.detect_ads(str(path), number)
             with Image.open(path) as image:
                 size = image.size
-            artwork_page = render_page(source, number, self.artwork_dpi) if ads else None
-            candidates = []
-            for advert in ads:
-                box = normalize_bbox(
-                    advert.get("bbox", []),
-                    size,
-                    tuple(advert["image_size"]) if advert.get("image_size") else None,
+            candidates, unstable = self._detect_candidates(path, number, size)
+            for count, runs in unstable:
+                self._add_page_review(
+                    page,
+                    f"detection unstable: box appeared in {count}/{runs} runs",
                 )
-                if box:
-                    candidates.append((box, advert))
+            artwork_page = (
+                render_page(source, number, self.artwork_dpi) if candidates else None
+            )
             boxes = deduplicate_boxes(
                 [box for box, _ in candidates], self.bbox_iou_threshold
             )
@@ -294,6 +294,111 @@ class Pipeline:
                     self._add_review(occurrence, "low confidence")
                 self._add_order_form_reviews(occurrence, page, frame_plausible)
             self.session.commit()
+
+    def _detect_candidates(self, path, page_number, size):
+        if self.vision_consensus_runs == 1:
+            ads = self.provider.detect_ads(str(path), page_number)
+            candidates = []
+            for advert in ads:
+                box = normalize_bbox(
+                    advert.get("bbox", []),
+                    size,
+                    tuple(advert["image_size"]) if advert.get("image_size") else None,
+                )
+                if box:
+                    candidates.append((box, advert))
+            return candidates, []
+
+        runs = [
+            self.provider.detect_ads(str(path), page_number)
+            for _ in range(self.vision_consensus_runs)
+        ]
+        clusters = []
+        for run_index, ads in enumerate(runs):
+            for advert in ads:
+                box = normalize_bbox(
+                    advert.get("bbox", []),
+                    size,
+                    tuple(advert["image_size"]) if advert.get("image_size") else None,
+                )
+                if box is None:
+                    continue
+                cluster = next(
+                    (
+                        item
+                        for item in clusters
+                        if any(
+                            iou(box, member_box) >= self.bbox_iou_threshold
+                            for member_box, _, _ in item["members"]
+                        )
+                    ),
+                    None,
+                )
+                if cluster is None:
+                    cluster = {"members": []}
+                    clusters.append(cluster)
+                existing = next(
+                    (
+                        member
+                        for member in cluster["members"]
+                        if member[2] == run_index
+                    ),
+                    None,
+                )
+                if existing is None or float(advert.get("confidence", 0)) > float(
+                    existing[1].get("confidence", 0)
+                ):
+                    if existing is not None:
+                        cluster["members"].remove(existing)
+                    cluster["members"].append((box, advert, run_index))
+
+        candidates = []
+        unstable = []
+        for cluster in clusters:
+            members = cluster["members"]
+            run_count = len({run_index for _, _, run_index in members})
+            if run_count <= self.vision_consensus_runs / 2:
+                unstable.append((run_count, self.vision_consensus_runs))
+                continue
+            left = round(sum(box.left for box, _, _ in members) / len(members))
+            top = round(sum(box.top for box, _, _ in members) / len(members))
+            right = round(sum(box.right for box, _, _ in members) / len(members))
+            bottom = round(sum(box.bottom for box, _, _ in members) / len(members))
+            box = Box(left, top, right, bottom)
+            average_confidence = sum(
+                float(advert.get("confidence", 0)) for _, advert, _ in members
+            ) / len(members)
+            frequency = run_count / self.vision_consensus_runs
+            confidence_weight = 1 / (self.vision_consensus_runs + 1)
+            merged = {
+                "bbox": [
+                    box.left / size[0] * 1000,
+                    box.top / size[1] * 1000,
+                    box.right / size[0] * 1000,
+                    box.bottom / size[1] * 1000,
+                ],
+                "confidence": (
+                    (1 - confidence_weight) * frequency
+                    + confidence_weight * average_confidence
+                ),
+            }
+            keys = {
+                key
+                for _, advert, _ in members
+                for key, value in advert.items()
+                if key not in {"bbox", "confidence", "image_size"} and value
+            }
+            for key in keys:
+                values = [
+                    advert[key]
+                    for _, advert, _ in members
+                    if advert.get(key)
+                ]
+                merged[key] = max(
+                    dict.fromkeys(values), key=lambda value: values.count(value)
+                )
+            candidates.append((box, merged))
+        return candidates, unstable
 
     @staticmethod
     def _order_form_box_is_plausible(box, page_size):
@@ -501,6 +606,18 @@ class Pipeline:
         )
         if review is None:
             self.session.add(ReviewItem(ad_id=occurrence.id, reason=reason))
+        elif reason not in review.reason.split("; "):
+            review.reason = f"{review.reason}; {reason}"
+
+    def _add_page_review(self, page, reason):
+        review = self.session.scalar(
+            select(ReviewItem).where(
+                ReviewItem.page_id == page.id,
+                ReviewItem.ad_id.is_(None),
+            )
+        )
+        if review is None:
+            self.session.add(ReviewItem(page_id=page.id, reason=reason))
         elif reason not in review.reason.split("; "):
             review.reason = f"{review.reason}; {reason}"
 
