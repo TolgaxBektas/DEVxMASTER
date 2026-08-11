@@ -20,27 +20,42 @@ def page_texts_in_boxes(
     render_dpi: int,
 ) -> list[str]:
     pdf = pdfium.PdfDocument(str(pdf_path))
-    page = pdf[page_number - 1]
-    bounds = [_pdf_box(page, box, render_dpi) for box in boxes]
-    text_page = page.get_textpage()
-    full_text = text_page.get_text_range()
-    characters = [[] for _ in boxes]
-    areas = [box.area for box in boxes]
-    for index in range(text_page.count_chars()):
-        char_left, char_bottom, char_right, char_top = text_page.get_charbox(index)
-        if index >= len(full_text):
-            continue
-        center_x = (char_left + char_right) / 2
-        center_y = (char_bottom + char_top) / 2
-        matches = [
-            i
-            for i, (left, bottom, right, top) in enumerate(bounds)
-            if left <= center_x <= right and bottom <= center_y <= top
-        ]
-        if matches:
-            owner = min(matches, key=lambda i: areas[i])
-            characters[owner].append((index, full_text[index]))
-    return ["".join(char for _, char in sorted(chars)).strip() for chars in characters]
+    try:
+        page = pdf[page_number - 1]
+        try:
+            bounds = [_pdf_box(page, box, render_dpi) for box in boxes]
+            text_page = page.get_textpage()
+            try:
+                full_text = text_page.get_text_range()
+                characters = [[] for _ in boxes]
+                areas = [box.area for box in boxes]
+                for index in range(text_page.count_chars()):
+                    char_left, char_bottom, char_right, char_top = (
+                        text_page.get_charbox(index)
+                    )
+                    if index >= len(full_text):
+                        continue
+                    center_x = (char_left + char_right) / 2
+                    center_y = (char_bottom + char_top) / 2
+                    matches = [
+                        i
+                        for i, (left, bottom, right, top) in enumerate(bounds)
+                        if left <= center_x <= right
+                        and bottom <= center_y <= top
+                    ]
+                    if matches:
+                        owner = min(matches, key=lambda i: areas[i])
+                        characters[owner].append((index, full_text[index]))
+                return [
+                    "".join(char for _, char in sorted(chars)).strip()
+                    for chars in characters
+                ]
+            finally:
+                text_page.close()
+        finally:
+            page.close()
+    finally:
+        pdf.close()
 
 
 def remove_substring_bleed(texts: list[str], page_text: str | None = None) -> list[str]:
