@@ -87,8 +87,9 @@ def _publish_outputs(
             page_size = image.size
         occurrences = []
         for index, occurrence in enumerate(page.ads):
-            crop_key = f"{output_prefix}/ad-{page.page_number:04d}-{index:04d}.png"
+            crop_key = None
             if occurrence.crop_path:
+                crop_key = f"{output_prefix}/ad-{page.page_number:04d}-{index:04d}.png"
                 storage.put(storage.get(occurrence.crop_path), crop_key)
             artwork_key = None
             if occurrence.artwork_path:
@@ -143,21 +144,33 @@ def _page_text(page: Page, pipeline) -> str:
     ).strip()
 
 
+def _restore_missing_renders(document: Document, pipeline, session) -> Document:
+    pages = session.scalars(
+        select(Page).where(Page.document_id == document.id)
+    ).all()
+    if not any(not Path(page.image_path or "").is_file() for page in pages):
+        return document
+    try:
+        source = pipeline.storage.get(f"{document.content_sha256}/source.pdf")
+    except Exception as exc:
+        raise HTTPException(409, "source is not available in storage") from exc
+    return pipeline.reprocess(source, document.filename or "document.pdf")
+
+
 @router.post(
     "/process",
     dependencies=[Depends(require_compat_auth)],
 )
-async def process(
+def process(
     file: UploadFile = File(...),
     output_prefix: str = Form(...),
     session=Depends(session_dependency),
-    pipeline=Depends(pipeline_dependency),
     storage=Depends(storage_dependency),
 ):
     settings = get_settings()
     _validate_output_prefix(output_prefix)
     data = bytearray()
-    while chunk := await file.read(1024 * 1024):
+    while chunk := file.file.read(1024 * 1024):
         data.extend(chunk)
         if len(data) > settings.max_download_bytes:
             raise HTTPException(413, "file too large")
@@ -165,7 +178,9 @@ async def process(
         validate_pdf(bytes(data))
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    pipeline = pipeline_dependency(session)
     document = pipeline.ingest(bytes(data), file.filename or "document.pdf")
+    document = _restore_missing_renders(document, pipeline, session)
     return {
         "pages": _publish_outputs(
             document, output_prefix, storage, session, pipeline

@@ -27,7 +27,12 @@ def require_compat_auth(
     settings = get_settings()
     if settings.auth_disabled:
         return
-    bearer_valid = credentials and credentials.credentials == settings.service_token
-    header_valid = service_token == settings.service_token
+    configured_token = settings.service_token
+    bearer_valid = bool(
+        configured_token
+        and credentials
+        and credentials.credentials == configured_token
+    )
+    header_valid = bool(configured_token and service_token == configured_token)
     if not bearer_valid and not header_valid:
         raise HTTPException(401, "authentication required")

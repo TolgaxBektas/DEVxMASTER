@@ -1,15 +1,14 @@
 from pathlib import Path
 
 import pytest
-from fastapi import Depends
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.api import compat
 from app.api import auth
+from app.api import dependencies
 from app.api.dependencies import (
-    pipeline_dependency,
     session_dependency,
     storage_dependency,
 )
@@ -17,10 +16,8 @@ from app.main import app
 from app.db.base import Base
 from app.models import AdOccurrence, Company, Document, Job, Page, ReviewItem
 from app.core.config import Settings
-from app.services.pipeline import Pipeline
 from app.services.discovery import DiscoveryCrawler
 from app.services.storage import LocalStorage
-from app.services.vision.recorded import RecordedVisionProvider
 
 
 FIXTURE = Path("tests/fixtures/Seniorenpost_Mai_Juni_2026.pdf")
@@ -47,22 +44,13 @@ def compatibility_client(monkeypatch, isolated_db, tmp_path):
     )
     monkeypatch.setattr(compat, "get_settings", lambda: settings)
     monkeypatch.setattr(auth, "get_settings", lambda: settings)
+    monkeypatch.setattr(dependencies, "get_settings", lambda: settings)
 
     def session_override():
         with factory() as session:
             yield session
 
-    def pipeline_override(session=Depends(session_dependency)):
-        return Pipeline(
-            session,
-            RecordedVisionProvider("tests/fixtures/qwen"),
-            storage,
-            render_dpi=12,
-            local_work_dir=tmp_path / "work",
-        )
-
     app.dependency_overrides[session_dependency] = session_override
-    app.dependency_overrides[pipeline_dependency] = pipeline_override
     app.dependency_overrides[storage_dependency] = lambda: storage
     try:
         with TestClient(app) as client:
@@ -142,6 +130,22 @@ def test_compatibility_auth_rejects_missing_and_wrong_tokens(compatibility_clien
     assert missing.status_code == wrong.status_code == 401
 
 
+def test_compatibility_auth_rejects_missing_configured_token(
+    monkeypatch, compatibility_client
+):
+    client, _, _ = compatibility_client
+    monkeypatch.setattr(
+        auth,
+        "get_settings",
+        lambda: Settings(service_token=None, auth_disabled=False),
+    )
+    response = client.post(
+        "/api/v1/discovery/proposals",
+        json={"seed_pages": [], "search_terms": [], "max_results": 1},
+    )
+    assert response.status_code == 401
+
+
 def test_compatibility_auth_accepts_existing_bearer_token(
     monkeypatch, compatibility_client
 ):
@@ -205,7 +209,7 @@ def test_fetch_returns_pdf_and_source_headers(monkeypatch, compatibility_client)
             {
                 "final_url": "https://example.test/final.pdf",
                 "sha256": "abc123",
-                "filename": "../../final\x00report.pdf",
+                "filename": '../../final"\x00report.pdf',
             },
         ),
     )
@@ -221,6 +225,40 @@ def test_fetch_returns_pdf_and_source_headers(monkeypatch, compatibility_client)
     assert response.headers["content-disposition"] == (
         'attachment; filename="finalreport.pdf"'
     )
+
+
+def test_process_returns_no_crop_key_when_occurrence_has_no_crop(
+    compatibility_client,
+):
+    client, factory, _ = compatibility_client
+    first = _upload(client)
+    assert first.status_code == 200, first.text
+    with factory() as session:
+        occurrence = session.scalar(
+            select(AdOccurrence).where(AdOccurrence.crop_path.is_not(None))
+        )
+        occurrence.crop_path = None
+        session.commit()
+    second = _upload(client)
+    assert second.status_code == 200, second.text
+    page_11 = next(page for page in second.json()["pages"] if page["page_number"] == 11)
+    assert any(
+        occurrence["image_key"] is None for occurrence in page_11["occurrences"]
+    )
+
+
+def test_process_recovers_when_render_file_is_missing(compatibility_client):
+    client, factory, _ = compatibility_client
+    first = _upload(client)
+    assert first.status_code == 200, first.text
+    with factory() as session:
+        page = session.scalar(select(Page).where(Page.page_number == 11))
+        Path(page.image_path).unlink()
+    second = _upload(client)
+    assert second.status_code == 200, second.text
+    assert next(
+        page for page in second.json()["pages"] if page["page_number"] == 11
+    )["image_key"]
 
 
 def test_proposals_are_read_only(monkeypatch, compatibility_client):

@@ -94,5 +94,5 @@ def sanitize_filename(filename: str) -> str:
     filename = filename.replace("\\", "/").rsplit("/", 1)[-1]
     filename = "".join(
         character for character in filename if 32 <= ord(character) != 127
-    ).strip(" .")
+    ).replace('"', "").strip(" .")
     return (filename or "source.pdf")[:255]
