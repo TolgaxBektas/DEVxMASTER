@@ -78,7 +78,7 @@ low detector confidence remains a separate `low confidence` review reason.
 
 Coarse 0–1000 bounding boxes and duplicated or clipped glyph copies in source PDFs make text-layer attribution approximate at ad-box boundaries. The page-11 AWO extraction still contains garbled fragments from the source PDF's duplicated text layer.
 
-Authentication requires `SERVICE_TOKEN` in deployed environments. Set `AUTH_DISABLED=true` only for explicit local development. Uploads are streamed and capped before pipeline processing. URL downloads validate every resolved A/AAAA address and every redirect target, including reserved, link-local, unspecified, multicast, and IPv4-mapped addresses. httpx connection pinning is not currently practical here, so a DNS-rebinding race remains a residual risk. Ollama inference is not exercised on this VM because it has no Ollama service or GPU. Discovery does not persist a complete per-request crawl log; malformed pages and dead links are tolerated and candidate download failures are retained on the candidate. Redis queue counters are process-agnostic Redis counters, but alerting and operational dead-letter replay policy remain deployment concerns. S3/MinIO storage is implemented behind the storage interface, while artifact lifecycle/retention policies remain deployment concerns. No OpenAI provider is implemented. Text-layer extraction is deterministic where the PDF has text; image-only ads still depend on the configured vision provider or review. Stage deadlines are cooperative and checked between pages/advertisements; long-running single operations cannot be forcibly interrupted.
+Authentication requires `SERVICE_TOKEN` in deployed environments. Set `AUTH_DISABLED=true` only for explicit local development. Uploads are streamed and capped before pipeline processing. URL downloads validate every resolved A/AAAA address and every redirect target, including reserved, link-local, unspecified, multicast, and IPv4-mapped addresses. httpx connection pinning is not currently practical here, so a DNS-rebinding race remains a residual risk. Ollama inference was exercised against a real `qwen3-vl:4b` on CPU: the provider, availability check, and parser handle real responses, but detection is not deterministic across repeated calls — repeated page-11 runs varied between the correct four regions, duplicated or mislocalized boxes, and misspelled company names, and a non-ad page produced a false positive. The real vision path is therefore usable only with the review queue as a safeguard, and it has not been evaluated on a GPU or across a full document. Discovery does not persist a complete per-request crawl log; malformed pages and dead links are tolerated and candidate download failures are retained on the candidate. Redis queue counters are process-agnostic Redis counters, but alerting and operational dead-letter replay policy remain deployment concerns. S3/MinIO storage is implemented behind the storage interface, while artifact lifecycle/retention policies remain deployment concerns. No OpenAI provider is implemented. Text-layer extraction is deterministic where the PDF has text; image-only ads still depend on the configured vision provider or review. Stage deadlines are cooperative and checked between pages/advertisements; long-running single operations cannot be forcibly interrupted.
 Embedded PDF image extraction is deliberately not used for restored artwork:
 the measured documents compose ads from multiple XObjects and vector content,
 while some ads are vector-only. High-DPI page rendering plus cropping is the
@@ -86,6 +86,11 @@ correctness path. Deskew, transparency, background removal, sharpening, and
 automatic artwork reconstruction are intentionally left out.
 
 ## Changelog
+
+### Real Ollama verification
+
+- Structured requests send `think: false`; Qwen otherwise spends the generation budget on prose and truncates before emitting JSON.
+- Detections accept `bbox` and `bbox_2d`, coerce string coordinates, and drop malformed boxes instead of failing downstream normalization.
 
 ### Pipeline core hardening
 
