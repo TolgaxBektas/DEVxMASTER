@@ -50,14 +50,16 @@ def test_fixture_restoration_accepts_clean_lines_and_refuses_uncertain_ads(tmp_p
     session, document, ads, factory = _run(tmp_path, True)
     manifests = [json.loads(ad.restoration_manifest_json) for ad in ads]
     assert [manifest["edit_status"] for manifest in manifests] == [
-        "applied",
+        "refused",
         "refused",
         "refused",
         "applied",
     ]
-    assert ads[0].restoration_path and ads[3].restoration_path
+    assert ads[0].restoration_path is None
+    assert ads[3].restoration_path
     assert ads[1].restoration_path is None
     assert ads[2].restoration_path is None
+    assert "rendered ink extends" in manifests[0]["cascade_justification"]
     assert "fewer than two communication lines" in manifests[1]["cascade_justification"]
     assert "malformed or overlapping" in manifests[2]["cascade_justification"]
     assert manifests[0]["cascade_level"] == manifests[3]["cascade_level"] == 1
@@ -81,10 +83,10 @@ def test_accepted_proposal_changes_only_recorded_regions_and_preserves_dimension
     tmp_path,
 ):
     session, document, ads, _ = _run(tmp_path, True)
-    manifest = json.loads(ads[0].restoration_manifest_json)
-    original = Image.open(tmp_path / "work" / ads[0].artwork_path)
+    manifest = json.loads(ads[3].restoration_manifest_json)
+    original = Image.open(tmp_path / "work" / ads[3].artwork_path)
     proposal = Image.open(
-        tmp_path / "storage" / ads[0].restoration_path
+        tmp_path / "storage" / ads[3].restoration_path
     )
     assert proposal.size == original.size
     assert proposal.size[0] / proposal.size[1] == original.size[0] / original.size[1]
@@ -104,12 +106,20 @@ def test_accepted_proposal_changes_only_recorded_regions_and_preserves_dimension
     assert manifest["source_regions"]
     assert manifest["destination_regions"]
     assert manifest["background_regions"]
+    background = tuple(manifest["background_source_color"])
+    replacement = tuple(manifest["background_replacement_color"])
     for source, destination in zip(
         manifest["source_regions"], manifest["destination_regions"]
     ):
-        source_pixels = original.crop(tuple(source)).tobytes()
-        destination_pixels = proposal.crop(tuple(destination)).tobytes()
-        assert source_pixels == destination_pixels
+        source_image = original.crop(tuple(source))
+        destination_image = proposal.crop(tuple(destination))
+        for source_pixel, destination_pixel in zip(
+            source_image.getdata(), destination_image.getdata()
+        ):
+            if source_pixel == background:
+                assert destination_pixel == replacement
+            else:
+                assert destination_pixel == source_pixel
     for protected in manifest["protected_regions"]:
         assert original.crop(tuple(protected)).tobytes() == proposal.crop(
             tuple(protected)

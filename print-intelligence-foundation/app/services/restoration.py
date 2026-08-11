@@ -249,6 +249,43 @@ def _changed_region(mask: bytearray, size: tuple[int, int]):
     ]
 
 
+def _has_ink_outside_strip(
+    image: Image.Image,
+    line: TextLine,
+    strip: Box,
+    background,
+    boundary: Box,
+) -> bool:
+    pixels = image.load()
+    height = max(line.box.bottom - line.box.top, 1)
+    left = max(boundary.left, line.box.left - height * 2)
+    right = min(boundary.right, line.box.right + height * 2)
+    top = max(boundary.top, line.box.top - 2)
+    bottom = min(boundary.bottom, line.box.bottom + 2)
+    for y in range(top, bottom):
+        for x in range(left, right):
+            if pixels[x, y] != background and (
+                x < strip.left or x >= strip.right
+            ):
+                return True
+    return False
+
+
+def _paste_ink(
+    destination: Image.Image,
+    source: Image.Image,
+    position: tuple[int, int],
+    background,
+) -> None:
+    destination_pixels = destination.load()
+    source_pixels = source.load()
+    for y in range(source.height):
+        for x in range(source.width):
+            pixel = source_pixels[x, y]
+            if pixel != background:
+                destination_pixels[position[0] + x, position[1] + y] = pixel
+
+
 def propose_level_one(
     pdf_path: str | Path,
     page_number: int,
@@ -415,11 +452,23 @@ def propose_level_one(
         )
 
     first_box, second_box = strips
+    background = colors[0][0]
+    if any(
+        _has_ink_outside_strip(image, line, strip, background, approved_box)
+        for line, strip in zip(selected, strips)
+    ):
+        base_manifest["cascade_justification"] = (
+            "Refused: the rendered ink extends beyond the located line strips, so moving it could clip or leave residue."
+        )
+        return RestorationResult(
+            None,
+            base_manifest,
+            "restoration refused: rendered ink does not fit the line strips",
+        )
     first = artwork.crop((first_box.left, first_box.top, first_box.right, first_box.bottom))
     second = artwork.crop(
         (second_box.left, second_box.top, second_box.right, second_box.bottom)
     )
-    background = colors[0][0]
     mask = _border_color_mask(artwork, background, approved_box)
     replacement = tuple(min(255, channel + 5) for channel in background)
     changed_background = bytearray(len(mask))
@@ -453,8 +502,8 @@ def propose_level_one(
         replacement,
         (second_box.left, second_box.top, second_box.right, second_box.bottom),
     )
-    artwork.paste(second, (first_box.left, first_box.top))
-    artwork.paste(first, (second_box.left, second_box.top))
+    _paste_ink(artwork, second, (first_box.left, first_box.top), background)
+    _paste_ink(artwork, first, (second_box.left, second_box.top), background)
     base_manifest.update(
         {
             "source_regions": [
