@@ -50,6 +50,7 @@ class Pipeline:
         artwork_padding=8,
         artwork_trim_cap=4,
         ocr_provider=None,
+        ocr_confidence_threshold=None,
     ):
         self.session, self.provider, self.storage = session, provider, storage
         self.render_dpi, self.confidence_threshold = render_dpi, confidence_threshold
@@ -63,6 +64,11 @@ class Pipeline:
         self.artwork_padding = artwork_padding
         self.artwork_trim_cap = artwork_trim_cap
         self.ocr_provider = ocr_provider
+        self.ocr_confidence_threshold = (
+            confidence_threshold
+            if ocr_confidence_threshold is None
+            else ocr_confidence_threshold
+        )
         self._form_results: dict[int, FormParseResult] = {}
         self._form_results_source: str | None = None
 
@@ -415,6 +421,15 @@ class Pipeline:
                     }
                     merged, conflicts = merge_form_and_ad_fields(form.fields, fields)
                     data["fields"], data["field_conflicts"] = merged, conflicts
+                    data["provenance"] = {
+                        key: (
+                            "order_form_header"
+                            if key in form.fields and form.fields[key]
+                            else provenance.get(key, "vision")
+                        )
+                        for key, value in merged.items()
+                        if value
+                    }
                     occurrence.is_order_form = True
                     for key, conflict in conflicts.items():
                         self._add_review(
@@ -470,7 +485,7 @@ class Pipeline:
             confidence = float(result.confidence.get(key, 0.0))
             ocr_data["fields"][key] = value
             ocr_data["confidence"][key] = confidence
-            if confidence < self.confidence_threshold:
+            if confidence < self.ocr_confidence_threshold:
                 self._add_review(occurrence, f"low confidence OCR field: {key}")
 
     def _get_form_results(self, source):

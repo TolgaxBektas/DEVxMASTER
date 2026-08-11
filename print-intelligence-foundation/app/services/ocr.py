@@ -96,12 +96,23 @@ class TesseractOCRProvider:
                     lang=self.languages,
                     output_type=pytesseract.Output.DICT,
                 )
-            words = [
-                (text.strip(), float(conf))
-                for text, conf in zip(data["text"], data["conf"])
-                if text.strip() and float(conf) >= 0
-            ]
-            text = " ".join(word for word, _ in words)
+            line_words: dict[tuple[int, int, int], list[str]] = {}
+            words = []
+            for index, (raw_text, raw_conf) in enumerate(
+                zip(data["text"], data["conf"])
+            ):
+                text = raw_text.strip()
+                confidence = float(raw_conf)
+                if not text or confidence < 0:
+                    continue
+                words.append((text, confidence))
+                line_key = (
+                    int(data.get("block_num", [0] * len(data["text"]))[index]),
+                    int(data.get("par_num", [0] * len(data["text"]))[index]),
+                    int(data.get("line_num", [index] * len(data["text"]))[index]),
+                )
+                line_words.setdefault(line_key, []).append(text)
+            text = "\n".join(" ".join(words) for words in line_words.values())
             fields = extract_contact_fields(text).model_dump(exclude_none=True)
             confidence = {
                 key: _field_confidence(key, value, words)

@@ -100,6 +100,82 @@ def test_tesseract_confidence_is_attributed_to_matching_field_words(
     assert result.confidence["email"] == 0.95
 
 
+def test_tesseract_reconstructs_lines_for_addresses(monkeypatch, tmp_path):
+    import pytesseract
+    from PIL import Image
+
+    crop_path = tmp_path / "crop.png"
+    Image.new("RGB", (20, 20), "white").save(crop_path)
+    monkeypatch.setattr(
+        "app.services.ocr.TesseractOCRProvider._ensure_available",
+        lambda self: True,
+    )
+    data = {
+        "text": [
+            "Musterstraße",
+            "1",
+            "12345",
+            "Berlin",
+            "01234",
+            "56789",
+        ],
+        "conf": ["95"] * 6,
+        "block_num": [1] * 6,
+        "par_num": [1] * 6,
+        "line_num": [1, 1, 2, 2, 3, 3],
+    }
+    monkeypatch.setattr(pytesseract, "image_to_data", lambda *a, **k: data)
+    result = TesseractOCRProvider().extract_fields(str(crop_path))
+    assert result.fields["address"] == "Musterstraße 1 12345 Berlin"
+    assert "\n" in result.text
+
+    data["text"] = ["Musterstraße", "1", "12345", "Berlin", "Betreuung"]
+    data["conf"] = ["95"] * 5
+    data["block_num"] = [1] * 5
+    data["par_num"] = [1] * 5
+    data["line_num"] = [1, 1, 2, 2, 3]
+    result = TesseractOCRProvider().extract_fields(str(crop_path))
+    assert result.fields["address"] == "Musterstraße 1 12345 Berlin"
+    assert result.fields["address"] != result.text
+
+
+def test_ocr_threshold_is_separate_from_detector_threshold(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'ocr-threshold.db'}")
+    Base.metadata.create_all(engine)
+    digest = "c" * 64
+    crop = tmp_path / "work" / digest / "crops" / "page_1_0.png"
+    crop.parent.mkdir(parents=True)
+    crop.write_bytes(b"not-an-image")
+    with Session(engine) as session:
+        document = Document(content_sha256=digest, filename="test.pdf")
+        session.add(document)
+        session.flush()
+        occurrence = AdOccurrence(
+            page_id=1,
+            occurrence_key="1,2,3,4",
+            bbox="1,2,3,4",
+            crop_path=f"{digest}/crops/page_1_0.png",
+        )
+        session.add(occurrence)
+        session.flush()
+        pipeline = Pipeline(
+            session,
+            _NoopVision(),
+            LocalStorage(tmp_path / "storage"),
+            confidence_threshold=0.9,
+            ocr_confidence_threshold=0.3,
+            local_work_dir=tmp_path / "work",
+            ocr_provider=RecordedOCRProvider(
+                {"page_1_0.png": OCRResult({"email": "ocr@example.de"}, {"email": 0.4})}
+            ),
+        )
+        fields, provenance = {}, {}
+        pipeline._apply_ocr(fields, provenance, {"fields": fields}, occurrence, document)
+        assert pipeline.confidence_threshold == 0.9
+        assert pipeline.ocr_confidence_threshold == 0.3
+        assert session.scalar(select(ReviewItem).where(ReviewItem.ad_id == occurrence.id)) is None
+
+
 def test_tesseract_missing_binary_skips_without_failing(monkeypatch, tmp_path):
     monkeypatch.setattr("app.services.ocr.shutil.which", lambda _: None)
     result = TesseractOCRProvider().extract_fields(str(tmp_path / "crop.png"))
