@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
+from PIL import Image
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -11,12 +12,11 @@ from app.api.auth import require_compat_auth
 from app.api.dependencies import pipeline_dependency, session_dependency, storage_dependency
 from app.core.config import get_settings
 from app.models import Document, Page
-from app.services.downloader import download_with_metadata
+from app.services.downloader import download_with_metadata, sanitize_filename
 from app.services.discovery import DiscoveryCrawler
 from app.services.ingest import validate_pdf
 from app.services.storage import Storage
-from app.services.text_layer import page_text_in_box
-from app.services.bbox import Box
+from app.services.text_layer import page_text
 
 
 router = APIRouter(prefix="/api/v1", tags=["compatibility"])
@@ -44,9 +44,24 @@ def _validate_output_prefix(value: str) -> str:
     return value
 
 
-def _bbox(value: str) -> dict[str, float]:
+def _bbox(
+    value: str, page_size: tuple[int, int]
+) -> tuple[dict[str, float], dict[str, int]]:
     left, top, right, bottom = (float(item) for item in value.split(","))
-    return {"x1": left, "y1": top, "x2": right, "y2": bottom}
+    page_width, page_height = page_size
+    pixel = {
+        "x": int(left),
+        "y": int(top),
+        "width": int(right - left),
+        "height": int(bottom - top),
+    }
+    normalized = {
+        "x": pixel["x"] / page_width,
+        "y": pixel["y"] / page_height,
+        "width": pixel["width"] / page_width,
+        "height": pixel["height"] / page_height,
+    }
+    return normalized, pixel
 
 
 def _publish_outputs(
@@ -54,6 +69,7 @@ def _publish_outputs(
     output_prefix: str,
     storage: Storage,
     session,
+    pipeline,
 ) -> list[dict]:
     pages = session.scalars(
         select(Page)
@@ -67,6 +83,8 @@ def _publish_outputs(
         if not page_path.is_file():
             raise HTTPException(500, "page render is not available")
         storage.put_file(page_path, page_key)
+        with Image.open(page_path) as image:
+            page_size = image.size
         occurrences = []
         for index, occurrence in enumerate(page.ads):
             crop_key = f"{output_prefix}/ad-{page.page_number:04d}-{index:04d}.png"
@@ -79,9 +97,12 @@ def _publish_outputs(
                 )
                 storage.put(storage.get(occurrence.artwork_path), artwork_key)
             payload = json.loads(occurrence.fields_json or "{}")
+            bbox, pixel_bbox = _bbox(occurrence.bbox, page_size)
             occurrences.append(
                 {
-                    "bbox": _bbox(occurrence.bbox),
+                    "bbox": bbox,
+                    "pixel_bbox": pixel_bbox,
+                    "render_dpi": get_settings().render_dpi,
                     "image_key": crop_key,
                     "confidence": occurrence.confidence,
                     "company": occurrence.company.name if occurrence.company else "",
@@ -92,11 +113,15 @@ def _publish_outputs(
         result.append(
             {
                 "page_number": page.page_number,
-                "text": _page_text(page),
+                    "text": _page_text(page, pipeline),
                 "image_key": page_key,
                 "classification": page.classification or "unknown",
                 "ad_probability": max(
-                    (occurrence.confidence for occurrence in page.ads), default=0.0
+                    _classification_probability(page.classification),
+                    max(
+                        (occurrence.confidence for occurrence in page.ads),
+                        default=0.0,
+                    ),
                 ),
                 "occurrences": occurrences,
             }
@@ -104,18 +129,14 @@ def _publish_outputs(
     return result
 
 
-def _page_text(page: Page) -> str:
-    source_path = Path(page.image_path or "").parent.parent / "source.pdf"
+def _classification_probability(classification: str | None) -> float:
+    return {"ad-page": 1.0, "mixed": 0.5}.get(classification or "", 0.0)
+
+
+def _page_text(page: Page, pipeline) -> str:
+    source_path = pipeline.source_path(page.document.content_sha256)
     if source_path.is_file():
-        try:
-            return page_text_in_box(
-                source_path,
-                page.page_number,
-                Box(0, 0, 10_000, 10_000),
-                get_settings().render_dpi,
-            )
-        except Exception:
-            pass
+        return page_text(source_path, page.page_number)
     return " ".join(
         str(json.loads(occurrence.fields_json or "{}").get("text") or "")
         for occurrence in page.ads
@@ -145,7 +166,11 @@ async def process(
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     document = pipeline.ingest(bytes(data), file.filename or "document.pdf")
-    return {"pages": _publish_outputs(document, output_prefix, storage, session)}
+    return {
+        "pages": _publish_outputs(
+            document, output_prefix, storage, session, pipeline
+        )
+    }
 
 
 @router.post(
@@ -166,7 +191,7 @@ def fetch_source(payload: FetchRequest):
             "X-Source-Url": metadata["final_url"],
             "X-Source-Sha256": metadata["sha256"],
             "Content-Disposition": (
-                f'attachment; filename="{metadata["filename"]}"'
+                f'attachment; filename="{sanitize_filename(metadata["filename"])}"'
             ),
         },
     )
@@ -178,8 +203,7 @@ def fetch_source(payload: FetchRequest):
 )
 def discovery_proposals(payload: DiscoveryProposalsRequest):
     settings = get_settings()
-    crawler = DiscoveryCrawler(
-        session=None,
+    crawler = DiscoveryCrawler.for_proposals(
         max_bytes=settings.max_download_bytes,
         max_depth=settings.discovery_max_depth,
         max_pages=settings.discovery_max_pages,

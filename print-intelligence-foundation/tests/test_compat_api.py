@@ -18,6 +18,7 @@ from app.db.base import Base
 from app.models import AdOccurrence, Company, Document, Job, Page, ReviewItem
 from app.core.config import Settings
 from app.services.pipeline import Pipeline
+from app.services.discovery import DiscoveryCrawler
 from app.services.storage import LocalStorage
 from app.services.vision.recorded import RecordedVisionProvider
 
@@ -99,6 +100,15 @@ def test_process_publishes_distinct_occurrences_and_is_idempotent(
     assert len(set(crop_keys)) == 4
     assert all(key.startswith("tenant/document/") for key in crop_keys)
     assert all(occurrence["restored_artwork_key"] for occurrence in occurrences)
+    for occurrence in occurrences:
+        assert set(occurrence["bbox"]) == {"x", "y", "width", "height"}
+        assert all(0 <= value <= 1 for value in occurrence["bbox"].values())
+        assert set(occurrence["pixel_bbox"]) == {"x", "y", "width", "height"}
+        assert occurrence["render_dpi"] == 12
+    assert page_11["text"]
+    assert page_11["ad_probability"] >= max(
+        occurrence["confidence"] for occurrence in occurrences
+    )
     assert page_11["classification"] in {
         "cover",
         "editorial",
@@ -195,7 +205,7 @@ def test_fetch_returns_pdf_and_source_headers(monkeypatch, compatibility_client)
             {
                 "final_url": "https://example.test/final.pdf",
                 "sha256": "abc123",
-                "filename": "final.pdf",
+                "filename": "../../final\x00report.pdf",
             },
         ),
     )
@@ -208,7 +218,9 @@ def test_fetch_returns_pdf_and_source_headers(monkeypatch, compatibility_client)
     assert response.content == b"%PDF-test"
     assert response.headers["x-source-url"] == "https://example.test/final.pdf"
     assert response.headers["x-source-sha256"] == "abc123"
-    assert response.headers["content-disposition"] == 'attachment; filename="final.pdf"'
+    assert response.headers["content-disposition"] == (
+        'attachment; filename="finalreport.pdf"'
+    )
 
 
 def test_proposals_are_read_only(monkeypatch, compatibility_client):
@@ -238,3 +250,11 @@ def test_proposals_are_read_only(monkeypatch, compatibility_client):
     with factory() as session:
         assert session.query(Document).count() == 0
         assert session.query(Page).count() == 0
+
+
+def test_proposal_crawler_rejects_stateful_operations_without_session():
+    crawler = DiscoveryCrawler.for_proposals()
+    with pytest.raises(
+        RuntimeError, match="stateful discovery operation requires a database session"
+    ):
+        crawler.crawl(None)

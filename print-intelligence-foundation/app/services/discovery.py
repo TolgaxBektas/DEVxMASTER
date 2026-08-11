@@ -47,7 +47,7 @@ def normalize_url(url: str) -> str:
 class DiscoveryCrawler:
     def __init__(
         self,
-        session: Session,
+        session: Session | None,
         max_bytes: int = 50_000_000,
         max_depth: int = 2,
         max_pages: int = 50,
@@ -68,7 +68,17 @@ class DiscoveryCrawler:
         self.queue = queue
         self._last_request: dict[str, float] = {}
 
+    @classmethod
+    def for_proposals(cls, **kwargs):
+        return cls(session=None, **kwargs)
+
+    def _require_session(self) -> Session:
+        if self.session is None:
+            raise RuntimeError("stateful discovery operation requires a database session")
+        return self.session
+
     def crawl(self, source: Source) -> dict[str, int]:
+        session = self._require_session()
         deadline = monotonic() + self.timeout_seconds
         robots = self._robots(source.base_url, deadline)
         links = (
@@ -92,7 +102,7 @@ class DiscoveryCrawler:
             else:
                 skipped += 1
         source.last_crawled_at = datetime.now(timezone.utc)
-        self.session.commit()
+        session.commit()
         return {"discovered": discovered, "skipped": skipped}
 
     def propose(
@@ -144,10 +154,11 @@ class DiscoveryCrawler:
         return proposals
 
     def process_candidate(self, candidate: DiscoveredCandidate) -> Document:
+        session = self._require_session()
         try:
             data = download(candidate.url, self.max_bytes)
             digest = sha256(data)
-            existing = self.session.scalar(
+            existing = session.scalar(
                 select(Document).where(Document.content_sha256 == digest)
             )
             if existing:
@@ -155,24 +166,25 @@ class DiscoveryCrawler:
                 candidate.document_id = existing.id
                 if self._document_complete(existing.id):
                     candidate.state = "skipped"
-                    self.session.commit()
+                    session.commit()
                     return existing
             settings = get_settings()
-            document = make_pipeline(self.session, settings).ingest(
+            document = make_pipeline(session, settings).ingest(
                 data, source_url=candidate.url
             )
             candidate.content_sha256 = digest
             candidate.document_id = document.id
             candidate.state = "ingested"
-            self.session.commit()
+            session.commit()
             return document
         except Exception as exc:
             candidate.state, candidate.error = "failed", str(exc)
-            self.session.commit()
+            session.commit()
             raise
 
     def _document_complete(self, document_id: int) -> bool:
-        jobs = self.session.scalars(
+        session = self._require_session()
+        jobs = session.scalars(
             select(Job).where(Job.document_id == document_id)
         ).all()
         states = {job.stage: job.state for job in jobs}
@@ -182,8 +194,9 @@ class DiscoveryCrawler:
         )
 
     def _candidate(self, source: Source, url: str):
+        session = self._require_session()
         normalized = normalize_url(url)
-        candidate = self.session.scalar(
+        candidate = session.scalar(
             select(DiscoveredCandidate).where(
                 DiscoveredCandidate.normalized_url == normalized
             )
@@ -193,8 +206,8 @@ class DiscoveryCrawler:
         candidate = DiscoveredCandidate(
             source_id=source.id, url=url, normalized_url=normalized
         )
-        self.session.add(candidate)
-        self.session.flush()
+        session.add(candidate)
+        session.flush()
         return candidate, True
 
     def _request(self, url: str, deadline: float):

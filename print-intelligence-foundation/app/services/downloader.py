@@ -86,5 +86,13 @@ def download_with_metadata(url: str, max_bytes: int = 50_000_000):
     return data, {
         "final_url": final_url,
         "sha256": sha256(data),
-        "filename": filename or "source.pdf",
+        "filename": sanitize_filename(filename),
     }
+
+
+def sanitize_filename(filename: str) -> str:
+    filename = filename.replace("\\", "/").rsplit("/", 1)[-1]
+    filename = "".join(
+        character for character in filename if 32 <= ord(character) != 127
+    ).strip(" .")
+    return (filename or "source.pdf")[:255]

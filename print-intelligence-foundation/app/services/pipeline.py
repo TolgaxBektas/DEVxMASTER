@@ -60,6 +60,9 @@ class Pipeline:
         self._form_results: dict[int, FormParseResult] = {}
         self._form_results_source: str | None = None
 
+    def source_path(self, digest: str) -> Path:
+        return self.local_work_dir / digest / "source.pdf"
+
     def _run(self, document_id, stage, action, force=False):
         job = get_or_create(self.session, document_id, stage, self.max_attempts)
         if force:
@@ -100,7 +103,7 @@ class Pipeline:
                     raise
         local_root = self.local_work_dir / digest
         local_root.mkdir(parents=True, exist_ok=True)
-        source = local_root / "source.pdf"
+        source = self.source_path(digest)
         source.write_bytes(pdf)
         self.storage.put(pdf, f"{digest}/source.pdf")
         self._run(doc.id, "download", lambda: None, force)
