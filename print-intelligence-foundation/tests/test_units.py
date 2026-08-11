@@ -4,6 +4,7 @@ from app.services.dedupe import normalize_name, contact_key
 from app.services.extraction import extract_contact_fields
 from app.services.discovery import discover_pdf_links
 from app.services.text_layer import remove_substring_bleed
+from app.services.vision.ollama import OllamaVisionProvider
 
 
 def test_qwen_shapes():
@@ -18,6 +19,49 @@ def test_qwen_shapes():
         '{"advertisements":[{"company_name":"A"}, {"company_name":"B"}'
     ) == [{"company_name": "A"}, {"company_name": "B"}]
     assert parse_qwen_response("{'a': 1,}") == {"a": 1}
+
+
+def test_ollama_request_disables_thinking_for_structured_output(monkeypatch, tmp_path):
+    image = tmp_path / "image.png"
+    image.write_bytes(b"image")
+    captured = {}
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"message": {"content": '{"a": 1}'}}
+
+    def post(url, json, timeout):
+        captured.update(json)
+        return Response()
+
+    monkeypatch.setattr("app.services.vision.ollama.httpx.post", post)
+    result = OllamaVisionProvider("http://ollama", "qwen3-vl:4b")._call(
+        "Return JSON", str(image)
+    )
+    assert captured["think"] is False
+    assert result["message"]["content"] == '{"a": 1}'
+
+
+def test_ollama_detection_canonicalizes_bbox_variants(monkeypatch):
+    provider = OllamaVisionProvider("http://ollama", "qwen3-vl:4b")
+    monkeypatch.setattr(
+        provider,
+        "_call",
+        lambda prompt, image_path: {
+            "message": {
+                "content": (
+                    '[{"company_name":"A","bbox_2d":[10,"20",30,40]},'
+                    '{"company_name":"bad","bbox":["x",1,2,3]}]'
+                )
+            }
+        },
+    )
+    assert provider.detect_ads("image.png", 1) == [
+        {"company_name": "A", "bbox": [10.0, 20.0, 30.0, 40.0]}
+    ]
 
 
 def test_bbox_and_overlap():
