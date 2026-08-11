@@ -1,12 +1,39 @@
 from dataclasses import dataclass
 import logging
 from pathlib import Path
+import re
 import shutil
 from typing import Protocol
 
 from app.services.extraction import extract_contact_fields
 
 logger = logging.getLogger(__name__)
+
+
+def _match_value(field: str, value: str) -> str:
+    if field in {"phone", "raw_phone"}:
+        return re.sub(r"\D", "", value)
+    if field in {"email", "domain"}:
+        return re.sub(r"[^a-z0-9@._+-]", "", value.casefold())
+    return re.sub(r"\s+", " ", value.casefold()).strip()
+
+
+def _field_confidence(
+    field: str, value: str, words: list[tuple[str, float]]
+) -> float:
+    target = _match_value(field, value)
+    if not target:
+        return 0.0
+    for start in range(len(words)):
+        for end in range(start + 1, len(words) + 1):
+            candidate = _match_value(
+                field, " ".join(word for word, _ in words[start:end])
+            )
+            if candidate == target:
+                return sum(confidence for _, confidence in words[start:end]) / (
+                    len(words[start:end]) * 100
+                )
+    return 0.0
 
 
 @dataclass(frozen=True)
@@ -77,8 +104,8 @@ class TesseractOCRProvider:
             text = " ".join(word for word, _ in words)
             fields = extract_contact_fields(text).model_dump(exclude_none=True)
             confidence = {
-                key: sum(conf for _, conf in words) / len(words) / 100
-                for key in fields
+                key: _field_confidence(key, value, words)
+                for key, value in fields.items()
             }
             return OCRResult(fields, confidence, text)
         except (OSError, RuntimeError, ValueError) as exc:

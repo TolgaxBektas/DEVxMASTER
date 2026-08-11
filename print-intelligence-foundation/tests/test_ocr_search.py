@@ -45,23 +45,59 @@ def test_ocr_fills_only_empty_fields_and_records_provenance(tmp_path):
                 {
                     "page_1_0.png": OCRResult(
                         {"phone": "999", "email": "ocr@example.de"},
-                        {"phone": 0.95, "email": 0.4},
+                        {"phone": 0.4, "email": 0.95},
                     )
                 }
             ),
         )
-        fields = {"phone": "111"}
-        provenance = {"phone": "vision"}
+        fields = {"address": "existing"}
+        provenance = {"address": "vision"}
         data = {"fields": fields}
         pipeline._apply_ocr(fields, provenance, data, occurrence, document)
-        assert fields == {"phone": "111", "email": "ocr@example.de"}
-        assert provenance == {"phone": "vision", "email": "ocr"}
-        assert data["ocr"]["confidence"]["email"] == 0.4
+        assert fields == {
+            "address": "existing",
+            "phone": "999",
+            "email": "ocr@example.de",
+        }
+        assert provenance == {
+            "address": "vision",
+            "phone": "ocr",
+            "email": "ocr",
+        }
+        assert data["ocr"]["confidence"]["email"] == 0.95
         review = session.scalar(
             select(ReviewItem).where(ReviewItem.ad_id == occurrence.id)
         )
         assert review is not None
-        assert "low confidence OCR field: email" in review.reason
+        assert "low confidence OCR field: phone" in review.reason
+        assert "low confidence OCR field: email" not in review.reason
+
+
+def test_tesseract_confidence_is_attributed_to_matching_field_words(
+    monkeypatch, tmp_path
+):
+    import pytesseract
+    from PIL import Image
+
+    crop_path = tmp_path / "crop.png"
+    Image.new("RGB", (20, 20), "white").save(crop_path)
+    monkeypatch.setattr(
+        "app.services.ocr.TesseractOCRProvider._ensure_available",
+        lambda self: True,
+    )
+    monkeypatch.setattr(
+        pytesseract,
+        "image_to_data",
+        lambda *args, **kwargs: {
+            "text": ["01234", "56789", "good@example.de"],
+            "conf": ["20", "20", "95"],
+        },
+    )
+    result = TesseractOCRProvider().extract_fields(str(crop_path))
+    assert result.fields["phone"] == "0123456789"
+    assert result.fields["email"] == "good@example.de"
+    assert result.confidence["phone"] == 0.2
+    assert result.confidence["email"] == 0.95
 
 
 def test_tesseract_missing_binary_skips_without_failing(monkeypatch, tmp_path):
@@ -179,6 +215,7 @@ def test_search_results_are_ssrf_filtered_bounded_and_read_only(monkeypatch):
             "url": "https://good.test/one.pdf",
             "score": 1.0,
             "found_on": None,
+            "origin": {"type": "search", "query": "brochure"},
             "discovery": "search",
         }
     ]

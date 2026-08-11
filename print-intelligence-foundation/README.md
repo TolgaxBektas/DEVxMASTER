@@ -12,6 +12,17 @@ Pipeline: discover → download → deduplicate → render → classify → dete
 
 Copy `.env.example` to `.env`. Configuration includes `DATABASE_URL`, `STORAGE_BACKEND`, `STORAGE_PATH`, `LOCAL_WORK_DIR`, `S3_ENDPOINT_URL`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_REGION`, `VISION_PROVIDER=recorded|ollama`, `VISION_RECORDED_DIR`, `OLLAMA_URL`, `OLLAMA_MODEL`, `OLLAMA_TIMEOUT`, `RENDER_DPI`, `ARTWORK_DPI`, `ARTWORK_PADDING`, `ARTWORK_TRIM_CAP`, `CONFIDENCE_THRESHOLD`, `MAX_DOWNLOAD_BYTES`, `BBOX_IOU_THRESHOLD`, `MAX_JOB_ATTEMPTS`, `STAGE_TIMEOUT_SECONDS`, `REDIS_URL`, and `REDIS_QUEUE`.
 
+OCR fallback is enabled by default with `OCR_ENABLED=true`. Set
+`OCR_ENABLED=false` to disable it, or change `OCR_LANGUAGES` from the default
+`deu+eng`; `OCR_CONFIDENCE_THRESHOLD` controls review routing for OCR-derived
+fields. OCR requires the Tesseract binary and both language-data packages;
+missing local dependencies are logged and skipped without failing ingestion.
+Search-backed proposals are disabled unless `SEARXNG_URL` is configured.
+`SEARCH_PROVIDER=auto` (the default) enables the SearXNG-compatible provider
+when that URL is present; `SEARCH_PROVIDER=none` explicitly disables it.
+Search results remain read-only proposals and are subject to the existing SSRF,
+robots, rate, and crawl-bound limits.
+
 On the Mac, install Docker Desktop and Ollama, pull `qwen3-vl:4b` (or 8b), set `VISION_PROVIDER=ollama`, then run `docker compose up --build`. Ollama stays outside Compose at `http://host.docker.internal:11434`. The worker can also be run directly with `.venv/bin/python -m app.workers.worker`.
 
 ```bash
@@ -25,7 +36,10 @@ VISION_PROVIDER=recorded .venv/bin/pytest -q
 Register an authenticated source with `POST /discovery/sources` using
 `{"base_url":"https://example.invalid/","label":"Example","crawl_strategy":"sitemap"}`.
 The sitemap strategy starts at `/sitemap.xml` and follows bounded sitemap indexes.
-The HTML strategy follows same-host links to a bounded depth and page count. Both
+The HTML strategy follows same-host links to a bounded depth and page count. An
+optional SearXNG provider can add Germany-wide search-result pages when
+`SEARXNG_URL` is configured; search hits retain their query origin and are
+validated before any fetch or proposal response. Both
 strategies persist normalized PDF candidates, skip candidates already known by URL,
 honour `robots.txt`, enforce the SSRF URL checks, and apply
 `DISCOVERY_REQUEST_DELAY` between requests to a host. Trigger a crawl with
