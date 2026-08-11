@@ -22,6 +22,7 @@ from app.services.order_forms import (
 )
 from app.services.ocr import OCRResult
 from app.services.render import render_page, render_pdf
+from app.services.restoration import propose_level_one
 from app.services.storage import sha256
 from app.services.text_layer import (
     page_texts_in_boxes,
@@ -52,6 +53,7 @@ class Pipeline:
         ocr_provider=None,
         ocr_confidence_threshold=None,
         vision_consensus_runs=1,
+        restoration_enabled=False,
     ):
         self.session, self.provider, self.storage = session, provider, storage
         self.render_dpi, self.confidence_threshold = render_dpi, confidence_threshold
@@ -71,6 +73,7 @@ class Pipeline:
             else ocr_confidence_threshold
         )
         self.vision_consensus_runs = max(1, int(vision_consensus_runs))
+        self.restoration_enabled = restoration_enabled
         self._form_results: dict[int, FormParseResult] = {}
         self._form_results_source: str | None = None
 
@@ -238,9 +241,43 @@ class Pipeline:
                             )
                         )
                     ):
-                        self._write_artwork(
+                        artwork_output, padded_box = self._write_artwork(
                             existing, artwork_page, box, size, digest, number, index
                         )
+                        self._maybe_write_restoration(
+                            existing,
+                            source,
+                            number,
+                            box,
+                            size,
+                            artwork_output,
+                            padded_box,
+                            digest,
+                            index,
+                            page,
+                        )
+                    elif self.restoration_enabled and artwork_page is not None:
+                        artwork_output = (
+                            local_root
+                            / "artwork"
+                            / f"page_{number}_{index}.png"
+                        )
+                        if artwork_output.is_file():
+                            padded_box = self._artwork_padded_box(
+                                box, size, artwork_page.size
+                            )
+                            self._maybe_write_restoration(
+                                existing,
+                                source,
+                                number,
+                                box,
+                                size,
+                                artwork_output,
+                                padded_box,
+                                digest,
+                                index,
+                                page,
+                            )
                     self._add_order_form_reviews(
                         existing, page, frame_plausible
                     )
@@ -284,8 +321,20 @@ class Pipeline:
                         and frame_plausible
                     )
                 ):
-                    self._write_artwork(
+                    artwork_output, padded_box = self._write_artwork(
                         occurrence, artwork_page, box, size, digest, number, index
+                    )
+                    self._maybe_write_restoration(
+                        occurrence,
+                        source,
+                        number,
+                        box,
+                        size,
+                        artwork_output,
+                        padded_box,
+                        digest,
+                        index,
+                        page,
                     )
                 company_name = fields.get("company") or advert.get("company_name")
                 if company_name and not page.is_order_form:
@@ -477,6 +526,67 @@ class Pipeline:
                 "trim_cap": self.artwork_trim_cap,
             }
         )
+        return output, padded_box
+
+    def _artwork_padded_box(self, box, detector_size, artwork_size):
+        scale_x = artwork_size[0] / detector_size[0]
+        scale_y = artwork_size[1] / detector_size[1]
+        artwork_box = Box(
+            round(box.left * scale_x),
+            round(box.top * scale_y),
+            round(box.right * scale_x),
+            round(box.bottom * scale_y),
+        )
+        return Box(
+            max(0, artwork_box.left - self.artwork_padding),
+            max(0, artwork_box.top - self.artwork_padding),
+            min(artwork_size[0], artwork_box.right + self.artwork_padding),
+            min(artwork_size[1], artwork_box.bottom + self.artwork_padding),
+        )
+
+    def _maybe_write_restoration(
+        self,
+        occurrence,
+        source,
+        page_number,
+        box,
+        detector_size,
+        artwork_output,
+        padded_box,
+        digest,
+        index,
+        page,
+    ):
+        if not self.restoration_enabled:
+            return
+        result = propose_level_one(
+            source,
+            page_number,
+            box,
+            self.render_dpi,
+            artwork_output,
+            (padded_box.left, padded_box.top),
+            self.artwork_dpi,
+        )
+        occurrence.restoration_manifest_json = json.dumps(
+            result.manifest, ensure_ascii=False
+        )
+        if result.image is not None:
+            output = (
+                self.local_work_dir
+                / digest
+                / "restoration"
+                / f"page_{page_number}_{index}.png"
+            )
+            output.parent.mkdir(parents=True, exist_ok=True)
+            result.image.save(output, format="PNG", optimize=False)
+            occurrence.restoration_path = self.storage.put_file(
+                output, f"{digest}/restoration/page_{page_number}_{index}.png"
+            )
+        else:
+            occurrence.restoration_path = None
+        if result.review_reason:
+            self._add_review(occurrence, result.review_reason)
 
     def _extract_missing(self, doc, source, deadline):
         for page in self.session.scalars(

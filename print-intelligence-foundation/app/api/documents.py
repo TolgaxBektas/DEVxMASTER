@@ -110,6 +110,19 @@ def document(document_id: int, session=Depends(session_dependency)):
                                 a.artwork_metadata_json or "{}"
                             ),
                         },
+                        **(
+                            {
+                                "restoration": {
+                                    "path": a.restoration_path,
+                                    "manifest": json.loads(
+                                        a.restoration_manifest_json or "{}"
+                                    ),
+                                }
+                            }
+                            if a.restoration_path
+                            or json.loads(a.restoration_manifest_json or "{}")
+                            else {}
+                        ),
                     }
                     for a in p.ads
                 ],
@@ -135,3 +148,36 @@ def artwork(
         raise HTTPException(404, "restored artwork is not available")
     content = storage.get(occurrence.artwork_path)
     return Response(content=content, media_type="image/png")
+
+
+@router.get("/{document_id}/ads/{ad_id}/restoration")
+def restoration(
+    document_id: int,
+    ad_id: int,
+    session=Depends(session_dependency),
+    storage=Depends(storage_dependency),
+):
+    occurrence = session.scalar(
+        select(AdOccurrence)
+        .join(Page)
+        .where(AdOccurrence.id == ad_id, Page.document_id == document_id)
+    )
+    if not occurrence or not occurrence.restoration_path:
+        raise HTTPException(404, "restoration proposal is not available")
+    return Response(content=storage.get(occurrence.restoration_path), media_type="image/png")
+
+
+@router.get("/{document_id}/ads/{ad_id}/restoration/manifest")
+def restoration_manifest(
+    document_id: int,
+    ad_id: int,
+    session=Depends(session_dependency),
+):
+    occurrence = session.scalar(
+        select(AdOccurrence)
+        .join(Page)
+        .where(AdOccurrence.id == ad_id, Page.document_id == document_id)
+    )
+    if not occurrence:
+        raise HTTPException(404)
+    return json.loads(occurrence.restoration_manifest_json or "{}")

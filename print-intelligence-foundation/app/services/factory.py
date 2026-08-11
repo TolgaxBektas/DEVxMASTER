@@ -64,4 +64,5 @@ def make_pipeline(session, settings: Settings):
         make_ocr_provider(settings),
         settings.ocr_confidence_threshold,
         settings.vision_consensus_runs,
+        settings.restoration_enabled,
     )

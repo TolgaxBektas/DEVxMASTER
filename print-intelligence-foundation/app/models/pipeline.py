@@ -66,6 +66,8 @@ class AdOccurrence(Base):
     artwork_path: Mapped[str | None] = mapped_column(Text)
     artwork_trimmed_path: Mapped[str | None] = mapped_column(Text)
     artwork_metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    restoration_path: Mapped[str | None] = mapped_column(Text)
+    restoration_manifest_json: Mapped[str] = mapped_column(Text, default="{}")
     is_order_form: Mapped[bool] = mapped_column(default=False)
     company_id: Mapped[int | None] = mapped_column(ForeignKey("companies.id"))
     fields_json: Mapped[str] = mapped_column(Text, default="{}")
