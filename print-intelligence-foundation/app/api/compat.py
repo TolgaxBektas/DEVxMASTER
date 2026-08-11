@@ -113,7 +113,7 @@ def _publish_outputs(
         result.append(
             {
                 "page_number": page.page_number,
-                    "text": _page_text(page, pipeline),
+                "text": _page_text(page, pipeline),
                 "image_key": page_key,
                 "classification": page.classification or "unknown",
                 "ad_probability": max(
