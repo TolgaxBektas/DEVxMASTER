@@ -10,7 +10,7 @@ Pipeline: discover → download → deduplicate → render → classify → dete
 
 ## Configuration and running
 
-Copy `.env.example` to `.env`. Configuration includes `DATABASE_URL`, `STORAGE_BACKEND`, `STORAGE_PATH`, `LOCAL_WORK_DIR`, `S3_ENDPOINT_URL`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_REGION`, `VISION_PROVIDER=recorded|ollama`, `VISION_RECORDED_DIR`, `OLLAMA_URL`, `OLLAMA_MODEL`, `OLLAMA_TIMEOUT`, `VISION_CONSENSUS_RUNS`, `RENDER_DPI`, `ARTWORK_DPI`, `ARTWORK_PADDING`, `ARTWORK_TRIM_CAP`, `CONFIDENCE_THRESHOLD`, `MAX_DOWNLOAD_BYTES`, `BBOX_IOU_THRESHOLD`, `MAX_JOB_ATTEMPTS`, `STAGE_TIMEOUT_SECONDS`, `REDIS_URL`, and `REDIS_QUEUE`.
+Copy `.env.example` to `.env`. Configuration includes `DATABASE_URL`, `STORAGE_BACKEND`, `STORAGE_PATH`, `LOCAL_WORK_DIR`, `S3_ENDPOINT_URL`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_REGION`, `VISION_PROVIDER=recorded|ollama`, `VISION_RECORDED_DIR`, `OLLAMA_URL`, `OLLAMA_MODEL`, `OLLAMA_TIMEOUT`, `VISION_CONSENSUS_RUNS`, `RESTORATION_ENABLED`, `RENDER_DPI`, `ARTWORK_DPI`, `ARTWORK_PADDING`, `ARTWORK_TRIM_CAP`, `CONFIDENCE_THRESHOLD`, `MAX_DOWNLOAD_BYTES`, `BBOX_IOU_THRESHOLD`, `MAX_JOB_ATTEMPTS`, `STAGE_TIMEOUT_SECONDS`, `REDIS_URL`, and `REDIS_QUEUE`.
 
 `VISION_CONSENSUS_RUNS` defaults to `1`, preserving the existing single-run
 behaviour. Values above one run vision detection repeatedly and retain only
@@ -88,7 +88,15 @@ default), cropped with `ARTWORK_PADDING`, and stored as lossless PNG. A
 conservative trimmed copy is stored separately; the untrimmed copy is retained.
 `ARTWORK_TRIM_CAP` is the maximum number of near-white edge pixels removed per
 side, not the amount of whitespace to preserve.
+
+`RESTORATION_ENABLED` defaults to `false`. When enabled, the pipeline emits a
+separate, pixel-only Level 1 restoration proposal and manifest; it never
+replaces the existing artwork. Proposals are review-gated, and uncertain
+text-layer, background, or forbidden-content findings are refused rather than
+written as a clean result.
 Fetch it with `GET /documents/{document_id}/ads/{ad_id}/artwork`. Restoration
+proposals are available with `GET /documents/{document_id}/ads/{ad_id}/restoration`
+and their manifest with the corresponding `/manifest` endpoint. Restoration
 does not upscale source detail, remove backgrounds, sharpen, or add
 transparency. Order-form artwork is only exported when the framed advert has
 sufficient detector confidence and passes a cheap geometric plausibility check.
