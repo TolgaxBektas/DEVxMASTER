@@ -1,14 +1,15 @@
 import json
 from pathlib import Path
 
-from PIL import Image, ImageChops
+from PIL import Image, ImageChops, ImageDraw
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
+from app.services.bbox import Box
 from app.models import AdOccurrence, Page, ReviewItem
 from app.services.pipeline import Pipeline
-from app.services.restoration import _is_ink
+from app.services.restoration import _is_ink, verify_proposal
 from app.services.storage import LocalStorage
 from app.services.vision.recorded import RecordedVisionProvider
 from tests.test_order_forms import _pdf
@@ -80,6 +81,11 @@ def test_fixture_restoration_accepts_clean_lines_and_refuses_uncertain_ads(tmp_p
     assert "malformed or overlapping" in manifests[2]["cascade_justification"]
     assert manifests[0]["cascade_level"] == manifests[3]["cascade_level"] == 1
     assert manifests[3]["geometry_quality"]["status"] == "assessed"
+    assert manifests[3]["verification"]["status"] == "passed"
+    assert all(
+        manifest["verification"]["status"] == "not_assessed"
+        for manifest in manifests[:3]
+    )
     assert all(manifest["review_status"] == "pending" for manifest in manifests)
     assert all(
         "qr_detection_unavailable"
@@ -205,6 +211,65 @@ def test_accepted_proposal_changes_only_recorded_regions_and_preserves_dimension
                 assert proposal_pixels[x, y] == replacement
             elif _is_ink(source_pixel, background) and not in_edited_region:
                 assert proposal_pixels[x, y] == source_pixel
+    session.close()
+
+
+def test_independent_verifier_rejects_corrupted_proposals(tmp_path):
+    session, _, ads, _ = _run(tmp_path, True)
+    manifest = json.loads(ads[3].restoration_manifest_json)
+    original = Image.open(tmp_path / "work" / ads[3].artwork_path).convert("RGB")
+    proposal = Image.open(tmp_path / "storage" / ads[3].restoration_path).convert(
+        "RGB"
+    )
+    boundary = manifest["ad_boundary"]
+    outside = proposal.copy()
+    outside.putpixel((0, 0), (1, 2, 3))
+    result = verify_proposal(
+        FIXTURE,
+        11,
+        Box(*[value / 2.5 for value in boundary]),
+        120,
+        tmp_path / "work" / ads[3].artwork_path,
+        outside,
+        (0, 0),
+        300,
+        manifest,
+    )
+    assert result["status"] == "failed"
+    assert result["checks"][1]["name"] == "approved_boundary"
+    assert result["checks"][1]["status"] == "failed"
+    dropped_phone = proposal.copy()
+    ImageDraw.Draw(dropped_phone).rectangle(
+        tuple(manifest["destination_regions"][0]), fill=tuple(
+            manifest["background_replacement_color"]
+        )
+    )
+    result = verify_proposal(
+        FIXTURE, 11, Box(*boundary), 120,
+        tmp_path / "work" / ads[3].artwork_path, dropped_phone,
+        (0, 0), 300, manifest,
+    )
+    assert result["status"] == "failed"
+    assert result["checks"][2]["name"] == "text_anchors"
+    duplicated = proposal.copy()
+    source_region = tuple(manifest["source_regions"][0])
+    duplicated.paste(original.crop(source_region), source_region[:2])
+    result = verify_proposal(
+        FIXTURE, 11, Box(*boundary), 120,
+        tmp_path / "work" / ads[3].artwork_path, duplicated,
+        (0, 0), 300, manifest,
+    )
+    assert result["status"] == "failed"
+    assert result["checks"][4]["name"] == "duplicated_content"
+    aspect_changed = proposal.resize((proposal.width + 1, proposal.height))
+    result = verify_proposal(
+        FIXTURE, 11, Box(*boundary), 120,
+        tmp_path / "work" / ads[3].artwork_path, aspect_changed,
+        (0, 0), 300, manifest,
+    )
+    assert result["status"] == "failed"
+    assert result["checks"][0]["name"] == "dimensions"
+    assert original.size == proposal.size
     session.close()
 
 
