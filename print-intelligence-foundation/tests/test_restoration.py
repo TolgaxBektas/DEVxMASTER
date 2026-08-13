@@ -11,9 +11,24 @@ from app.services.pipeline import Pipeline
 from app.services.restoration import _is_ink
 from app.services.storage import LocalStorage
 from app.services.vision.recorded import RecordedVisionProvider
+from tests.test_order_forms import _pdf
 
 
 FIXTURE = Path("tests/fixtures/Seniorenpost_Mai_Juni_2026.pdf")
+
+
+class _LowConfidenceOrderFormProvider:
+    def detect_ads(self, _image_path, _page_number):
+        return [
+            {
+                "company_name": "Synthetic Bau GmbH",
+                "bbox": [40, 120, 560, 680],
+                "confidence": 0.1,
+            }
+        ]
+
+    def extract_fields(self, _crop_path):
+        return {"company": "Synthetic Bau GmbH"}
 
 
 def _run(tmp_path, enabled):
@@ -78,6 +93,52 @@ def test_fixture_restoration_accepts_clean_lines_and_refuses_uncertain_ads(tmp_p
         ]
         assert any("QR detection is unavailable" in reason for reason in reasons)
     session.close()
+
+
+def test_existing_order_form_occurrence_respects_restoration_gate(tmp_path):
+    pdf = _pdf(
+        [
+            "PUBLIKATIONSVORSCHLAG",
+            "FIRMA : Synthetic Bau GmbH",
+            "STRASSE : Teststrasse 1",
+            "PLZ/ORT : 12345 Teststadt",
+            "ASP. : Frau Test",
+            "TEL : 01234 56789",
+            "E-MAIL : customer@example.de",
+        ]
+    )
+    engine = create_engine(f"sqlite:///{tmp_path / 'order-form.db'}")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with factory() as session:
+        pipeline = Pipeline(
+            session,
+            _LowConfidenceOrderFormProvider(),
+            LocalStorage(tmp_path / "storage"),
+            render_dpi=36,
+            artwork_dpi=72,
+            local_work_dir=tmp_path / "work",
+            restoration_enabled=True,
+        )
+        document = pipeline.ingest(pdf, filename="order-form.pdf")
+        pipeline.reprocess(pdf, filename="order-form.pdf")
+        occurrence = session.scalar(
+            select(AdOccurrence)
+            .join(Page)
+            .where(Page.document_id == document.id)
+        )
+        manifest = json.loads(occurrence.restoration_manifest_json)
+        assert occurrence.artwork_path is None
+        assert occurrence.restoration_path is None
+        assert "order-form artwork gate failed" in manifest["cascade_justification"]
+        assert "low confidence" in manifest["cascade_justification"]
+        assert manifest["geometry_quality"]["status"] == "not_assessed"
+        assert {
+            finding["rule"] for finding in manifest["findings"]
+        } == {"qr_detection_unavailable"}
+        assert not (
+            tmp_path / "work" / document.content_sha256 / "restoration_source"
+        ).exists()
 
 
 def test_accepted_proposal_changes_only_recorded_regions_and_preserves_dimensions(

@@ -97,7 +97,11 @@ written as a clean result.
 Fetch it with `GET /documents/{document_id}/ads/{ad_id}/artwork`. Restoration
 proposals are available with `GET /documents/{document_id}/ads/{ad_id}/restoration`
 and their manifest with the corresponding `/manifest` endpoint. Restoration
-does not upscale source detail, remove backgrounds, sharpen, or add
+manifests always include `geometry_quality` and a
+`qr_detection_unavailable` finding. Refused proposals mark geometry quality as
+`not_assessed` and retain the QR capability finding with
+`action: "review_required"`; these fields do not imply that either analysis ran.
+Restoration does not upscale source detail, remove backgrounds, sharpen, or add
 transparency. Order-form artwork is only exported when the framed advert has
 sufficient detector confidence and passes a cheap geometric plausibility check.
 We do not detect or prove the visual advert frame; a failed geometric check is
