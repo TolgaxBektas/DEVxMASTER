@@ -1,5 +1,6 @@
 from pathlib import Path
-import pypdfium2 as pdfium
+
+from app.services.pdfium import open_document
 from app.services.bbox import Box
 
 
@@ -19,8 +20,7 @@ def page_texts_in_boxes(
     boxes: list[Box],
     render_dpi: int,
 ) -> list[str]:
-    pdf = pdfium.PdfDocument(str(pdf_path))
-    try:
+    with open_document(pdf_path) as pdf:
         page = pdf[page_number - 1]
         try:
             bounds = [_pdf_box(page, box, render_dpi) for box in boxes]
@@ -54,8 +54,6 @@ def page_texts_in_boxes(
                 text_page.close()
         finally:
             page.close()
-    finally:
-        pdf.close()
 
 
 def remove_substring_bleed(texts: list[str], page_text: str | None = None) -> list[str]:
@@ -91,16 +89,13 @@ def page_text_in_box(
 def page_text(
     pdf_path: str | Path, page_number: int
 ) -> str:
-    pdf = pdfium.PdfDocument(str(pdf_path))
-    page = None
-    text_page = None
-    try:
+    with open_document(pdf_path) as pdf:
         page = pdf[page_number - 1]
-        text_page = page.get_textpage()
-        return text_page.get_text_range()
-    finally:
-        if text_page is not None:
-            text_page.close()
-        if page is not None:
+        try:
+            text_page = page.get_textpage()
+            try:
+                return text_page.get_text_range()
+            finally:
+                text_page.close()
+        finally:
             page.close()
-        pdf.close()

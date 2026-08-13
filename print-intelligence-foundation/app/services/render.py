@@ -1,12 +1,12 @@
 from pathlib import Path
-import pypdfium2 as pdfium
+
+from app.services.pdfium import open_document
 
 
 def render_pdf(
     pdf_path: str | Path, output_dir: str | Path, dpi: int = 120
 ) -> list[Path]:
-    pdf = pdfium.PdfDocument(str(pdf_path))
-    try:
+    with open_document(pdf_path) as pdf:
         out = Path(output_dir)
         out.mkdir(parents=True, exist_ok=True)
         paths = []
@@ -26,13 +26,10 @@ def render_pdf(
             finally:
                 page.close()
         return paths
-    finally:
-        pdf.close()
 
 
 def render_page(pdf_path: str | Path, page_number: int, dpi: int):
-    pdf = pdfium.PdfDocument(str(pdf_path))
-    try:
+    with open_document(pdf_path) as pdf:
         page = pdf[page_number - 1]
         try:
             bitmap = page.render(scale=dpi / 72)
@@ -42,5 +39,3 @@ def render_page(pdf_path: str | Path, page_number: int, dpi: int):
                 bitmap.close()
         finally:
             page.close()
-    finally:
-        pdf.close()

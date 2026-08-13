@@ -1,10 +1,10 @@
 from pathlib import Path
-import pypdfium2 as pdfium
+
+from app.services.pdfium import open_document
 
 
 def classify_page(pdf_path: str | Path, page_number: int) -> str:
-    pdf = pdfium.PdfDocument(str(pdf_path))
-    try:
+    with open_document(pdf_path) as pdf:
         page = pdf[page_number - 1]
         try:
             width, height = page.get_size()
@@ -29,14 +29,9 @@ def classify_page(pdf_path: str | Path, page_number: int) -> str:
             return "mixed"
         finally:
             page.close()
-    finally:
-        pdf.close()
 
 
 def classify_pages(pdf_path: str | Path) -> list[str]:
-    pdf = pdfium.PdfDocument(str(pdf_path))
-    try:
+    with open_document(pdf_path) as pdf:
         page_count = len(pdf)
-    finally:
-        pdf.close()
     return [classify_page(pdf_path, n + 1) for n in range(page_count)]
