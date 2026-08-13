@@ -30,6 +30,7 @@ CAMPAIGN_TERMS = (
     "kampagne",
     "indirim",
 )
+INK_DISTANCE_THRESHOLD = 10
 
 
 @dataclass(frozen=True)
@@ -264,7 +265,7 @@ def _has_ink_outside_strip(
     bottom = min(boundary.bottom, line.box.bottom + 2)
     for y in range(top, bottom):
         for x in range(left, right):
-            if pixels[x, y] != background and (
+            if _is_ink(pixels[x, y], background) and (
                 x < strip.left or x >= strip.right
             ):
                 return True
@@ -282,11 +283,15 @@ def _paste_ink(
     for y in range(source.height):
         for x in range(source.width):
             pixel = source_pixels[x, y]
-            if any(
-                abs(pixel[channel] - background[channel]) > 3
-                for channel in range(3)
-            ):
+            if _is_ink(pixel, background):
                 destination_pixels[position[0] + x, position[1] + y] = pixel
+
+
+def _is_ink(pixel, background) -> bool:
+    return (
+        sum(abs(channel - base) for channel, base in zip(pixel, background))
+        > INK_DISTANCE_THRESHOLD
+    )
 
 
 def propose_level_one(
@@ -429,11 +434,7 @@ def propose_level_one(
         )
         strips.append(strip)
     if any(
-        strip.left < 0
-        or strip.top < 0
-        or strip.right > image.width
-        or strip.bottom > image.height
-        or strip.left < approved_box.left
+        strip.left < approved_box.left
         or strip.top < approved_box.top
         or strip.right > approved_box.right
         or strip.bottom > approved_box.bottom
@@ -476,25 +477,18 @@ def propose_level_one(
     second = artwork.crop(
         (second_box.left, second_box.top, second_box.right, second_box.bottom)
     )
-    replacement = tuple(min(255, channel + 5) for channel in background)
+    replacement_delta = -5 if sum(background) >= 3 * 250 else 5
+    replacement = tuple(
+        max(0, min(255, channel + replacement_delta)) for channel in background
+    )
     changed_background = bytearray(artwork.width * artwork.height)
     pixels = artwork.load()
-    protected_boxes = [
-        glyph.box
-        for glyph in local_glyphs
-        if not any(
-            strip.left <= glyph.box.left
-            and glyph.box.right <= strip.right
-            and strip.top <= glyph.box.top
-            and glyph.box.bottom <= strip.bottom
-            for strip in strips
-        )
-    ]
     for y in range(approved_box.top, approved_box.bottom):
         for x in range(approved_box.left, approved_box.right):
+            index = y * artwork.width + x
             if pixels[x, y] == background:
                 pixels[x, y] = replacement
-                changed_background[y * artwork.width + x] = 1
+                changed_background[index] = 1
     artwork.paste(
         replacement,
         (first_box.left, first_box.top, first_box.right, first_box.bottom),
@@ -515,10 +509,7 @@ def propose_level_one(
                 [second_box.left, second_box.top, second_box.right, second_box.bottom],
                 [first_box.left, first_box.top, first_box.right, first_box.bottom],
             ],
-            "protected_regions": [
-                [box.left, box.top, box.right, box.bottom]
-                for box in protected_boxes
-            ],
+            "protected_regions": [],
             "background_regions": [
                 region
                 for region in [_changed_region(changed_background, artwork.size)]

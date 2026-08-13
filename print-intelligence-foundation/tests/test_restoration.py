@@ -8,6 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from app.db.base import Base
 from app.models import AdOccurrence, Page, ReviewItem
 from app.services.pipeline import Pipeline
+from app.services.restoration import _is_ink
 from app.services.storage import LocalStorage
 from app.services.vision.recorded import RecordedVisionProvider
 
@@ -107,33 +108,75 @@ def test_accepted_proposal_changes_only_recorded_regions_and_preserves_dimension
     assert manifest["destination_regions"]
     assert manifest["background_regions"]
     background = tuple(manifest["background_source_color"])
-    for y in range(boundary[1], boundary[3]):
-        for x in range(boundary[0], boundary[2]):
-            if original_pixels[x, y] == background:
-                assert proposal_pixels[x, y] != background
+    replacement = tuple(manifest["background_replacement_color"])
+    assert background != replacement
     for source, destination in zip(
         manifest["source_regions"], manifest["destination_regions"]
     ):
-        for region in (source, destination):
-            assert boundary[0] <= region[0] <= region[2] <= boundary[2]
-            assert boundary[1] <= region[1] <= region[3] <= boundary[3]
         source_image = original.crop(tuple(source))
         destination_image = proposal.crop(tuple(destination))
         for source_pixel, destination_pixel in zip(
             source_image.getdata(), destination_image.getdata()
         ):
-            if max(
-                abs(source_pixel[channel] - background[channel])
-                for channel in range(3)
-            ) <= 3:
-                assert destination_pixel != background
+            if not _is_ink(source_pixel, background):
+                assert destination_pixel == replacement
             else:
                 assert destination_pixel == source_pixel
-    for protected in manifest["protected_regions"]:
-        for source_pixel, proposal_pixel in zip(
-            original.crop(tuple(protected)).getdata(),
-            proposal.crop(tuple(protected)).getdata(),
-        ):
-            if source_pixel != background:
-                assert source_pixel == proposal_pixel
+    source_regions = [tuple(region) for region in manifest["source_regions"]]
+    destination_regions = [
+        tuple(region) for region in manifest["destination_regions"]
+    ]
+    edited_regions = source_regions + destination_regions
+    for y in range(boundary[1], boundary[3]):
+        for x in range(boundary[0], boundary[2]):
+                source_pixel = original_pixels[x, y]
+                in_edited_region = any(
+                    region[0] <= x < region[2]
+                    and region[1] <= y < region[3]
+                    for region in edited_regions
+                )
+                if source_pixel == background and not in_edited_region:
+                    assert proposal_pixels[x, y] == replacement
+                elif _is_ink(source_pixel, background) and not in_edited_region:
+                    assert proposal_pixels[x, y] == source_pixel
     session.close()
+
+
+def test_existing_occurrence_restoration_recrops_when_artwork_file_is_missing(
+    tmp_path,
+):
+    engine = create_engine(f"sqlite:///{tmp_path / 'restoration.db'}")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    pdf = FIXTURE.read_bytes()
+    with factory() as session:
+        pipeline = Pipeline(
+            session,
+            RecordedVisionProvider("tests/fixtures/qwen"),
+            LocalStorage(tmp_path / "storage"),
+            render_dpi=120,
+            local_work_dir=tmp_path / "work",
+            restoration_enabled=True,
+        )
+        document = pipeline.ingest(pdf)
+        ads = session.scalars(
+            select(AdOccurrence)
+            .join(Page)
+            .where(Page.document_id == document.id, Page.page_number == 11)
+            .order_by(AdOccurrence.id)
+        ).all()
+        (tmp_path / "work" / document.content_sha256 / "artwork" / "page_11_3.png").unlink()
+
+        pipeline.reprocess(pdf)
+
+        refreshed = session.scalars(
+            select(AdOccurrence)
+            .join(Page)
+            .where(Page.document_id == document.id, Page.page_number == 11)
+            .order_by(AdOccurrence.id)
+        ).all()
+        assert len(refreshed) == len(ads)
+        assert refreshed[3].restoration_path
+        assert json.loads(refreshed[3].restoration_manifest_json)[
+            "edit_status"
+        ] == "applied"
