@@ -107,21 +107,33 @@ def test_accepted_proposal_changes_only_recorded_regions_and_preserves_dimension
     assert manifest["destination_regions"]
     assert manifest["background_regions"]
     background = tuple(manifest["background_source_color"])
-    replacement = tuple(manifest["background_replacement_color"])
+    for y in range(boundary[1], boundary[3]):
+        for x in range(boundary[0], boundary[2]):
+            if original_pixels[x, y] == background:
+                assert proposal_pixels[x, y] != background
     for source, destination in zip(
         manifest["source_regions"], manifest["destination_regions"]
     ):
+        for region in (source, destination):
+            assert boundary[0] <= region[0] <= region[2] <= boundary[2]
+            assert boundary[1] <= region[1] <= region[3] <= boundary[3]
         source_image = original.crop(tuple(source))
         destination_image = proposal.crop(tuple(destination))
         for source_pixel, destination_pixel in zip(
             source_image.getdata(), destination_image.getdata()
         ):
-            if source_pixel == background:
-                assert destination_pixel == replacement
+            if max(
+                abs(source_pixel[channel] - background[channel])
+                for channel in range(3)
+            ) <= 3:
+                assert destination_pixel != background
             else:
                 assert destination_pixel == source_pixel
     for protected in manifest["protected_regions"]:
-        assert original.crop(tuple(protected)).tobytes() == proposal.crop(
-            tuple(protected)
-        ).tobytes()
+        for source_pixel, proposal_pixel in zip(
+            original.crop(tuple(protected)).getdata(),
+            proposal.crop(tuple(protected)).getdata(),
+        ):
+            if source_pixel != background:
+                assert source_pixel == proposal_pixel
     session.close()

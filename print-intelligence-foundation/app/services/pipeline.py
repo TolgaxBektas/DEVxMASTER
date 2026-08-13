@@ -253,31 +253,30 @@ class Pipeline:
                             artwork_output,
                             padded_box,
                             digest,
-                            index,
                             page,
                         )
                     elif self.restoration_enabled and artwork_page is not None:
-                        artwork_output = (
-                            local_root
-                            / "artwork"
-                            / f"page_{number}_{index}.png"
+                        padded_box = self._artwork_padded_box(
+                            box, size, artwork_page.size
                         )
-                        if artwork_output.is_file():
-                            padded_box = self._artwork_padded_box(
-                                box, size, artwork_page.size
-                            )
-                            self._maybe_write_restoration(
-                                existing,
-                                source,
-                                number,
-                                box,
-                                size,
-                                artwork_output,
-                                padded_box,
-                                digest,
-                                index,
-                                page,
-                            )
+                        artwork_output = self._write_restoration_source(
+                            artwork_page, padded_box, local_root, existing
+                        )
+                        self._maybe_write_restoration(
+                            existing,
+                            source,
+                            number,
+                            box,
+                            size,
+                            artwork_output,
+                            padded_box,
+                            digest,
+                            page,
+                        )
+                    elif self.restoration_enabled:
+                        self._refuse_restoration(
+                            existing, "restoration refused: artwork is unavailable"
+                        )
                     self._add_order_form_reviews(
                         existing, page, frame_plausible
                     )
@@ -333,8 +332,11 @@ class Pipeline:
                         artwork_output,
                         padded_box,
                         digest,
-                        index,
                         page,
+                    )
+                elif self.restoration_enabled:
+                    self._refuse_restoration(
+                        occurrence, "restoration refused: artwork is unavailable"
                     )
                 company_name = fields.get("company") or advert.get("company_name")
                 if company_name and not page.is_order_form:
@@ -544,6 +546,18 @@ class Pipeline:
             min(artwork_size[1], artwork_box.bottom + self.artwork_padding),
         )
 
+    def _write_restoration_source(self, artwork_page, padded_box, local_root, occurrence):
+        output = (
+            local_root
+            / "restoration_source"
+            / f"occurrence_{occurrence.id}.png"
+        )
+        output.parent.mkdir(parents=True, exist_ok=True)
+        artwork_page.crop(
+            (padded_box.left, padded_box.top, padded_box.right, padded_box.bottom)
+        ).save(output, format="PNG", optimize=False)
+        return output
+
     def _maybe_write_restoration(
         self,
         occurrence,
@@ -554,7 +568,6 @@ class Pipeline:
         artwork_output,
         padded_box,
         digest,
-        index,
         page,
     ):
         if not self.restoration_enabled:
@@ -576,17 +589,37 @@ class Pipeline:
                 self.local_work_dir
                 / digest
                 / "restoration"
-                / f"page_{page_number}_{index}.png"
+                / f"occurrence_{occurrence.id}.png"
             )
             output.parent.mkdir(parents=True, exist_ok=True)
             result.image.save(output, format="PNG", optimize=False)
             occurrence.restoration_path = self.storage.put_file(
-                output, f"{digest}/restoration/page_{page_number}_{index}.png"
+                output, f"{digest}/restoration/occurrence_{occurrence.id}.png"
             )
         else:
             occurrence.restoration_path = None
         if result.review_reason:
             self._add_review(occurrence, result.review_reason)
+
+    def _refuse_restoration(self, occurrence, reason):
+        occurrence.restoration_manifest_json = json.dumps(
+            {
+                "cascade_level": 1,
+                "cascade_justification": reason,
+                "source_regions": [],
+                "destination_regions": [],
+                "removed_regions": [],
+                "background_regions": [],
+                "protected_regions": [],
+                "ad_boundary": [],
+                "findings": [],
+                "review_status": "pending",
+                "edit_status": "refused",
+            },
+            ensure_ascii=False,
+        )
+        occurrence.restoration_path = None
+        self._add_review(occurrence, reason)
 
     def _extract_missing(self, doc, source, deadline):
         for page in self.session.scalars(

@@ -282,7 +282,10 @@ def _paste_ink(
     for y in range(source.height):
         for x in range(source.width):
             pixel = source_pixels[x, y]
-            if pixel != background:
+            if any(
+                abs(pixel[channel] - background[channel]) > 3
+                for channel in range(3)
+            ):
                 destination_pixels[position[0] + x, position[1] + y] = pixel
 
 
@@ -430,6 +433,10 @@ def propose_level_one(
         or strip.top < 0
         or strip.right > image.width
         or strip.bottom > image.height
+        or strip.left < approved_box.left
+        or strip.top < approved_box.top
+        or strip.right > approved_box.right
+        or strip.bottom > approved_box.bottom
         for strip in strips
     ):
         base_manifest["cascade_justification"] = (
@@ -469,9 +476,8 @@ def propose_level_one(
     second = artwork.crop(
         (second_box.left, second_box.top, second_box.right, second_box.bottom)
     )
-    mask = _border_color_mask(artwork, background, approved_box)
     replacement = tuple(min(255, channel + 5) for channel in background)
-    changed_background = bytearray(len(mask))
+    changed_background = bytearray(artwork.width * artwork.height)
     pixels = artwork.load()
     protected_boxes = [
         glyph.box
@@ -484,16 +490,11 @@ def propose_level_one(
             for strip in strips
         )
     ]
-    for index, connected in enumerate(mask):
-        if connected:
-            x, y = index % artwork.width, index // artwork.width
-            if any(
-                box.left <= x < box.right and box.top <= y < box.bottom
-                for box in protected_boxes
-            ):
-                continue
-            pixels[x, y] = replacement
-            changed_background[index] = 1
+    for y in range(approved_box.top, approved_box.bottom):
+        for x in range(approved_box.left, approved_box.right):
+            if pixels[x, y] == background:
+                pixels[x, y] = replacement
+                changed_background[y * artwork.width + x] = 1
     artwork.paste(
         replacement,
         (first_box.left, first_box.top, first_box.right, first_box.bottom),
