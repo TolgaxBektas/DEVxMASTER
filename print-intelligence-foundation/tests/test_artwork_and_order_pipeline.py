@@ -92,6 +92,9 @@ def test_order_form_pipeline_persists_header_and_conflict_review(tmp_path):
         assert payload["form_header"]["fields"]["contact_person"] == "Frau Test"
         assert payload["fields"]["company"] == "Synthetic Bau GmbH"
         assert payload["advert_fields"]["company"] == "Other Synthetic GmbH"
+        assert payload["provenance"]["company"] == "order_form_header"
+        assert payload["provenance"]["phone"] == "order_form_header"
+        assert payload["provenance"]["email"] == "order_form_header"
         assert payload["field_conflicts"]["company"]["header"] == "Synthetic Bau GmbH"
         review = session.scalar(select(ReviewItem).where(ReviewItem.ad_id == ad.id))
         assert "header/advert conflict for company" in review.reason

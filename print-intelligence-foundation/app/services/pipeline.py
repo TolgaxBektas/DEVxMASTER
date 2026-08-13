@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from time import monotonic
 from pathlib import Path
@@ -19,6 +20,7 @@ from app.services.order_forms import (
     merge_form_and_ad_fields,
     parse_order_forms,
 )
+from app.services.ocr import OCRResult
 from app.services.render import render_page, render_pdf
 from app.services.storage import sha256
 from app.services.text_layer import (
@@ -26,6 +28,8 @@ from app.services.text_layer import (
     page_text_in_box,
     remove_substring_bleed,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class Pipeline:
@@ -45,6 +49,8 @@ class Pipeline:
         artwork_dpi=300,
         artwork_padding=8,
         artwork_trim_cap=4,
+        ocr_provider=None,
+        ocr_confidence_threshold=None,
     ):
         self.session, self.provider, self.storage = session, provider, storage
         self.render_dpi, self.confidence_threshold = render_dpi, confidence_threshold
@@ -57,6 +63,12 @@ class Pipeline:
         self.artwork_dpi = artwork_dpi
         self.artwork_padding = artwork_padding
         self.artwork_trim_cap = artwork_trim_cap
+        self.ocr_provider = ocr_provider
+        self.ocr_confidence_threshold = (
+            confidence_threshold
+            if ocr_confidence_threshold is None
+            else ocr_confidence_threshold
+        )
         self._form_results: dict[int, FormParseResult] = {}
         self._form_results_source: str | None = None
 
@@ -242,13 +254,19 @@ class Pipeline:
                     **self.provider.extract_fields(str(crop_path)),
                     **(advert.get("fields") or {}),
                 }
+                provenance = {key: "vision" for key, value in fields.items() if value}
                 occurrence = AdOccurrence(
                     page_id=page.id,
                     occurrence_key=key,
                     bbox=key,
                     crop_path=crop_key,
                     fields_json=json.dumps(
-                        {"text": "", "fields": fields}, ensure_ascii=False
+                        {
+                            "text": "",
+                            "fields": fields,
+                            "provenance": provenance,
+                        },
+                        ensure_ascii=False,
                     ),
                     confidence=float(advert.get("confidence", 0)),
                     is_order_form=page.is_order_form,
@@ -377,8 +395,24 @@ class Pipeline:
                 fields = extract_contact_fields(
                     text, occurrence.company.name if occurrence.company else None
                 ).model_dump(exclude_none=True)
-                fields.update({k: v for k, v in data.get("fields", {}).items() if v})
+                provenance = {
+                    key: "text_layer" for key, value in fields.items() if value
+                }
+                for key, value in data.get("fields", {}).items():
+                    if value:
+                        fields[key] = value
+                        provenance[key] = data.get("provenance", {}).get(
+                            key, "vision"
+                        )
+                self._apply_ocr(
+                    fields,
+                    provenance,
+                    data,
+                    occurrence,
+                    doc,
+                )
                 data["text"], data["advert_fields"] = text, fields
+                data["provenance"] = provenance
                 if page.is_order_form:
                     data["form_header"] = {
                         "fields": form.fields,
@@ -387,6 +421,15 @@ class Pipeline:
                     }
                     merged, conflicts = merge_form_and_ad_fields(form.fields, fields)
                     data["fields"], data["field_conflicts"] = merged, conflicts
+                    data["provenance"] = {
+                        key: (
+                            "order_form_header"
+                            if key in form.fields and form.fields[key]
+                            else provenance.get(key, "vision")
+                        )
+                        for key, value in merged.items()
+                        if value
+                    }
                     occurrence.is_order_form = True
                     for key, conflict in conflicts.items():
                         self._add_review(
@@ -416,6 +459,34 @@ class Pipeline:
                         self._add_review(occurrence, "incomplete contact fields")
                 occurrence.fields_json = json.dumps(data, ensure_ascii=False)
         self.session.commit()
+
+    def _apply_ocr(self, fields, provenance, data, occurrence, doc):
+        if self.ocr_provider is None or not occurrence.crop_path:
+            return
+        crop_path = (
+            self.local_work_dir
+            / doc.content_sha256
+            / "crops"
+            / Path(occurrence.crop_path).name
+        )
+        if not crop_path.is_file():
+            return
+        try:
+            result: OCRResult = self.ocr_provider.extract_fields(str(crop_path))
+        except Exception as exc:
+            logger.warning("OCR fallback failed for %s: %s", crop_path, exc)
+            return
+        ocr_data = data.setdefault("ocr", {"fields": {}, "confidence": {}})
+        for key, value in result.fields.items():
+            if fields.get(key):
+                continue
+            fields[key] = value
+            provenance[key] = "ocr"
+            confidence = float(result.confidence.get(key, 0.0))
+            ocr_data["fields"][key] = value
+            ocr_data["confidence"][key] = confidence
+            if confidence < self.ocr_confidence_threshold:
+                self._add_review(occurrence, f"low confidence OCR field: {key}")
 
     def _get_form_results(self, source):
         source_key = str(Path(source).resolve())
