@@ -122,23 +122,26 @@ def _blocked(value: str, field_name: str) -> bool:
 
 def _page_characters(page) -> list[_Character]:
     text_page = page.get_textpage()
-    text = text_page.get_text_range()
-    characters = []
-    for index in range(min(text_page.count_chars(), len(text))):
-        if text[index] in "\r\n":
-            continue
-        left, bottom, right, top = text_page.get_charbox(index)
-        characters.append(
-            _Character(
-                text[index],
-                left,
-                right,
-                page.get_size()[1] - top,
-                page.get_size()[1] - bottom,
-                index,
+    try:
+        text = text_page.get_text_range()
+        characters = []
+        for index in range(min(text_page.count_chars(), len(text))):
+            if text[index] in "\r\n":
+                continue
+            left, bottom, right, top = text_page.get_charbox(index)
+            characters.append(
+                _Character(
+                    text[index],
+                    left,
+                    right,
+                    page.get_size()[1] - top,
+                    page.get_size()[1] - bottom,
+                    index,
+                )
             )
-        )
-    return characters
+        return characters
+    finally:
+        text_page.close()
 
 
 def _rows(characters: list[_Character]) -> list[list[_Character]]:
@@ -279,10 +282,17 @@ def _parse_order_form_page(page) -> FormParseResult:
 
 def parse_order_forms(pdf_path: str | Path) -> dict[int, FormParseResult]:
     pdf = pdfium.PdfDocument(str(pdf_path))
-    return {
-        page_number: _parse_order_form_page(pdf[page_number - 1])
-        for page_number in range(1, len(pdf) + 1)
-    }
+    try:
+        results = {}
+        for page_number in range(1, len(pdf) + 1):
+            page = pdf[page_number - 1]
+            try:
+                results[page_number] = _parse_order_form_page(page)
+            finally:
+                page.close()
+        return results
+    finally:
+        pdf.close()
 
 
 def parse_order_form(pdf_path: str | Path, page_number: int) -> FormParseResult:

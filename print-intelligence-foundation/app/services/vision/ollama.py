@@ -31,6 +31,7 @@ class OllamaVisionProvider:
         payload = {
             "model": self.model,
             "stream": False,
+            "think": False,
             "format": schema,
             "options": {"num_predict": 1200},
             "messages": [{"role": "user", "content": prompt, "images": [image]}],
@@ -57,7 +58,30 @@ class OllamaVisionProvider:
         )
         if isinstance(result, dict):
             result = result.get("advertisements", result.get("ads", [result]))
-        return result if isinstance(result, list) else []
+        if not isinstance(result, list):
+            return []
+        normalized = []
+        for advert in result:
+            if not isinstance(advert, dict):
+                continue
+            raw_bbox = advert.get("bbox") or advert.get("bbox_2d")
+            if not isinstance(raw_bbox, (list, tuple)) or len(raw_bbox) < 4:
+                continue
+            try:
+                bbox = [float(value) for value in raw_bbox[:4]]
+            except (TypeError, ValueError):
+                continue
+            normalized.append(
+                {
+                    **{
+                        key: value
+                        for key, value in advert.items()
+                        if key not in {"bbox", "bbox_2d"}
+                    },
+                    "bbox": bbox,
+                }
+            )
+        return normalized
 
     def extract_fields(self, crop_path: str) -> dict:
         result = parse_qwen_response(
