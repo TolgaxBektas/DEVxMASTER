@@ -110,6 +110,13 @@ We do not detect or prove the visual advert frame; a failed geometric check is
 reported as `order-form advert box failed geometric plausibility check`, while
 low detector confidence remains a separate `low confidence` review reason.
 
+When using `VISION_PROVIDER=ollama`, page detection sends a preview whose
+longest side is limited by `OLLAMA_PREVIEW_MAX_DIMENSION` (default `1600`).
+The preview is only for model input: normalized detector boxes still resolve
+against the full-resolution render, and crops and artwork continue to use the
+high-DPI page. Field extraction sends the crop at its original size so small
+text is not discarded.
+
 ## Remaining limitations
 
 Coarse 0–1000 bounding boxes and duplicated or clipped glyph copies in source PDFs make text-layer attribution approximate at ad-box boundaries. The page-11 AWO extraction still contains garbled fragments from the source PDF's duplicated text layer.

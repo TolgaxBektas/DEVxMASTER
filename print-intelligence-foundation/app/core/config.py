@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     ollama_url: str = "http://host.docker.internal:11434"
     ollama_model: str = "qwen3-vl:4b"
     ollama_timeout: float = 120.0
+    ollama_preview_max_dimension: int = 1600
     render_dpi: int = 120
     artwork_dpi: int = 300
     artwork_padding: int = 8

@@ -1,21 +1,52 @@
 import base64
+from io import BytesIO
 import time
 import httpx
+from PIL import Image
+
 from app.services.parsing import parse_qwen_response
 
 
 class OllamaVisionProvider:
-    def __init__(self, host: str, model: str, timeout: float = 120, retries: int = 2):
+    def __init__(
+        self,
+        host: str,
+        model: str,
+        timeout: float = 120,
+        retries: int = 2,
+        preview_max_dimension: int | None = 1600,
+    ):
         self.host, self.model, self.timeout, self.retries = (
             host.rstrip("/"),
             model,
             timeout,
             retries,
         )
+        self.preview_max_dimension = preview_max_dimension
 
-    def _call(self, prompt: str, image_path: str) -> dict:
-        with open(image_path, "rb") as image_file:
-            image = base64.b64encode(image_file.read()).decode()
+    def _encode_image(self, image_path: str, preview: bool = False) -> str:
+        if (
+            not preview
+            or self.preview_max_dimension is None
+            or self.preview_max_dimension <= 0
+        ):
+            with open(image_path, "rb") as image_file:
+                return base64.b64encode(image_file.read()).decode()
+        with Image.open(image_path) as source:
+            if max(source.size) <= self.preview_max_dimension:
+                with open(image_path, "rb") as image_file:
+                    return base64.b64encode(image_file.read()).decode()
+            image = source.convert("RGB")
+            image.thumbnail(
+                (self.preview_max_dimension, self.preview_max_dimension),
+                Image.Resampling.LANCZOS,
+            )
+            output = BytesIO()
+            image.save(output, format="JPEG", quality=78, optimize=True)
+        return base64.b64encode(output.getvalue()).decode()
+
+    def _call(self, prompt: str, image_path: str, preview: bool = False) -> dict:
+        image = self._encode_image(image_path, preview)
         schema = {
             "type": "object",
             "properties": {
@@ -54,6 +85,7 @@ class OllamaVisionProvider:
             self._call(
                 "Return JSON advertisements with company_name and bbox [x1,y1,x2,y2]. Return only JSON.",
                 image_path,
+                preview=True,
             )
         )
         if isinstance(result, dict):

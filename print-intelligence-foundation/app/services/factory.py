@@ -10,7 +10,10 @@ def make_provider(settings: Settings):
     if settings.vision_provider == "recorded":
         return RecordedVisionProvider(settings.vision_recorded_dir)
     return OllamaVisionProvider(
-        settings.ollama_url, settings.ollama_model, settings.ollama_timeout
+        settings.ollama_url,
+        settings.ollama_model,
+        settings.ollama_timeout,
+        preview_max_dimension=settings.ollama_preview_max_dimension,
     )
 
 

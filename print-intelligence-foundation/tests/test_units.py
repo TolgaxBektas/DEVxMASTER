@@ -1,3 +1,8 @@
+import base64
+from io import BytesIO
+
+from PIL import Image
+
 from app.services.parsing import parse_qwen_response
 from app.services.bbox import Box, deduplicate_boxes, iou, normalize_bbox
 from app.services.dedupe import normalize_name, contact_key
@@ -45,12 +50,63 @@ def test_ollama_request_disables_thinking_for_structured_output(monkeypatch, tmp
     assert result["message"]["content"] == '{"a": 1}'
 
 
+def test_ollama_detection_uses_configured_preview(monkeypatch, tmp_path):
+    image = tmp_path / "page.png"
+    Image.new("RGB", (2400, 1200), "white").save(image)
+    captured = {}
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"message": {"content": '{"advertisements": []}'}}
+
+    def post(url, json, timeout):
+        captured.update(json)
+        return Response()
+
+    monkeypatch.setattr("app.services.vision.ollama.httpx.post", post)
+    provider = OllamaVisionProvider(
+        "http://ollama", "qwen3-vl:4b", preview_max_dimension=1200
+    )
+    provider.detect_ads(str(image), 11)
+    preview = Image.open(BytesIO(base64.b64decode(captured["messages"][0]["images"][0])))
+    assert preview.size == (1200, 600)
+    assert preview.format == "JPEG"
+
+
+def test_ollama_field_extraction_keeps_large_crop_full_size(monkeypatch, tmp_path):
+    image = tmp_path / "crop.png"
+    Image.new("RGB", (2400, 1200), "white").save(image)
+    captured = {}
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"message": {"content": "{}"}}
+
+    def post(url, json, timeout):
+        captured.update(json)
+        return Response()
+
+    monkeypatch.setattr("app.services.vision.ollama.httpx.post", post)
+    provider = OllamaVisionProvider(
+        "http://ollama", "qwen3-vl:4b", preview_max_dimension=1200
+    )
+    provider.extract_fields(str(image))
+    crop = Image.open(BytesIO(base64.b64decode(captured["messages"][0]["images"][0])))
+    assert crop.size == (2400, 1200)
+
+
 def test_ollama_detection_canonicalizes_bbox_variants(monkeypatch):
     provider = OllamaVisionProvider("http://ollama", "qwen3-vl:4b")
     monkeypatch.setattr(
         provider,
         "_call",
-        lambda prompt, image_path: {
+        lambda prompt, image_path, preview=False: {
             "message": {
                 "content": (
                     '[{"company_name":"A","bbox_2d":[10,"20",30,40]},'
