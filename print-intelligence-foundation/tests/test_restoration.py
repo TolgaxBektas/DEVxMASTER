@@ -1,4 +1,5 @@
 import json
+from collections import Counter
 from pathlib import Path
 
 from PIL import Image, ImageChops, ImageDraw
@@ -261,6 +262,33 @@ def test_independent_verifier_rejects_corrupted_proposals(tmp_path):
     )
     assert result["status"] == "failed"
     assert result["checks"][4]["name"] == "duplicated_content"
+    added_ink = proposal.copy()
+    source_color = next(
+        color
+        for color, _ in Counter(original.getdata()).most_common()
+        if color != tuple(manifest["background_replacement_color"])
+    )
+    x1, y1, x2, y2 = boundary
+    ImageDraw.Draw(added_ink).rectangle(
+        (x1 + 10, y1 + 10, min(x1 + 110, x2 - 1), min(y1 + 110, y2 - 1)),
+        fill=source_color,
+    )
+    result = verify_proposal(
+        FIXTURE, 11, Box(*[value / 2.5 for value in boundary]), 120,
+        tmp_path / "work" / ads[3].artwork_path, added_ink,
+        (0, 0), 300, manifest,
+    )
+    assert result["status"] == "failed"
+    assert result["checks"][3]["name"] == "new_content"
+    missing_boundary = dict(manifest)
+    missing_boundary.pop("ad_boundary")
+    result = verify_proposal(
+        FIXTURE, 11, Box(*[value / 2.5 for value in boundary]), 120,
+        tmp_path / "work" / ads[3].artwork_path, proposal,
+        (0, 0), 300, missing_boundary,
+    )
+    assert result["status"] == "failed"
+    assert result["checks"][1]["name"] == "approved_boundary"
     aspect_changed = proposal.resize((proposal.width + 1, proposal.height))
     result = verify_proposal(
         FIXTURE, 11, Box(*boundary), 120,

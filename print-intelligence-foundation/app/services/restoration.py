@@ -53,30 +53,45 @@ class RestorationResult:
     review_reason: str | None
 
 
-def _anchor_matches(image: Image.Image, line: TextLine, background) -> int:
+def _anchor_matches(
+    image: Image.Image,
+    line: TextLine,
+    background,
+    displacements: list[tuple[int, int]],
+) -> int:
     pixels = image.load()
     points = []
-    left = max(0, line.box.left)
-    top = max(0, line.box.top)
-    right = min(image.width, line.box.right)
-    bottom = min(image.height, line.box.bottom)
-    for y in range(top, bottom):
-        for x in range(left, right):
+    original_left = max(0, line.box.left)
+    original_top = max(0, line.box.top)
+    original_right = min(image.width, line.box.right)
+    original_bottom = min(image.height, line.box.bottom)
+    for y in range(original_top, original_bottom):
+        for x in range(original_left, original_right):
             if _is_ink(pixels[x, y], background):
-                points.append((x - left, y - top, pixels[x, y]))
+                points.append(
+                    (x - original_left, y - original_top, pixels[x, y])
+                )
     if not points:
         return 0
     points = points[:: max(1, len(points) // 32)][:32]
     matches = 0
-    height = bottom - top
-    width = right - left
-    for top in range(image.height - height + 1):
-        for left in range(image.width - width + 1):
-            if all(
-                image.getpixel((left + x, top + y)) == color
-                for x, y, color in points
-            ):
-                matches += 1
+    height = original_bottom - original_top
+    width = original_right - original_left
+    for offset_x, offset_y in displacements:
+        candidate_left = original_left + offset_x
+        candidate_top = original_top + offset_y
+        if (
+            candidate_left < 0
+            or candidate_top < 0
+            or candidate_left + width > image.width
+            or candidate_top + height > image.height
+        ):
+            continue
+        if all(
+            pixels[candidate_left + x, candidate_top + y] == color
+            for x, y, color in points
+        ):
+            matches += 1
     return matches
 
 
@@ -115,7 +130,52 @@ def verify_proposal(
         }
     )
 
-    boundary = Box(*manifest.get("ad_boundary", []))
+    raw_boundary = manifest.get("ad_boundary")
+    if not isinstance(raw_boundary, (list, tuple)) or len(raw_boundary) != 4:
+        return {
+            "status": "failed",
+            "checks": checks
+            + [
+                {
+                    "name": "approved_boundary",
+                    "status": "failed",
+                    "reason": "manifest is missing a valid approved advertisement boundary",
+                }
+            ],
+        }
+    try:
+        boundary = Box(*(int(value) for value in raw_boundary))
+    except (TypeError, ValueError):
+        return {
+            "status": "failed",
+            "checks": checks
+            + [
+                {
+                    "name": "approved_boundary",
+                    "status": "failed",
+                    "reason": "manifest contains an invalid approved advertisement boundary",
+                }
+            ],
+        }
+    if (
+        boundary.left < 0
+        or boundary.top < 0
+        or boundary.right > source.width
+        or boundary.bottom > source.height
+        or boundary.left >= boundary.right
+        or boundary.top >= boundary.bottom
+    ):
+        return {
+            "status": "failed",
+            "checks": checks
+            + [
+                {
+                    "name": "approved_boundary",
+                    "status": "failed",
+                    "reason": "approved advertisement boundary is outside the artwork",
+                }
+            ],
+        }
     source_pixels = source.load()
     proposed_pixels = proposed.load()
     outside_equal = all(
@@ -163,7 +223,22 @@ def verify_proposal(
             line for line in lines if line.text in set(anchor_texts)
         )
     anchors = list({line.text: line for line in anchors}.values())
-    anchor_counts = [_anchor_matches(proposed, line, background) for line in anchors]
+    displacements = [(0, 0)]
+    source_regions = [
+        Box(*region) for region in manifest.get("source_regions", [])
+    ]
+    destination_regions = [
+        Box(*region) for region in manifest.get("destination_regions", [])
+    ]
+    displacements.extend(
+        (destination.left - source.left, destination.top - source.top)
+        for source, destination in zip(source_regions, destination_regions)
+    )
+    displacements = list(dict.fromkeys(displacements))
+    anchor_counts = [
+        _anchor_matches(proposed, line, background, displacements)
+        for line in anchors
+    ]
     anchors_ok = bool(anchors) and all(count == 1 for count in anchor_counts)
     checks.append(
         {
@@ -179,26 +254,29 @@ def verify_proposal(
     )
 
     original_colors = Counter(source.getdata())
-    allowed_colors = set(original_colors)
-    allowed_colors.add(tuple(manifest.get("background_replacement_color", background)))
-    unexpected = sum(
-        1 for pixel in proposed.getdata() if pixel not in allowed_colors
+    proposed_colors = Counter(proposed.getdata())
+    replacement = tuple(
+        manifest.get("background_replacement_color", background)
     )
+    excess = {
+        color: proposed_count - original_colors.get(color, 0)
+        for color, proposed_count in proposed_colors.items()
+        if color != replacement
+        and proposed_count > original_colors.get(color, 0)
+    }
     checks.append(
         {
             "name": "new_content",
-            "status": "passed" if unexpected == 0 else "failed",
-            "unexpected_pixels": unexpected,
+            "status": "passed" if not excess else "failed",
+            "excess_pixels_by_color": {
+                str(color): count for color, count in excess.items()
+            },
             "reason": ""
-            if unexpected == 0
+            if not excess
             else "proposal contains pixels absent from the source artwork",
         }
     )
 
-    source_regions = [Box(*region) for region in manifest.get("source_regions", [])]
-    destination_regions = [
-        Box(*region) for region in manifest.get("destination_regions", [])
-    ]
     def dark_count(image, region):
         return sum(
             1
