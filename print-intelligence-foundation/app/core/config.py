@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     artwork_padding: int = 8
     artwork_trim_cap: int = 4
     confidence_threshold: float = 0.7
+    vision_consensus_runs: int = 1
     max_download_bytes: int = 50_000_000
     bbox_iou_threshold: float = 0.85
     max_job_attempts: int = 3
@@ -35,6 +36,13 @@ class Settings(BaseSettings):
     discovery_timeout_seconds: float = 60.0
     discovery_request_delay: float = 0.25
     discovery_user_agent: str = "print-intelligence-foundation/1.0"
+    ocr_enabled: bool = True
+    ocr_languages: str = "deu+eng"
+    ocr_confidence_threshold: float = 0.7
+    search_provider: str = "auto"
+    searxng_url: str | None = None
+    search_timeout_seconds: float = 30.0
+    search_results_per_term: int = 10
     s3_endpoint_url: str | None = None
     s3_bucket: str = "print"
     s3_access_key: str | None = None

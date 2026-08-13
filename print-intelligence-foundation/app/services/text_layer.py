@@ -86,3 +86,21 @@ def page_text_in_box(
     pdf_path: str | Path, page_number: int, box: Box, render_dpi: int
 ) -> str:
     return page_texts_in_boxes(pdf_path, page_number, [box], render_dpi)[0]
+
+
+def page_text(
+    pdf_path: str | Path, page_number: int
+) -> str:
+    pdf = pdfium.PdfDocument(str(pdf_path))
+    page = None
+    text_page = None
+    try:
+        page = pdf[page_number - 1]
+        text_page = page.get_textpage()
+        return text_page.get_text_range()
+    finally:
+        if text_page is not None:
+            text_page.close()
+        if page is not None:
+            page.close()
+        pdf.close()

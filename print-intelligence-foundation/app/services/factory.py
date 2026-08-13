@@ -2,6 +2,8 @@ from app.core.config import Settings
 from app.services.pipeline import Pipeline
 from app.services.storage import LocalStorage, S3Storage
 from app.services.vision import OllamaVisionProvider, RecordedVisionProvider
+from app.services.ocr import TesseractOCRProvider
+from app.services.search import SearXNGSearchProvider
 
 
 def make_provider(settings: Settings):
@@ -24,6 +26,27 @@ def make_storage(settings: Settings):
     return LocalStorage(settings.storage_path)
 
 
+def make_ocr_provider(settings: Settings):
+    if not settings.ocr_enabled:
+        return None
+    return TesseractOCRProvider(
+        settings.ocr_languages, settings.ocr_confidence_threshold
+    )
+
+
+def make_search_provider(settings: Settings):
+    if (
+        not settings.searxng_url
+        or settings.search_provider.lower() not in {"auto", "searxng"}
+    ):
+        return None
+    return SearXNGSearchProvider(
+        settings.searxng_url,
+        settings.search_timeout_seconds,
+        settings.discovery_user_agent,
+    )
+
+
 def make_pipeline(session, settings: Settings):
     return Pipeline(
         session,
@@ -38,4 +61,7 @@ def make_pipeline(session, settings: Settings):
         settings.artwork_dpi,
         settings.artwork_padding,
         settings.artwork_trim_cap,
+        make_ocr_provider(settings),
+        settings.ocr_confidence_threshold,
+        settings.vision_consensus_runs,
     )
