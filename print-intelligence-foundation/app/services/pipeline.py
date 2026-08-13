@@ -226,20 +226,15 @@ class Pipeline:
                     )
                 )
                 if existing:
-                    frame_plausible = (
-                        not page.is_order_form
-                        or self._order_form_box_is_plausible(box, size)
+                    frame_plausible, artwork_gate_holds, gate_reason = (
+                        self._artwork_gate(
+                            page, existing.confidence, box, size
+                        )
                     )
                     if (
                         artwork_page is not None
                         and not existing.artwork_path
-                        and (
-                            not page.is_order_form
-                            or (
-                                existing.confidence >= self.confidence_threshold
-                                and frame_plausible
-                            )
-                        )
+                        and artwork_gate_holds
                     ):
                         artwork_output, padded_box = self._write_artwork(
                             existing, artwork_page, box, size, digest, number, index
@@ -255,7 +250,11 @@ class Pipeline:
                             digest,
                             page,
                         )
-                    elif self.restoration_enabled and artwork_page is not None:
+                    elif (
+                        self.restoration_enabled
+                        and artwork_page is not None
+                        and artwork_gate_holds
+                    ):
                         padded_box = self._artwork_padded_box(
                             box, size, artwork_page.size
                         )
@@ -275,7 +274,8 @@ class Pipeline:
                         )
                     elif self.restoration_enabled:
                         self._refuse_restoration(
-                            existing, "restoration refused: artwork is unavailable"
+                            existing,
+                            gate_reason or "restoration refused: artwork is unavailable",
                         )
                     self._add_order_form_reviews(
                         existing, page, frame_plausible
@@ -309,17 +309,12 @@ class Pipeline:
                 )
                 self.session.add(occurrence)
                 self.session.flush()
-                frame_plausible = (
-                    not page.is_order_form
-                    or self._order_form_box_is_plausible(box, size)
-                )
-                if artwork_page is not None and (
-                    not page.is_order_form
-                    or (
-                        occurrence.confidence >= self.confidence_threshold
-                        and frame_plausible
+                frame_plausible, artwork_gate_holds, gate_reason = (
+                    self._artwork_gate(
+                        page, occurrence.confidence, box, size
                     )
-                ):
+                )
+                if artwork_page is not None and artwork_gate_holds:
                     artwork_output, padded_box = self._write_artwork(
                         occurrence, artwork_page, box, size, digest, number, index
                     )
@@ -336,7 +331,8 @@ class Pipeline:
                     )
                 elif self.restoration_enabled:
                     self._refuse_restoration(
-                        occurrence, "restoration refused: artwork is unavailable"
+                        occurrence,
+                        gate_reason or "restoration refused: artwork is unavailable",
                     )
                 company_name = fields.get("company") or advert.get("company_name")
                 if company_name and not page.is_order_form:
@@ -471,6 +467,28 @@ class Pipeline:
             and box.bottom <= page_height * 0.92
             and box.right - box.left <= page_width * 0.95
             and box.bottom - box.top <= page_height * 0.82
+        )
+
+    def _artwork_gate(self, page, confidence, box, page_size):
+        frame_plausible = (
+            not page.is_order_form
+            or self._order_form_box_is_plausible(box, page_size)
+        )
+        if not page.is_order_form:
+            return frame_plausible, True, None
+        failures = []
+        if confidence < self.confidence_threshold:
+            failures.append("low confidence")
+        if not frame_plausible:
+            failures.append("implausible frame")
+        if not failures:
+            return frame_plausible, True, None
+        return (
+            frame_plausible,
+            False,
+            "restoration refused: order-form artwork gate failed ("
+            + ", ".join(failures)
+            + ")",
         )
 
     def _add_order_form_reviews(self, occurrence, page, frame_plausible):
@@ -612,7 +630,21 @@ class Pipeline:
                 "background_regions": [],
                 "protected_regions": [],
                 "ad_boundary": [],
-                "findings": [],
+                "geometry_quality": {
+                    "status": "not_assessed",
+                    "text_characters": None,
+                    "invalid_ratio": None,
+                    "overlap_ratio": None,
+                },
+                "findings": [
+                    {
+                        "rule": "qr_detection_unavailable",
+                        "confidence": 0.0,
+                        "text": "",
+                        "region": None,
+                        "action": "review_required",
+                    },
+                ],
                 "review_status": "pending",
                 "edit_status": "refused",
             },
