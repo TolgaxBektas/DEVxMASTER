@@ -22,7 +22,7 @@ from app.services.order_forms import (
 )
 from app.services.ocr import OCRResult
 from app.services.render import render_page, render_pdf
-from app.services.restoration import propose_level_one
+from app.services.restoration import propose_level_one, verify_proposal
 from app.services.storage import sha256
 from app.services.text_layer import (
     page_texts_in_boxes,
@@ -599,10 +599,36 @@ class Pipeline:
             (padded_box.left, padded_box.top),
             self.artwork_dpi,
         )
+        proposal_image = result.image
+        review_reason = result.review_reason
+        if proposal_image is not None:
+            fields = json.loads(occurrence.fields_json).get("fields", {})
+            verification = verify_proposal(
+                source,
+                page_number,
+                box,
+                self.render_dpi,
+                artwork_output,
+                proposal_image,
+                (padded_box.left, padded_box.top),
+                self.artwork_dpi,
+                result.manifest,
+                [str(value) for value in fields.values() if value],
+            )
+            result.manifest["verification"] = verification
+            if verification["status"] != "passed":
+                proposal_image = None
+                review_reason = (
+                    "restoration refused: independent verification failed"
+                )
+                result.manifest["cascade_justification"] = (
+                    "Refused: independent restoration verification failed."
+                )
+                result.manifest["edit_status"] = "refused"
         occurrence.restoration_manifest_json = json.dumps(
             result.manifest, ensure_ascii=False
         )
-        if result.image is not None:
+        if proposal_image is not None:
             output = (
                 self.local_work_dir
                 / digest
@@ -610,14 +636,14 @@ class Pipeline:
                 / f"occurrence_{occurrence.id}.png"
             )
             output.parent.mkdir(parents=True, exist_ok=True)
-            result.image.save(output, format="PNG", optimize=False)
+            proposal_image.save(output, format="PNG", optimize=False)
             occurrence.restoration_path = self.storage.put_file(
                 output, f"{digest}/restoration/occurrence_{occurrence.id}.png"
             )
         else:
             occurrence.restoration_path = None
-        if result.review_reason:
-            self._add_review(occurrence, result.review_reason)
+        if review_reason:
+            self._add_review(occurrence, review_reason)
 
     def _refuse_restoration(self, occurrence, reason):
         occurrence.restoration_manifest_json = json.dumps(
@@ -645,6 +671,7 @@ class Pipeline:
                         "action": "review_required",
                     },
                 ],
+                "verification": {"status": "not_assessed", "checks": []},
                 "review_status": "pending",
                 "edit_status": "refused",
             },

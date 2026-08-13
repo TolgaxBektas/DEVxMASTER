@@ -103,6 +103,11 @@ restoration analysis ran, including refusals after that analysis. Refusals
 before analysis mark it `not_assessed` and retain the QR capability finding
 with `action: "review_required"`; these fields do not imply that either
 analysis ran.
+When a level-one image is produced, an independent verification gate runs
+before the image is stored. Its `verification` manifest entry records the
+verdict and checks for boundary containment, dimensions, source text anchors,
+new content, and duplicated content. A refusal before verification records
+`verification.status: "not_assessed"`; it never implies verification passed.
 Restoration does not upscale source detail, remove backgrounds, sharpen, or add
 transparency. Order-form artwork is only exported when the framed advert has
 sufficient detector confidence and passes a cheap geometric plausibility check.

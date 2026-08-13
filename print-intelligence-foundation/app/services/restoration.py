@@ -53,6 +53,268 @@ class RestorationResult:
     review_reason: str | None
 
 
+def _anchor_matches(
+    image: Image.Image,
+    line: TextLine,
+    background,
+    displacements: list[tuple[int, int]],
+) -> int:
+    pixels = image.load()
+    points = []
+    original_left = max(0, line.box.left)
+    original_top = max(0, line.box.top)
+    original_right = min(image.width, line.box.right)
+    original_bottom = min(image.height, line.box.bottom)
+    for y in range(original_top, original_bottom):
+        for x in range(original_left, original_right):
+            if _is_ink(pixels[x, y], background):
+                points.append(
+                    (x - original_left, y - original_top, pixels[x, y])
+                )
+    if not points:
+        return 0
+    points = points[:: max(1, len(points) // 32)][:32]
+    matches = 0
+    height = original_bottom - original_top
+    width = original_right - original_left
+    for offset_x, offset_y in displacements:
+        candidate_left = original_left + offset_x
+        candidate_top = original_top + offset_y
+        if (
+            candidate_left < 0
+            or candidate_top < 0
+            or candidate_left + width > image.width
+            or candidate_top + height > image.height
+        ):
+            continue
+        if all(
+            pixels[candidate_left + x, candidate_top + y] == color
+            for x, y, color in points
+        ):
+            matches += 1
+    return matches
+
+
+def verify_proposal(
+    pdf_path: str | Path,
+    page_number: int,
+    detector_box: Box,
+    render_dpi: int,
+    source_image_path: str | Path,
+    proposed: Image.Image,
+    artwork_crop_origin: tuple[int, int],
+    artwork_dpi: int,
+    manifest: dict,
+    anchor_texts: list[str] | None = None,
+) -> dict:
+    source = Image.open(source_image_path).convert("RGB")
+    checks = []
+    if proposed.size != source.size:
+        checks.append(
+            {
+                "name": "dimensions",
+                "status": "failed",
+                "reason": "proposal dimensions differ from source artwork",
+            }
+        )
+        return {"status": "failed", "checks": checks}
+    aspect_ratio = source.width / source.height
+    checks.append(
+        {
+            "name": "dimensions",
+            "status": "passed",
+            "source_size": list(source.size),
+            "proposal_size": list(proposed.size),
+            "source_aspect_ratio": aspect_ratio,
+            "proposal_aspect_ratio": proposed.width / proposed.height,
+        }
+    )
+
+    raw_boundary = manifest.get("ad_boundary")
+    if not isinstance(raw_boundary, (list, tuple)) or len(raw_boundary) != 4:
+        return {
+            "status": "failed",
+            "checks": checks
+            + [
+                {
+                    "name": "approved_boundary",
+                    "status": "failed",
+                    "reason": "manifest is missing a valid approved advertisement boundary",
+                }
+            ],
+        }
+    try:
+        boundary = Box(*(int(value) for value in raw_boundary))
+    except (TypeError, ValueError):
+        return {
+            "status": "failed",
+            "checks": checks
+            + [
+                {
+                    "name": "approved_boundary",
+                    "status": "failed",
+                    "reason": "manifest contains an invalid approved advertisement boundary",
+                }
+            ],
+        }
+    if (
+        boundary.left < 0
+        or boundary.top < 0
+        or boundary.right > source.width
+        or boundary.bottom > source.height
+        or boundary.left >= boundary.right
+        or boundary.top >= boundary.bottom
+    ):
+        return {
+            "status": "failed",
+            "checks": checks
+            + [
+                {
+                    "name": "approved_boundary",
+                    "status": "failed",
+                    "reason": "approved advertisement boundary is outside the artwork",
+                }
+            ],
+        }
+    source_pixels = source.load()
+    proposed_pixels = proposed.load()
+    outside_equal = all(
+        source_pixels[x, y] == proposed_pixels[x, y]
+        for y in range(source.height)
+        for x in range(source.width)
+        if not (
+            boundary.left <= x < boundary.right
+            and boundary.top <= y < boundary.bottom
+        )
+    )
+    checks.append(
+        {
+            "name": "approved_boundary",
+            "status": "passed" if outside_equal else "failed",
+            "reason": ""
+            if outside_equal
+            else "proposal differs outside the approved advertisement boundary",
+        }
+    )
+
+    scale = artwork_dpi / render_dpi
+    glyphs, _, _ = _page_glyphs(
+        pdf_path, page_number, detector_box, render_dpi
+    )
+    local_glyphs = [
+        Glyph(
+            glyph.text,
+            Box(
+                round(glyph.box.left * scale - artwork_crop_origin[0]),
+                round(glyph.box.top * scale - artwork_crop_origin[1]),
+                round(glyph.box.right * scale - artwork_crop_origin[0]),
+                round(glyph.box.bottom * scale - artwork_crop_origin[1]),
+            ),
+        )
+        for glyph in glyphs
+    ]
+    lines = _group_lines(local_glyphs, 5)
+    background = _dominant_color(source, boundary)[0]
+    anchors = [
+        line for line in lines if _communication_kind(line.text) is not None
+    ]
+    if anchor_texts:
+        anchors.extend(
+            line for line in lines if line.text in set(anchor_texts)
+        )
+    anchors = list({line.text: line for line in anchors}.values())
+    displacements = [(0, 0)]
+    source_regions = [
+        Box(*region) for region in manifest.get("source_regions", [])
+    ]
+    destination_regions = [
+        Box(*region) for region in manifest.get("destination_regions", [])
+    ]
+    displacements.extend(
+        (destination.left - source.left, destination.top - source.top)
+        for source, destination in zip(source_regions, destination_regions)
+    )
+    displacements = list(dict.fromkeys(displacements))
+    anchor_counts = [
+        _anchor_matches(proposed, line, background, displacements)
+        for line in anchors
+    ]
+    anchors_ok = bool(anchors) and all(count == 1 for count in anchor_counts)
+    checks.append(
+        {
+            "name": "text_anchors",
+            "status": "passed" if anchors_ok else "failed",
+            "anchors": [line.text for line in anchors],
+            "matches": anchor_counts,
+            "new_anchors": [],
+            "reason": ""
+            if anchors_ok
+            else "one or more original text anchors were lost or duplicated",
+        }
+    )
+
+    original_colors = Counter(source.getdata())
+    proposed_colors = Counter(proposed.getdata())
+    replacement = tuple(
+        manifest.get("background_replacement_color", background)
+    )
+    excess = {
+        color: proposed_count - original_colors.get(color, 0)
+        for color, proposed_count in proposed_colors.items()
+        if color != replacement
+        and proposed_count > original_colors.get(color, 0)
+    }
+    checks.append(
+        {
+            "name": "new_content",
+            "status": "passed" if not excess else "failed",
+            "excess_pixels_by_color": {
+                str(color): count for color, count in excess.items()
+            },
+            "reason": ""
+            if not excess
+            else "proposal contains pixels absent from the source artwork",
+        }
+    )
+
+    def dark_count(image, region):
+        return sum(
+            1
+            for y in range(region.top, region.bottom)
+            for x in range(region.left, region.right)
+            if max(
+                abs(color - base)
+                for color, base in zip(image.getpixel((x, y)), background)
+            )
+            > 20
+        )
+
+    duplicate_ink = 0
+    for source_region, destination_region in zip(
+        source_regions, destination_regions
+    ):
+        expected = dark_count(source, destination_region)
+        actual = dark_count(proposed, source_region)
+        if abs(actual - expected) > max(20, expected * 0.25):
+            duplicate_ink += 1
+    checks.append(
+        {
+            "name": "duplicated_content",
+            "status": "passed" if duplicate_ink == 0 else "failed",
+            "remaining_source_ink": duplicate_ink,
+            "reason": ""
+            if duplicate_ink == 0
+            else "source ink remains where moved content should have been removed",
+        }
+    )
+    failed = [check for check in checks if check["status"] == "failed"]
+    return {
+        "status": "passed" if not failed else "failed",
+        "checks": checks,
+        "anchors_assessed": bool(anchors),
+    }
+
+
 def _page_glyphs(pdf_path: str | Path, page_number: int, ad_box: Box, render_dpi: int):
     with open_document(pdf_path) as pdf:
         page = pdf[page_number - 1]
@@ -366,6 +628,7 @@ def propose_level_one(
                 "action": "review_required",
             }
         ],
+        "verification": {"status": "not_assessed", "checks": []},
         "review_status": "pending",
         "edit_status": "refused",
     }
