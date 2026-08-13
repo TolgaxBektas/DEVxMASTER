@@ -483,6 +483,17 @@ def propose_level_one(
     )
     changed_background = bytearray(artwork.width * artwork.height)
     pixels = artwork.load()
+    protected_boxes = [
+        glyph.box
+        for glyph in local_glyphs
+        if not any(
+            strip.left <= glyph.box.left
+            and glyph.box.right <= strip.right
+            and strip.top <= glyph.box.top
+            and glyph.box.bottom <= strip.bottom
+            for strip in strips
+        )
+    ]
     for y in range(approved_box.top, approved_box.bottom):
         for x in range(approved_box.left, approved_box.right):
             index = y * artwork.width + x
@@ -509,7 +520,10 @@ def propose_level_one(
                 [second_box.left, second_box.top, second_box.right, second_box.bottom],
                 [first_box.left, first_box.top, first_box.right, first_box.bottom],
             ],
-            "protected_regions": [],
+            "protected_regions": [
+                [box.left, box.top, box.right, box.bottom]
+                for box in protected_boxes
+            ],
             "background_regions": [
                 region
                 for region in [_changed_region(changed_background, artwork.size)]

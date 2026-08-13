@@ -106,6 +106,7 @@ def test_accepted_proposal_changes_only_recorded_regions_and_preserves_dimension
                 assert original_pixels[x, y] == proposal_pixels[x, y]
     assert manifest["source_regions"]
     assert manifest["destination_regions"]
+    assert manifest["protected_regions"]
     assert manifest["background_regions"]
     background = tuple(manifest["background_source_color"])
     replacement = tuple(manifest["background_replacement_color"])
@@ -126,19 +127,22 @@ def test_accepted_proposal_changes_only_recorded_regions_and_preserves_dimension
     destination_regions = [
         tuple(region) for region in manifest["destination_regions"]
     ]
+    for region in source_regions + destination_regions:
+        assert boundary[0] <= region[0] <= region[2] <= boundary[2]
+        assert boundary[1] <= region[1] <= region[3] <= boundary[3]
     edited_regions = source_regions + destination_regions
     for y in range(boundary[1], boundary[3]):
         for x in range(boundary[0], boundary[2]):
-                source_pixel = original_pixels[x, y]
-                in_edited_region = any(
-                    region[0] <= x < region[2]
-                    and region[1] <= y < region[3]
-                    for region in edited_regions
-                )
-                if source_pixel == background and not in_edited_region:
-                    assert proposal_pixels[x, y] == replacement
-                elif _is_ink(source_pixel, background) and not in_edited_region:
-                    assert proposal_pixels[x, y] == source_pixel
+            source_pixel = original_pixels[x, y]
+            in_edited_region = any(
+                region[0] <= x < region[2]
+                and region[1] <= y < region[3]
+                for region in edited_regions
+            )
+            if source_pixel == background and not in_edited_region:
+                assert proposal_pixels[x, y] == replacement
+            elif _is_ink(source_pixel, background) and not in_edited_region:
+                assert proposal_pixels[x, y] == source_pixel
     session.close()
 
 
