@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.models import DiscoveredCandidate, Document, Job, Source
 from app.core.config import get_settings
-from app.services.downloader import download, fetch_url
+from app.services.downloader import download, fetch_url, validate_public_url
 from app.services.factory import make_pipeline
 from app.services.queue import RedisQueue
 from app.services.storage import sha256
@@ -47,7 +47,7 @@ def normalize_url(url: str) -> str:
 class DiscoveryCrawler:
     def __init__(
         self,
-        session: Session,
+        session: Session | None,
         max_bytes: int = 50_000_000,
         max_depth: int = 2,
         max_pages: int = 50,
@@ -68,7 +68,17 @@ class DiscoveryCrawler:
         self.queue = queue
         self._last_request: dict[str, float] = {}
 
+    @classmethod
+    def for_proposals(cls, **kwargs):
+        return cls(session=None, **kwargs)
+
+    def _require_session(self) -> Session:
+        if self.session is None:
+            raise RuntimeError("stateful discovery operation requires a database session")
+        return self.session
+
     def crawl(self, source: Source) -> dict[str, int]:
+        session = self._require_session()
         deadline = monotonic() + self.timeout_seconds
         robots = self._robots(source.base_url, deadline)
         links = (
@@ -92,14 +102,63 @@ class DiscoveryCrawler:
             else:
                 skipped += 1
         source.last_crawled_at = datetime.now(timezone.utc)
-        self.session.commit()
+        session.commit()
         return {"discovered": discovered, "skipped": skipped}
 
+    def propose(
+        self,
+        seed_pages: list[str],
+        search_terms: list[str],
+        max_results: int,
+    ) -> list[dict]:
+        proposals = []
+        seen = set()
+        for seed_page in seed_pages:
+            if len(proposals) >= max_results:
+                break
+            if urlsplit(seed_page).path.lower().endswith(".pdf"):
+                try:
+                    validate_public_url(seed_page)
+                except (ValueError, TimeoutError, httpx.HTTPError):
+                    continue
+                links = [seed_page]
+            else:
+                deadline = monotonic() + self.timeout_seconds
+                robots = self._robots(seed_page, deadline)
+                links = self._html(seed_page, robots, deadline)
+                links.extend(self._sitemap(seed_page, robots, deadline))
+            for url in links:
+                try:
+                    validate_public_url(url)
+                except ValueError:
+                    continue
+                normalized = normalize_url(url)
+                if normalized in seen:
+                    continue
+                seen.add(normalized)
+                term_hits = sum(
+                    term.lower() in url.lower()
+                    for term in search_terms
+                    if term.strip()
+                )
+                proposals.append(
+                    {
+                        "url": url,
+                        "score": float(1 + term_hits),
+                        "found_on": seed_page,
+                        "discovery": "seed_page",
+                    }
+                )
+                if len(proposals) >= max_results:
+                    break
+        return proposals
+
     def process_candidate(self, candidate: DiscoveredCandidate) -> Document:
+        session = self._require_session()
         try:
             data = download(candidate.url, self.max_bytes)
             digest = sha256(data)
-            existing = self.session.scalar(
+            existing = session.scalar(
                 select(Document).where(Document.content_sha256 == digest)
             )
             if existing:
@@ -107,24 +166,25 @@ class DiscoveryCrawler:
                 candidate.document_id = existing.id
                 if self._document_complete(existing.id):
                     candidate.state = "skipped"
-                    self.session.commit()
+                    session.commit()
                     return existing
             settings = get_settings()
-            document = make_pipeline(self.session, settings).ingest(
+            document = make_pipeline(session, settings).ingest(
                 data, source_url=candidate.url
             )
             candidate.content_sha256 = digest
             candidate.document_id = document.id
             candidate.state = "ingested"
-            self.session.commit()
+            session.commit()
             return document
         except Exception as exc:
             candidate.state, candidate.error = "failed", str(exc)
-            self.session.commit()
+            session.commit()
             raise
 
     def _document_complete(self, document_id: int) -> bool:
-        jobs = self.session.scalars(
+        session = self._require_session()
+        jobs = session.scalars(
             select(Job).where(Job.document_id == document_id)
         ).all()
         states = {job.stage: job.state for job in jobs}
@@ -134,8 +194,9 @@ class DiscoveryCrawler:
         )
 
     def _candidate(self, source: Source, url: str):
+        session = self._require_session()
         normalized = normalize_url(url)
-        candidate = self.session.scalar(
+        candidate = session.scalar(
             select(DiscoveredCandidate).where(
                 DiscoveredCandidate.normalized_url == normalized
             )
@@ -145,8 +206,8 @@ class DiscoveryCrawler:
         candidate = DiscoveredCandidate(
             source_id=source.id, url=url, normalized_url=normalized
         )
-        self.session.add(candidate)
-        self.session.flush()
+        session.add(candidate)
+        session.flush()
         return candidate, True
 
     def _request(self, url: str, deadline: float):
