@@ -3,10 +3,10 @@ from dataclasses import dataclass
 import re
 from pathlib import Path
 
-import pypdfium2 as pdfium
 from PIL import Image
 
 from app.services.bbox import Box
+from app.services.pdfium import open_document
 
 
 PHONE_RE = re.compile(r"(?:\+49|0049|0)\s*(?:\(?\d{2,5}\)?[\s./-]*)\d[\d\s./-]{4,}")
@@ -54,44 +54,41 @@ class RestorationResult:
 
 
 def _page_glyphs(pdf_path: str | Path, page_number: int, ad_box: Box, render_dpi: int):
-    pdf = pdfium.PdfDocument(str(pdf_path))
-    page = None
-    text_page = None
-    try:
+    with open_document(pdf_path) as pdf:
         page = pdf[page_number - 1]
-        page_width, page_height = page.get_size()
-        text_page = page.get_textpage()
-        text = text_page.get_text_range()
-        scale = render_dpi / 72
-        page_box = ad_box
-        glyphs = []
-        invalid = 0
-        for index, value in enumerate(text):
-            left, bottom, right, top = text_page.get_charbox(index)
-            if right <= left or top <= bottom:
-                invalid += 1
-                continue
-            pixel_box = Box(
-                round(left * scale),
-                round((page_height - top) * scale),
-                round(right * scale),
-                round((page_height - bottom) * scale),
-            )
-            center_x = (pixel_box.left + pixel_box.right) / 2
-            center_y = (pixel_box.top + pixel_box.bottom) / 2
-            if (
-                page_box.left <= center_x <= page_box.right
-                and page_box.top <= center_y <= page_box.bottom
-                and value.strip()
-            ):
-                glyphs.append(Glyph(value, pixel_box))
-        return glyphs, invalid, len(text)
-    finally:
-        if text_page is not None:
-            text_page.close()
-        if page is not None:
+        try:
+            page_width, page_height = page.get_size()
+            text_page = page.get_textpage()
+            try:
+                text = text_page.get_text_range()
+                scale = render_dpi / 72
+                page_box = ad_box
+                glyphs = []
+                invalid = 0
+                for index, value in enumerate(text):
+                    left, bottom, right, top = text_page.get_charbox(index)
+                    if right <= left or top <= bottom:
+                        invalid += 1
+                        continue
+                    pixel_box = Box(
+                        round(left * scale),
+                        round((page_height - top) * scale),
+                        round(right * scale),
+                        round((page_height - bottom) * scale),
+                    )
+                    center_x = (pixel_box.left + pixel_box.right) / 2
+                    center_y = (pixel_box.top + pixel_box.bottom) / 2
+                    if (
+                        page_box.left <= center_x <= page_box.right
+                        and page_box.top <= center_y <= page_box.bottom
+                        and value.strip()
+                    ):
+                        glyphs.append(Glyph(value, pixel_box))
+                return glyphs, invalid, len(text)
+            finally:
+                text_page.close()
+        finally:
             page.close()
-        pdf.close()
 
 
 def _group_lines(glyphs: list[Glyph], tolerance: float) -> list[TextLine]:
@@ -354,6 +351,7 @@ def propose_level_one(
         "protected_regions": [],
         "ad_boundary": [],
         "geometry_quality": {
+            "status": "assessed",
             "text_characters": len(local_glyphs),
             "invalid_ratio": invalid_ratio,
             "overlap_ratio": overlap_ratio,

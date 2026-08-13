@@ -79,6 +79,7 @@ def test_fixture_restoration_accepts_clean_lines_and_refuses_uncertain_ads(tmp_p
     assert "fewer than two communication lines" in manifests[1]["cascade_justification"]
     assert "malformed or overlapping" in manifests[2]["cascade_justification"]
     assert manifests[0]["cascade_level"] == manifests[3]["cascade_level"] == 1
+    assert manifests[3]["geometry_quality"]["status"] == "assessed"
     assert all(manifest["review_status"] == "pending" for manifest in manifests)
     assert all(
         "qr_detection_unavailable"

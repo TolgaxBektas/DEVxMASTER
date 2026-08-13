@@ -4,10 +4,9 @@ import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import pypdfium2 as pdfium
-
 from app.schemas.pipeline import AdFields
 from app.services.extraction import normalize_address, normalize_domain, normalize_phone
+from app.services.pdfium import open_document
 
 
 # Aliases are data so new publisher spellings can be added without changing
@@ -281,8 +280,7 @@ def _parse_order_form_page(page) -> FormParseResult:
 
 
 def parse_order_forms(pdf_path: str | Path) -> dict[int, FormParseResult]:
-    pdf = pdfium.PdfDocument(str(pdf_path))
-    try:
+    with open_document(pdf_path) as pdf:
         results = {}
         for page_number in range(1, len(pdf) + 1):
             page = pdf[page_number - 1]
@@ -291,8 +289,6 @@ def parse_order_forms(pdf_path: str | Path) -> dict[int, FormParseResult]:
             finally:
                 page.close()
         return results
-    finally:
-        pdf.close()
 
 
 def parse_order_form(pdf_path: str | Path, page_number: int) -> FormParseResult:
