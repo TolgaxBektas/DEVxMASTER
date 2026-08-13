@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     artwork_dpi: int = 300
     artwork_padding: int = 8
     artwork_trim_cap: int = 4
+    restoration_enabled: bool = False
     confidence_threshold: float = 0.7
     vision_consensus_runs: int = 1
     max_download_bytes: int = 50_000_000
