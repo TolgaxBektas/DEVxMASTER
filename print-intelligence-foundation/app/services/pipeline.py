@@ -388,9 +388,23 @@ class Pipeline:
                     for _, advert, _ in members
                     if advert.get(key)
                 ]
-                merged[key] = max(
-                    dict.fromkeys(values), key=lambda value: values.count(value)
-                )
+                groups = []
+                for value in values:
+                    group = next(
+                        (group for group in groups if group[0] == value),
+                        None,
+                    )
+                    if group is None:
+                        groups.append([value, 1, 0.0])
+                    else:
+                        group[1] += 1
+                for group in groups:
+                    group[2] = max(
+                        float(advert.get("confidence", 0))
+                        for _, advert, _ in members
+                        if advert.get(key) == group[0]
+                    )
+                merged[key] = max(groups, key=lambda group: (group[1], group[2]))[0]
             candidates.append((box, merged))
         return candidates, unstable
 
@@ -604,12 +618,23 @@ class Pipeline:
             review.reason = f"{review.reason}; {reason}"
 
     def _add_page_review(self, page, reason):
-        review = self.session.scalar(
-            select(ReviewItem).where(
-                ReviewItem.page_id == page.id,
-                ReviewItem.ad_id.is_(None),
-            )
+        review = next(
+            (
+                item
+                for item in self.session.new
+                if isinstance(item, ReviewItem)
+                and item.page_id == page.id
+                and item.ad_id is None
+            ),
+            None,
         )
+        if review is None:
+            review = self.session.scalar(
+                select(ReviewItem).where(
+                    ReviewItem.page_id == page.id,
+                    ReviewItem.ad_id.is_(None),
+                )
+            )
         if review is None:
             self.session.add(ReviewItem(page_id=page.id, reason=reason))
         elif reason not in review.reason.split("; "):

@@ -33,7 +33,9 @@ class _ChangingProvider:
 def _pipeline(tmp_path, provider, runs):
     engine = create_engine(f"sqlite:///{tmp_path / 'consensus.db'}")
     Base.metadata.create_all(engine)
-    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    session_factory = sessionmaker(
+        bind=engine, autoflush=False, expire_on_commit=False
+    )
     session = session_factory()
     pipeline = Pipeline(
         session,
@@ -122,5 +124,76 @@ def test_consensus_runs_once_preserving_original_result(tmp_path):
         assert candidates == [(Box(100, 100, 500, 500), result[0])]
         assert unstable == []
         assert provider.calls == 1
+    finally:
+        session.close()
+
+
+def test_consensus_majority_supports_nested_fields(tmp_path):
+    results = [
+        [
+            {
+                "bbox": [100, 100, 500, 500],
+                "confidence": 0.2,
+                "fields": {"phone": "111", "email": "first@example.com"},
+            }
+        ],
+        [
+            {
+                "bbox": [100, 100, 500, 500],
+                "confidence": 0.9,
+                "fields": {"phone": "222", "email": "second@example.com"},
+            }
+        ],
+        [
+            {
+                "bbox": [100, 100, 500, 500],
+                "confidence": 0.3,
+                "fields": {"phone": "111", "email": "first@example.com"},
+            }
+        ],
+    ]
+    provider = _ChangingProvider(results)
+    session, pipeline = _pipeline(tmp_path, provider, 3)
+    try:
+        candidates, unstable = pipeline._detect_candidates(
+            Path("page.png"), 1, (1000, 1000)
+        )
+        assert candidates[0][1]["fields"] == {
+            "phone": "111",
+            "email": "first@example.com",
+        }
+        assert unstable == []
+    finally:
+        session.close()
+
+
+def test_consensus_merges_multiple_unstable_clusters_into_one_page_review(tmp_path):
+    first_cluster = {
+        "bbox": [100, 100, 500, 500],
+        "confidence": 0.8,
+        "company_name": "First",
+    }
+    second_cluster = {
+        "bbox": [700, 700, 900, 900],
+        "confidence": 0.8,
+        "company_name": "Second",
+    }
+    provider = _ChangingProvider(
+        [[first_cluster], [first_cluster], [second_cluster], [], []]
+    )
+    session, pipeline = _pipeline(tmp_path, provider, 5)
+    try:
+        document = pipeline.ingest(_pdf(["Synthetic publication"]))
+        page = session.scalar(select(Page).where(Page.document_id == document.id))
+        reviews = session.scalars(
+            select(ReviewItem).where(
+                ReviewItem.page_id == page.id, ReviewItem.ad_id.is_(None)
+            )
+        ).all()
+        assert len(reviews) == 1
+        assert reviews[0].reason == (
+            "detection unstable: box appeared in 2/5 runs; "
+            "detection unstable: box appeared in 1/5 runs"
+        )
     finally:
         session.close()
