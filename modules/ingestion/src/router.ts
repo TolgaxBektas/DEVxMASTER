@@ -64,7 +64,10 @@ export function createIngestionRouter(
           maxResults: z.number().int().positive().max(100).default(25),
         }))
         .mutation(async ({ ctx, input }) => {
-          if (!discover) throw new Error("Quellensuche ist nicht konfiguriert");
+          if (!discover) throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "Quellensuche ist nicht konfiguriert.",
+          });
           const proposals = await discover({
             seedPages: input.seedPages,
             searchTerms: input.searchTerms,
@@ -101,9 +104,23 @@ export function createIngestionRouter(
       fetch: permissionProcedure("ingestion.source.fetch")
         .input(z.object({ id: z.number().int().positive() }))
         .mutation(async ({ ctx, input }) => {
-          const source = await repository.getSource(ctx.auth.tenantId, input.id);
-          if (source.status !== "approved") throw new Error("Quelle ist nicht freigegeben");
-          if (!enqueue) throw new Error("Quellenabruf ist nicht konfiguriert");
+          let source;
+          try {
+            source = await repository.getSource(ctx.auth.tenantId, input.id);
+          } catch (error) {
+            if (String(error).includes("Quelle nicht gefunden")) {
+              throw new TRPCError({ code: "NOT_FOUND", message: "Quelle nicht gefunden." });
+            }
+            throw error;
+          }
+          if (source.status !== "approved") throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "Quelle ist nicht freigegeben.",
+          });
+          if (!enqueue) throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "Quellenabruf ist nicht konfiguriert.",
+          });
           return enqueue({
             name: "ingestion.source.fetch",
             tenantId: ctx.auth.tenantId,
@@ -151,6 +168,19 @@ export function createIngestionRouter(
             throw new TRPCError({
               code: "BAD_REQUEST",
               message: "Keine Änderung vorgenommen.",
+            });
+          }
+          const current = (await repository.getDocument(ctx.auth.tenantId, id)).classification;
+          const effectiveStart = value.periodStartYear !== undefined
+            ? value.periodStartYear
+            : current?.periodStartYear;
+          const effectiveEnd = value.periodEndYear !== undefined
+            ? value.periodEndYear
+            : current?.periodEndYear;
+          if (effectiveStart != null && effectiveEnd != null && effectiveEnd < effectiveStart) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Endjahr: Das Endjahr darf nicht vor dem Startjahr liegen.",
             });
           }
           const result = await repository.updateClassificationManual(

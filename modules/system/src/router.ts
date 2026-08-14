@@ -10,6 +10,7 @@ import {
   jobs,
   permissionProcedure,
   router,
+  TRPCError,
   verifyAuditChain,
   type AuditRepository,
 } from "@xmaster-center/kernel";
@@ -81,10 +82,21 @@ export function createSystemRouter(deps: {
             (current.tenantId !== null &&
               current.tenantId !== Number(ctx.auth.tenantId))
           ) {
-            throw new Error("Job nicht gefunden");
+            throw new TRPCError({ code: "NOT_FOUND", message: "Job nicht gefunden." });
           }
-          const job = await deps.queue.requeue(input.id);
-          if (!job) throw new Error("Job nicht gefunden");
+          let job;
+          try {
+            job = await deps.queue.requeue(input.id);
+          } catch (error) {
+            if (String(error).includes("Nur tote Jobs")) {
+              throw new TRPCError({
+                code: "PRECONDITION_FAILED",
+                message: "Nur tote Jobs können erneut eingereiht werden.",
+              });
+            }
+            throw error;
+          }
+          if (!job) throw new TRPCError({ code: "NOT_FOUND", message: "Job nicht gefunden." });
           await appendAudit(deps.audit, {
             tenantId: ctx.auth.tenantId,
             action: "job.requeued",
@@ -121,9 +133,20 @@ export function createSystemRouter(deps: {
               )
               .limit(1)
           )[0];
-          if (!current) throw new Error("Event nicht gefunden");
-          const event = await deps.events.requeue(input.id);
-          if (!event) throw new Error("Event nicht gefunden");
+          if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "Event nicht gefunden." });
+          let event;
+          try {
+            event = await deps.events.requeue(input.id);
+          } catch (error) {
+            if (String(error).includes("Nur Dead Letters")) {
+              throw new TRPCError({
+                code: "PRECONDITION_FAILED",
+                message: "Nur Dead Letters können erneut zugestellt werden.",
+              });
+            }
+            throw error;
+          }
+          if (!event) throw new TRPCError({ code: "NOT_FOUND", message: "Event nicht gefunden." });
           await appendAudit(deps.audit, {
             tenantId: ctx.auth.tenantId,
             action: "event.requeued",

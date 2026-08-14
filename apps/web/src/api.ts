@@ -8,18 +8,6 @@ export class ApiError extends Error {
   }
 }
 
-const fieldLabels: Record<string, string> = {
-  type: "Art",
-  publicationName: "Publikationsname",
-  editionLabel: "Ausgabe",
-  periodStartYear: "Startjahr",
-  periodEndYear: "Endjahr",
-  periodIssue: "Ausgabennummer",
-  regionPlace: "Ort",
-  regionDistrict: "Kreis",
-  regionState: "Bundesland",
-};
-
 function readableMessage(value: unknown): string | undefined {
   if (typeof value === "string") {
     const trimmed = value.trim();
@@ -45,7 +33,6 @@ function readableMessage(value: unknown): string | undefined {
     const path = Array.isArray(candidate.path)
       ? candidate.path
           .filter((item) => typeof item === "string")
-          .map((item) => fieldLabels[item] ?? item)
           .join(".")
       : "";
     return path ? `${path}: ${message}` : message;

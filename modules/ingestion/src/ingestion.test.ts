@@ -23,10 +23,44 @@ describe("Ingestion-Bestand", () => {
     expect(result.type).toBe("bürger-und-seniorenwegweiser");
     expect(result.regionDistrict).toBe("Rhein-Neckar-Kreis");
     expect(result.regionState).toBe("Baden-Württemberg");
+    expect(result.regionSource).toBe("title-page");
+    expect(result.regionSource).toBe("title-page");
     expect(result.periodStartYear).toBe(2020);
     expect(result.periodEndYear).toBe(2020);
     expect(result.typeConfidence).toBeGreaterThan(0.9);
     expect(result.editionLabel).toBe("Ausgabe 2020");
+  });
+
+  it("liefert die Regionsherkunft aus der verwendeten Evidenz oder leer", () => {
+    expect(deriveDocumentClassification({
+      filename: "Bayern-Magazin.pdf",
+      pages: [{ pageNumber: 1, text: "Das Magazin" }],
+    })).toMatchObject({ regionState: "Bayern", regionSource: "filename" });
+    expect(deriveDocumentClassification({
+      filename: "magazin.pdf",
+      pdfMetadata: { title: "Amtsblatt Bayern" },
+      pages: [{ pageNumber: 1, text: "Das Magazin" }],
+    })).toMatchObject({ regionState: "Bayern", regionSource: "pdf-metadata" });
+    expect(deriveDocumentClassification({
+      filename: "magazin.pdf",
+      pages: [{ pageNumber: 1, text: "Das Magazin" }],
+    })).toMatchObject({ regionState: null, regionSource: null });
+  });
+
+  it("liefert die Regionsherkunft aus der verwendeten Evidenz oder leer", () => {
+    expect(deriveDocumentClassification({
+      filename: "Bayern-Magazin.pdf",
+      pages: [{ pageNumber: 1, text: "Das Magazin" }],
+    })).toMatchObject({ regionState: "Bayern", regionSource: "filename" });
+    expect(deriveDocumentClassification({
+      filename: "magazin.pdf",
+      pdfMetadata: { title: "Amtsblatt Bayern" },
+      pages: [{ pageNumber: 1, text: "Das Magazin" }],
+    })).toMatchObject({ regionState: "Bayern", regionSource: "pdf-metadata" });
+    expect(deriveDocumentClassification({
+      filename: "magazin.pdf",
+      pages: [{ pageNumber: 1, text: "Das Magazin" }],
+    })).toMatchObject({ regionState: null, regionSource: null });
   });
 
   it("erkennt die vereinbarten Publikationsarten ohne KI", () => {
@@ -390,6 +424,42 @@ describe("Ingestion-Bestand", () => {
     await expect(caller.documents.correct({ id: document.document.id }))
       .rejects.toThrow("Keine Änderung vorgenommen.");
     expect(audit.entries).toHaveLength(0);
+  });
+
+  it("prüft ein einzeln gesendetes Endjahr gegen den wirksamen Startwert", async () => {
+    const repository = new MemoryIngestionRepository();
+    const document = await repository.createUploadedDocument("1", {
+      filename: "zeitraum-korrektur.pdf",
+      sha256: "9".repeat(64),
+      storageKey: "tenants/1/originals/9/zeitraum-korrektur.pdf",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "upload",
+    });
+    await repository.upsertDerivedClassification("1", document.document.id, {
+      type: null, typeSource: "first-pages", typeConfidence: null,
+      publicationName: null, publicationNameSource: "first-pages", publicationNameConfidence: null,
+      editionLabel: null, editionSource: "first-pages", editionConfidence: null,
+      periodStartYear: 2024, periodEndYear: 2026, periodIssue: null,
+      periodSource: "first-pages", periodConfidence: 0.5,
+      regionPlace: null, regionDistrict: null, regionState: null,
+      regionSource: null, regionConfidence: null,
+    });
+    const audit = new MemoryAuditRepository();
+    const auth: AuthContext = {
+      tenantId: "1",
+      user: { id: "user-1", email: null, displayName: "Test" },
+      permissions: new Set(["ingestion.document.classify"]),
+      provider: "local",
+    };
+    const caller = createIngestionRouter(repository, async () => undefined, undefined, undefined, audit)
+      .createCaller({ auth });
+    await expect(caller.documents.correct({
+      id: document.document.id,
+      periodEndYear: 2019,
+    })).rejects.toThrow("Endjahr");
+    expect((await repository.getDocument("1", document.document.id)).classification)
+      .toMatchObject({ periodStartYear: 2024, periodEndYear: 2026 });
   });
 
   it("behandelt ein Dokument eines fremden Mandanten als nicht vorhanden", async () => {

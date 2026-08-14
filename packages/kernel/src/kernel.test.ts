@@ -11,7 +11,7 @@ import { createEventBus, MemoryEventRepository } from "./events.js";
 import { isDuplicateKeyError } from "./events-drizzle.js";
 import { createRegistry, defineModule } from "./module-registry.js";
 import { can, PermissionRegistry, tenantScope } from "./rbac.js";
-import { router } from "./trpc.js";
+import { router, TRPCError } from "./trpc.js";
 
 describe("Audit-Hashkette", () => {
   it("erkennt Manipulation und behandelt seq-Kollisionen mit Retry", async () => {
@@ -143,6 +143,28 @@ describe("Audit-Hashkette", () => {
 });
 
 describe("RBAC und Modulregister", () => {
+  it("formatiert fachliche Fehler und Validierungsfelder für die Oberfläche", () => {
+    const formatter = (router({})._def._config as unknown as {
+      errorFormatter: (input: { shape: any; error: any }) => { message: string };
+    }).errorFormatter;
+    const domain = formatter({
+      shape: { message: "Quelle ist nicht freigegeben.", data: {} },
+      error: new TRPCError({ code: "PRECONDITION_FAILED", message: "Quelle ist nicht freigegeben." }),
+    });
+    expect(domain.message).toBe("Quelle ist nicht freigegeben.");
+    const validation = formatter({
+      shape: {
+        message: JSON.stringify([{
+          path: ["periodStartYear"],
+          message: "Das Jahr muss mindestens 1000 sein.",
+        }]),
+        data: {},
+      },
+      error: new TRPCError({ code: "BAD_REQUEST", message: "invalid" }),
+    });
+    expect(validation.message).toBe("Startjahr: Das Jahr muss mindestens 1000 sein.");
+  });
+
   it("prüft Rechte und Mandantengrenzen", () => {
     const context = {
       tenantId: "t1",

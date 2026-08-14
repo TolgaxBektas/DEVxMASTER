@@ -324,6 +324,23 @@ export function deriveDocumentClassification(input: {
     derivePeriodCandidate(firstPagesPeriodEvidence, "first-pages", false),
   ].find((candidate): candidate is PeriodDecision => Boolean(candidate)) ?? null;
   const region = deriveRegion(evidence);
+  const regionCandidates = [
+    { source: "filename" as const, value: deriveRegion(input.filename) },
+    { source: "pdf-metadata" as const, value: deriveRegion(metadataText) },
+    { source: "title-page" as const, value: deriveRegion(firstPage) },
+    { source: "first-pages" as const, value: deriveRegion(firstPages) },
+  ];
+  const selectedRegionFields = [region.place, region.district, region.state].filter(Boolean);
+  const regionSource = selectedRegionFields.length === 0
+    ? null
+    : regionCandidates
+      .map((candidate) => ({
+        ...candidate,
+        matches: [region.place, region.district, region.state]
+          .filter((field) => field && [candidate.value.place, candidate.value.district, candidate.value.state].includes(field))
+          .length,
+      }))
+      .sort((left, right) => right.matches - left.matches)[0]?.source ?? null;
   return {
     type: typeDecision?.value ?? null,
     typeConfidence: typeDecision?.confidence ?? null,
@@ -343,6 +360,6 @@ export function deriveDocumentClassification(input: {
     regionDistrict: region.district,
     regionState: region.state,
     regionConfidence: region.confidence,
-    regionSource: "first-pages",
+    regionSource,
   };
 }
