@@ -104,19 +104,26 @@ export function IngestionPage({ api }: ModulePageProps) {
 
   const correct = async (row: Row, form: HTMLFormElement) => {
     const data = new FormData(form);
+    const touched = new Set((form.dataset.touched ?? "").split(",").filter(Boolean));
+    const values: Record<string, string | number | null> = {};
+    const stringFields = ["type", "publicationName", "editionLabel", "regionPlace", "regionDistrict", "regionState"];
+    for (const name of stringFields) {
+      if (touched.has(name)) {
+        const raw = String(data.get(name) ?? "");
+        values[name] = raw || null;
+      }
+    }
+    for (const name of ["periodStartYear", "periodEndYear", "periodIssue"]) {
+      if (touched.has(name)) {
+        const raw = String(data.get(name) ?? "");
+        values[name] = raw ? Number(raw) : null;
+      }
+    }
     setMessage("");
     try {
       await api.mutate("modules.ingestion.documents.correct", {
         id: row.id,
-        type: String(data.get("type") || "") || null,
-        publicationName: String(data.get("publicationName") || "") || null,
-        editionLabel: String(data.get("editionLabel") || "") || null,
-        periodStartYear: data.get("periodStartYear") ? Number(data.get("periodStartYear")) : null,
-        periodEndYear: data.get("periodEndYear") ? Number(data.get("periodEndYear")) : null,
-        periodIssue: data.get("periodIssue") ? Number(data.get("periodIssue")) : null,
-        regionPlace: String(data.get("regionPlace") || "") || null,
-        regionDistrict: String(data.get("regionDistrict") || "") || null,
-        regionState: String(data.get("regionState") || "") || null,
+        ...values,
       });
       await api.invalidate?.("modules.ingestion.documents.list");
       setMessage("Korrektur gespeichert.");
@@ -169,7 +176,14 @@ export function IngestionPage({ api }: ModulePageProps) {
       <div className="stack">
         {documents.data?.map((row) => {
           const value = row.classification;
-          return <form className="list-row" key={row.id} onSubmit={(event) => { event.preventDefault(); void correct(row, event.currentTarget); }}>
+          return <form className="list-row" key={row.id} data-touched="" onChange={(event) => {
+            const form = event.currentTarget;
+            const name = (event.target as HTMLInputElement | HTMLSelectElement).name;
+            if (!name) return;
+            const fields = new Set((form.dataset.touched ?? "").split(",").filter(Boolean));
+            fields.add(name);
+            form.dataset.touched = [...fields].join(",");
+          }} onSubmit={(event) => { event.preventDefault(); void correct(row, event.currentTarget); }}>
             <div className="proposal-meta">
               <strong>{row.filename}</strong>
               <span>Zustand: {row.state}</span>

@@ -3,6 +3,7 @@ import { MemoryEventRepository } from "@xmaster-center/kernel";
 import { MemoryIngestionRepository } from "./memory-repository.js";
 import { advertisementEventIdempotencyKey, createIngestionModule } from "./module.js";
 import { deriveDocumentClassification } from "./classification.js";
+import { classificationCorrectionSchema } from "./router.js";
 
 const context = (tenantId: string | null, payload: unknown) => ({
   job: { tenantId, payload },
@@ -62,6 +63,33 @@ describe("Ingestion-Bestand", () => {
     });
     expect(municipality.regionPlace).toBe("Wusterhausen");
     expect(municipality.regionState).toBe("Brandenburg");
+
+    const state = deriveDocumentClassification({
+      filename: "Amtsblatt Sachsen-Anhalt.pdf",
+      pages: [{ pageNumber: 1, text: "AMTSBLATT SACHSEN-ANHALT" }],
+    });
+    expect(state.regionState).toBe("Sachsen-Anhalt");
+
+    const longDistrict = deriveDocumentClassification({
+      filename: "Amtsblatt Landkreis Musterstadt.pdf",
+      pages: [{
+        pageNumber: 1,
+        text: "Der Landkreis Musterstadt informiert seine Bürgerinnen und Bürger über neue Regelungen.",
+      }],
+    });
+    expect(longDistrict.regionDistrict).toBeNull();
+
+    for (const expected of [
+      "Mecklenburg-Vorpommern",
+      "Nordrhein-Westfalen",
+      "Rheinland-Pfalz",
+      "Schleswig-Holstein",
+    ]) {
+      expect(deriveDocumentClassification({
+        filename: "Amtsblatt.pdf",
+        pages: [{ pageNumber: 1, text: `Amtsblatt\n${expected}` }],
+      }).regionState).toBe(expected);
+    }
   });
 
   it("hält schwache und kontextlose Signale unsicher oder leer", () => {
@@ -75,6 +103,14 @@ describe("Ingestion-Bestand", () => {
   });
 
   it("bevorzugt PDF-Metadaten und typografische Titel vor beliebigen Deckblattzeilen", () => {
+    const filenameFallback = deriveDocumentClassification({
+      filename: "unbekanntes-dokument.pdf",
+      pages: [{ pageNumber: 1, text: "" }],
+    });
+    expect(filenameFallback.publicationName).toBe("unbekanntes-dokument");
+    expect(filenameFallback.publicationNameSource).toBe("filename");
+    expect(filenameFallback.publicationNameConfidence).toBe(0.35);
+
     const metadata = deriveDocumentClassification({
       filename: "amtsblatt.pdf",
       pages: [{ pageNumber: 1, text: "Ausgabe 2026\nSlogan", titleCandidates: [
@@ -131,6 +167,70 @@ describe("Ingestion-Bestand", () => {
     expect(result?.regionState).toBe("Schleswig-Holstein");
     expect(result?.regionSource).toBe("manual");
     expect(result?.periodStartYear).toBe(2021);
+  });
+
+  it("wendet manuelle Korrekturen feldweise an und bewahrt absichtliches Leeren", async () => {
+    const repository = new MemoryIngestionRepository();
+    const document = await repository.createUploadedDocument("1", {
+      filename: "wegweiser.pdf",
+      sha256: "e".repeat(64),
+      storageKey: "tenants/1/originals/e/wegweiser.pdf",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "upload",
+    });
+    await repository.upsertDerivedClassification("1", document.document.id, deriveDocumentClassification({
+      filename: "wegweiser.pdf",
+      pages: [{ pageNumber: 1, text: "SENIORENWEGWEISER HAMBURG\nAusgabe 2020" }],
+    }));
+    await repository.updateClassificationManual("1", document.document.id, {
+      regionState: null,
+    }, "user-1");
+    await repository.upsertDerivedClassification("1", document.document.id, deriveDocumentClassification({
+      filename: "wegweiser.pdf",
+      pages: [{ pageNumber: 1, text: "BRANCHENFÜHRER BERLIN\nAusgabe 2021" }],
+    }));
+    const result = (await repository.getDocument("1", document.document.id)).classification;
+    expect(result?.regionState).toBeNull();
+    expect(result?.regionSource).toBe("manual");
+    expect(result?.type).toBe("branchenführer");
+    expect(result?.typeSource).toBe("title-page");
+    expect(result?.periodStartYear).toBe(2021);
+  });
+
+  it("validiert Korrekturjahre verständlich", () => {
+    expect(() => classificationCorrectionSchema.parse({ id: 1, periodStartYear: 999 }))
+      .toThrow("Das Jahr muss mindestens 1000 sein.");
+    expect(() => classificationCorrectionSchema.parse({ id: 1, periodEndYear: 2201 }))
+      .toThrow("Das Jahr darf höchstens 2200 sein.");
+    expect(() => classificationCorrectionSchema.parse({ id: 1, periodStartYear: 2025, periodEndYear: 2024 }))
+      .toThrow("Das Endjahr darf nicht vor dem Startjahr liegen.");
+    expect(classificationCorrectionSchema.parse({ id: 1, periodStartYear: 2020, periodEndYear: 2021 }))
+      .toMatchObject({ periodStartYear: 2020, periodEndYear: 2021 });
+  });
+
+  it("filtert Speicher-Dokumente nur innerhalb des vollständigen Zeitraums", async () => {
+    const repository = new MemoryIngestionRepository();
+    const document = await repository.createUploadedDocument("1", {
+      filename: "zeitraum.pdf",
+      sha256: "d".repeat(64),
+      storageKey: "tenants/1/originals/d/zeitraum.pdf",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "upload",
+    });
+    await repository.upsertDerivedClassification("1", document.document.id, {
+      type: null, typeSource: "first-pages", typeConfidence: null,
+      publicationName: null, publicationNameSource: "first-pages", publicationNameConfidence: null,
+      editionLabel: null, editionSource: "first-pages", editionConfidence: null,
+      periodStartYear: 2020, periodEndYear: 2021, periodIssue: null,
+      periodSource: "first-pages", periodConfidence: 0.5,
+      regionPlace: null, regionDistrict: null, regionState: null,
+      regionSource: "first-pages", regionConfidence: null,
+    });
+    expect((await repository.listDocuments("1", { periodYear: 2021 })).map((row) => row.id))
+      .toContain(document.document.id);
+    expect(await repository.listDocuments("1", { periodYear: 2022 })).toHaveLength(0);
   });
 
   it("dedupliziert Dokumente über den Inhalts-Hash", async () => {

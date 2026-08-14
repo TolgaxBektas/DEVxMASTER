@@ -66,7 +66,7 @@ const STATES = [
   "Hamburg", "Hessen", "Mecklenburg-Vorpommern", "Niedersachsen",
   "Nordrhein-Westfalen", "Rheinland-Pfalz", "Saarland", "Sachsen",
   "Sachsen-Anhalt", "Schleswig-Holstein", "Thüringen",
-];
+].sort((left, right) => right.length - left.length);
 
 function clean(value: string): string {
   return value.normalize("NFKC").replace(/\s+/g, " ").trim();
@@ -101,13 +101,18 @@ function usableTitle(value: string): string | null {
 
 function deriveRegion(text: string) {
   const normalized = clean(text);
-  const state = STATES.find((item) => new RegExp(`\\b${item.replace("-", "[- ]")}\\b`, "i").test(normalized)) ?? null;
+  const state = STATES.find((item) => new RegExp(`\\b${item.replace(/-/g, "[- ]")}\\b`, "i").test(normalized)) ?? null;
   const districtMatch =
     normalized.match(/\bStädteRegion\s+([A-ZÄÖÜ][\wÄÖÜäöüß-]*(?:\s+[A-ZÄÖÜ][\wÄÖÜäöüß-]*){0,3})/i)
     ?? normalized.match(/\b([A-ZÄÖÜ][\wÄÖÜäöüß-]*(?:-[A-ZÄÖÜ][\wÄÖÜäöüß-]*)*-Kreis)\b/i)
-    ?? normalized.match(/\b(?:Landkreis|Kreis)\s+([A-ZÄÖÜ][^\n,.;|]+)/i);
-  const district = districtMatch
-    ? formatRegionName(clean(districtMatch[0]).replace(/\s+\d+$/, ""))
+    ?? normalized.match(/\b(?:Landkreis|Kreis)\s+([A-ZÄÖÜ][\wÄÖÜäöüß-]*(?:\s+[A-ZÄÖÜ][\wÄÖÜäöüß-]*){0,3})/i);
+  const districtCandidate = districtMatch?.[1] ? clean(districtMatch[1]) : null;
+  const districtRemainder = districtMatch?.[0]
+    ? normalized.slice(normalized.indexOf(districtMatch[0]) + districtMatch[0].length)
+    : "";
+  const districtIsProse = /\b(?:informiert|seine|ihre|die|der|und|über)\b/i.test(districtRemainder);
+  const district = districtCandidate && districtCandidate.length <= 100 && !districtIsProse
+    ? `${/^\s*(?:Landkreis|Kreis)\b/i.test(districtMatch?.[0] ?? "") ? `${/^\s*(Landkreis|Kreis)\b/i.exec(districtMatch?.[0] ?? "")?.[1]} ` : ""}${formatRegionName(districtCandidate)}`
     : null;
   const placeMatch =
     normalized.match(/\b(?:Bezirksamt|Gemeinde|Stadt)\s+([A-ZÄÖÜ][\wÄÖÜäöüß-]*(?:\s+[A-ZÄÖÜ][\wÄÖÜäöüß-]*){0,2})/i)
@@ -156,20 +161,15 @@ export function deriveDocumentClassification(input: {
       .slice()
       .sort((left, right) => right.size - left.size)
       .map((candidate) => usableTitle(candidate.text)))
-    .find((candidate): candidate is string => Boolean(candidate));
+      .find((candidate): candidate is string => Boolean(candidate));
   const textTitle = firstMeaningfulLine(firstPage);
-  const title = metadataTitle
-    || filenameTitle
-    || visualTitle
-    || usableTitle(textTitle ?? "")
-    || clean(input.filename.replace(/\.pdf$/i, ""));
-  const titleSource = metadataTitle
-    ? "pdf-metadata"
-    : filenameTitle
-      ? "filename"
-    : visualTitle || textTitle
-      ? "title-page"
-      : "filename";
+  const titleDecision = [
+    metadataTitle ? { value: metadataTitle, source: "pdf-metadata" as const, confidence: 0.92 } : null,
+    filenameTitle ? { value: filenameTitle, source: "filename" as const, confidence: 0.68 } : null,
+    visualTitle ? { value: visualTitle, source: "title-page" as const, confidence: 0.84 } : null,
+    usableTitle(textTitle ?? "") ? { value: usableTitle(textTitle ?? "")!, source: "title-page" as const, confidence: 0.45 } : null,
+    { value: clean(input.filename.replace(/\.pdf$/i, "")), source: "filename" as const, confidence: 0.35 },
+  ].find((candidate) => Boolean(candidate?.value))!;
   const contextualLines = firstPages
     .split(/\r?\n/)
     .filter((line) => /\b(?:ausgabe|edition|jahrgang)\b/i.test(line)
@@ -188,9 +188,9 @@ export function deriveDocumentClassification(input: {
     type: typeRule?.[0] ?? null,
     typeConfidence: typeRule?.[2] ?? null,
     typeSource: filenameTypeRule ? "filename" : metadataText ? "pdf-metadata" : "title-page",
-    publicationName: title,
-    publicationNameConfidence: metadataTitle ? 0.92 : filenameTitle ? 0.68 : visualTitle ? 0.84 : textTitle ? 0.45 : 0.35,
-    publicationNameSource: titleSource,
+    publicationName: titleDecision.value,
+    publicationNameConfidence: titleDecision.confidence,
+    publicationNameSource: titleDecision.source,
     editionLabel: editionWithYear ? `Ausgabe ${editionWithYear[1]}/${editionWithYear[2]}` : periodMatch?.[0] ?? (editionMatch ? `Ausgabe ${editionMatch[1]}` : null),
     editionConfidence: editionWithYear || periodMatch ? 0.86 : editionMatch ? 0.7 : null,
     editionSource: metadataText ? "pdf-metadata" : "first-pages",

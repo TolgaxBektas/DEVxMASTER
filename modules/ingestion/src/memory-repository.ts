@@ -57,7 +57,12 @@ export class MemoryIngestionRepository implements IngestionRepository {
       if (filters.type && value?.type !== filters.type) return false;
       if (filters.regionState && value?.regionState !== filters.regionState) return false;
       if (filters.regionDistrict && value?.regionDistrict !== filters.regionDistrict) return false;
-      if (filters.periodYear && !value?.periodStartYear) return false;
+      if (filters.periodYear && !(
+        value?.periodStartYear != null
+        && value.periodEndYear != null
+        && filters.periodYear >= value.periodStartYear
+        && filters.periodYear <= value.periodEndYear
+      )) return false;
       return true;
     }).map((document) => ({
       ...document,

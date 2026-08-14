@@ -1,5 +1,5 @@
 import type { MySql2Database } from "drizzle-orm/mysql2";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, gte, lte } from "drizzle-orm";
 import { classifications, documents, occurrences, pages, sources, ingestionSchema } from "./schema.js";
 import type { DerivedClassification, DocumentClassification } from "./classification.js";
 import type { DocumentListFilters, IngestionOccurrence, IngestionRepository } from "./repository.js";
@@ -39,11 +39,6 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
       correctedBy: row.correctedBy,
     } satisfies DocumentClassification;
   };
-  const withClassification = async (tenantId: string, row: any) => ({
-    ...row,
-    tenantId: String(row.tenantId),
-    classification: await readClassification(tenantId, Number(row.id)),
-  });
   return {
     async listSources(tenantId) {
       return database.select().from(sources)
@@ -84,23 +79,61 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
       return this.getSource(tenantId, sourceId);
     },
     async listDocuments(tenantId, filters: DocumentListFilters = {}) {
-      const rows = await database.select().from(documents)
-        .where(eq(documents.tenantId, Number(tenantId)))
+      const classificationFilters = [
+        filters.type ? eq(classifications.type, filters.type) : undefined,
+        filters.regionState ? eq(classifications.regionState, filters.regionState) : undefined,
+        filters.regionDistrict ? eq(classifications.regionDistrict, filters.regionDistrict) : undefined,
+        filters.periodYear != null
+          ? and(
+              gte(classifications.periodStartYear, filters.periodYear),
+              lte(classifications.periodEndYear, filters.periodYear),
+            )
+          : undefined,
+      ].filter((filter): filter is NonNullable<typeof filter> => filter !== undefined);
+      const rows = await database.select({
+        document: documents,
+        classification: classifications,
+      }).from(documents)
+        .leftJoin(classifications, and(
+          eq(classifications.tenantId, documents.tenantId),
+          eq(classifications.documentId, documents.id),
+        ))
+        .where(and(
+          eq(documents.tenantId, Number(tenantId)),
+          ...classificationFilters,
+        ))
         .orderBy(desc(documents.createdAt));
-      const result = await Promise.all(rows.map((row) => withClassification(tenantId, row)));
-      return result.filter((row) => {
-        const value = row.classification;
-        if (filters.type && value?.type !== filters.type) return false;
-        if (filters.regionState && value?.regionState !== filters.regionState) return false;
-        if (filters.regionDistrict && value?.regionDistrict !== filters.regionDistrict) return false;
-        if (filters.periodYear && !(
-          value?.periodStartYear != null
-          && value.periodEndYear != null
-          && filters.periodYear >= value.periodStartYear
-          && filters.periodYear <= value.periodEndYear
-        )) return false;
-        return true;
-      }) as never;
+      const result = rows.map(({ document, classification }) => ({
+        ...document,
+        tenantId: String(document.tenantId),
+        classification: classification
+          ? {
+              type: classification.type,
+              typeSource: classification.typeSource as DocumentClassification["typeSource"],
+              typeConfidence: classification.typeConfidence,
+              publicationName: classification.publicationName,
+              publicationNameSource: classification.publicationNameSource as DocumentClassification["publicationNameSource"],
+              publicationNameConfidence: classification.publicationNameConfidence,
+              editionLabel: classification.editionLabel,
+              editionSource: classification.editionSource as DocumentClassification["editionSource"],
+              editionConfidence: classification.editionConfidence,
+              periodStartYear: classification.periodStartYear,
+              periodEndYear: classification.periodEndYear,
+              periodIssue: classification.periodIssue,
+              periodSource: classification.periodSource as DocumentClassification["periodSource"],
+              periodConfidence: classification.periodConfidence,
+              regionPlace: classification.regionPlace,
+              regionDistrict: classification.regionDistrict,
+              regionState: classification.regionState,
+              regionSource: classification.regionSource as DocumentClassification["regionSource"],
+              regionConfidence: classification.regionConfidence,
+              derivedAt: classification.derivedAt,
+              correctedAt: classification.correctedAt,
+              correctedBy: classification.correctedBy,
+            } satisfies DocumentClassification
+          : null,
+      }));
+      return result as never;
     },
     async upsertDerivedClassification(tenantId, documentId, value) {
       const existing = (await database.select().from(classifications).where(and(

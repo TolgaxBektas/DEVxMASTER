@@ -8,6 +8,28 @@ import {
 import { z } from "zod";
 import type { IngestionRepository } from "./repository.js";
 
+export const classificationCorrectionSchema = z.object({
+  id: z.number().int().positive(),
+  type: z.string().nullable().optional(),
+  publicationName: z.string().nullable().optional(),
+  editionLabel: z.string().nullable().optional(),
+  periodStartYear: z.number().int().min(1000, "Das Jahr muss mindestens 1000 sein.").max(2200, "Das Jahr darf höchstens 2200 sein.").nullable().optional(),
+  periodEndYear: z.number().int().min(1000, "Das Jahr muss mindestens 1000 sein.").max(2200, "Das Jahr darf höchstens 2200 sein.").nullable().optional(),
+  periodIssue: z.number().int().min(0, "Die Ausgabenummer darf nicht negativ sein.").max(10000, "Die Ausgabenummer darf höchstens 10000 sein.").nullable().optional(),
+  regionPlace: z.string().nullable().optional(),
+  regionDistrict: z.string().nullable().optional(),
+  regionState: z.string().nullable().optional(),
+}).superRefine((value, context) => {
+  if (value.periodStartYear != null && value.periodEndYear != null
+    && value.periodEndYear < value.periodStartYear) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["periodEndYear"],
+      message: "Das Endjahr darf nicht vor dem Startjahr liegen.",
+    });
+  }
+});
+
 export function createIngestionRouter(
   repository: IngestionRepository,
   publish: (input: {
@@ -106,18 +128,7 @@ export function createIngestionRouter(
           ),
         )),
       correct: permissionProcedure("ingestion.document.classify")
-        .input(z.object({
-          id: z.number().int().positive(),
-          type: z.string().nullable().optional(),
-          publicationName: z.string().nullable().optional(),
-          editionLabel: z.string().nullable().optional(),
-          periodStartYear: z.number().int().nullable().optional(),
-          periodEndYear: z.number().int().nullable().optional(),
-          periodIssue: z.number().int().nullable().optional(),
-          regionPlace: z.string().nullable().optional(),
-          regionDistrict: z.string().nullable().optional(),
-          regionState: z.string().nullable().optional(),
-        }))
+        .input(classificationCorrectionSchema)
         .mutation(async ({ ctx, input }) => {
           if (!audit) throw new Error("Audit ist nicht konfiguriert");
           const { id, ...rawValue } = input;
