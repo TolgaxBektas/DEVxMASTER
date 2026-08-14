@@ -85,8 +85,8 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
         filters.regionDistrict ? eq(classifications.regionDistrict, filters.regionDistrict) : undefined,
         filters.periodYear != null
           ? and(
-              gte(classifications.periodStartYear, filters.periodYear),
-              lte(classifications.periodEndYear, filters.periodYear),
+              lte(classifications.periodStartYear, filters.periodYear),
+              gte(classifications.periodEndYear, filters.periodYear),
             )
           : undefined,
       ].filter((filter): filter is NonNullable<typeof filter> => filter !== undefined);
@@ -195,6 +195,7 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
     async updateClassificationManual(tenantId, documentId, value, actor) {
       const current = await readClassification(tenantId, documentId);
       if (!current) throw new Error("Dokumenteinordnung ist noch nicht vorhanden");
+      if (Object.keys(value).length === 0) throw new Error("Keine Änderung vorgenommen.");
       const update: Record<string, unknown> = { correctedAt: new Date(), correctedBy: actor };
       if (value.type !== undefined) Object.assign(update, { type: value.type, typeSource: "manual" });
       if (value.publicationName !== undefined) Object.assign(update, { publicationName: value.publicationName, publicationNameSource: "manual" });

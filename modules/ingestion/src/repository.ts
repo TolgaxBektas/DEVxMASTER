@@ -33,6 +33,16 @@ export type DocumentListFilters = {
   regionDistrict?: string;
   periodYear?: number;
 };
+
+export function periodIncludesYear(
+  periodStartYear: number | null | undefined,
+  periodEndYear: number | null | undefined,
+  year: number,
+): boolean {
+  return periodStartYear != null && periodEndYear != null
+    && year >= periodStartYear
+    && year <= periodEndYear;
+}
 export type IngestionOccurrence = {
   id: number;
   documentId: number;

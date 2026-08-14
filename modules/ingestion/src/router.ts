@@ -4,21 +4,22 @@ import {
   protectedProcedure,
   router,
   type AuditRepository,
+  TRPCError,
 } from "@xmaster-center/kernel";
 import { z } from "zod";
 import type { IngestionRepository } from "./repository.js";
 
 export const classificationCorrectionSchema = z.object({
   id: z.number().int().positive(),
-  type: z.string().nullable().optional(),
-  publicationName: z.string().nullable().optional(),
-  editionLabel: z.string().nullable().optional(),
+  type: z.string().max(64, "Die Art darf höchstens 64 Zeichen lang sein.").nullable().optional(),
+  publicationName: z.string().max(255, "Der Publikationsname darf höchstens 255 Zeichen lang sein.").nullable().optional(),
+  editionLabel: z.string().max(128, "Die Ausgabe darf höchstens 128 Zeichen lang sein.").nullable().optional(),
   periodStartYear: z.number().int().min(1000, "Das Jahr muss mindestens 1000 sein.").max(2200, "Das Jahr darf höchstens 2200 sein.").nullable().optional(),
   periodEndYear: z.number().int().min(1000, "Das Jahr muss mindestens 1000 sein.").max(2200, "Das Jahr darf höchstens 2200 sein.").nullable().optional(),
   periodIssue: z.number().int().min(0, "Die Ausgabenummer darf nicht negativ sein.").max(10000, "Die Ausgabenummer darf höchstens 10000 sein.").nullable().optional(),
-  regionPlace: z.string().nullable().optional(),
-  regionDistrict: z.string().nullable().optional(),
-  regionState: z.string().nullable().optional(),
+  regionPlace: z.string().max(255, "Der Ort darf höchstens 255 Zeichen lang sein.").nullable().optional(),
+  regionDistrict: z.string().max(255, "Der Kreis darf höchstens 255 Zeichen lang sein.").nullable().optional(),
+  regionState: z.string().max(255, "Das Bundesland darf höchstens 255 Zeichen lang sein.").nullable().optional(),
 }).superRefine((value, context) => {
   if (value.periodStartYear != null && value.periodEndYear != null
     && value.periodEndYear < value.periodStartYear) {
@@ -135,6 +136,12 @@ export function createIngestionRouter(
           const value = Object.fromEntries(
             Object.entries(rawValue).filter(([, item]) => item !== undefined),
           );
+          if (Object.keys(value).length === 0) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Keine Änderung vorgenommen.",
+            });
+          }
           const result = await repository.updateClassificationManual(
             ctx.auth.tenantId,
             id,

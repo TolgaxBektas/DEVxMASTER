@@ -5,7 +5,7 @@ import type {
   IngestionSource,
 } from "./repository.js";
 import type { DerivedClassification, DocumentClassification } from "./classification.js";
-import type { DocumentListFilters } from "./repository.js";
+import { periodIncludesYear, type DocumentListFilters } from "./repository.js";
 
 export class MemoryIngestionRepository implements IngestionRepository {
   sources: IngestionSource[] = [];
@@ -57,12 +57,8 @@ export class MemoryIngestionRepository implements IngestionRepository {
       if (filters.type && value?.type !== filters.type) return false;
       if (filters.regionState && value?.regionState !== filters.regionState) return false;
       if (filters.regionDistrict && value?.regionDistrict !== filters.regionDistrict) return false;
-      if (filters.periodYear && !(
-        value?.periodStartYear != null
-        && value.periodEndYear != null
-        && filters.periodYear >= value.periodStartYear
-        && filters.periodYear <= value.periodEndYear
-      )) return false;
+      if (filters.periodYear != null
+        && !periodIncludesYear(value?.periodStartYear, value?.periodEndYear, filters.periodYear)) return false;
       return true;
     }).map((document) => ({
       ...document,
@@ -98,6 +94,7 @@ export class MemoryIngestionRepository implements IngestionRepository {
   async updateClassificationManual(tenantId: string, documentId: number, value: Partial<DerivedClassification>, actor: string) {
     const current = this.classifications.get(`${tenantId}:${documentId}`);
     if (!current) throw new Error("Dokumenteinordnung ist noch nicht vorhanden");
+    if (Object.keys(value).length === 0) throw new Error("Keine Änderung vorgenommen.");
     if (value.type !== undefined) Object.assign(current, { type: value.type, typeSource: "manual" });
     if (value.publicationName !== undefined) Object.assign(current, { publicationName: value.publicationName, publicationNameSource: "manual" });
     if (value.editionLabel !== undefined) Object.assign(current, { editionLabel: value.editionLabel, editionSource: "manual" });

@@ -8,6 +8,36 @@ export class ApiError extends Error {
   }
 }
 
+function readableMessage(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+      try {
+        return readableMessage(JSON.parse(trimmed));
+      } catch {
+        return value;
+      }
+    }
+    return value;
+  }
+  if (Array.isArray(value)) {
+    const messages = value
+      .map((item) => readableMessage(item))
+      .filter((item): item is string => Boolean(item));
+    return messages.length ? messages.join(" ") : undefined;
+  }
+  if (value && typeof value === "object") {
+    const candidate = value as { message?: unknown; path?: unknown };
+    const message = readableMessage(candidate.message);
+    if (!message) return undefined;
+    const path = Array.isArray(candidate.path)
+      ? candidate.path.filter((item) => typeof item === "string").join(".")
+      : "";
+    return path ? `${path}: ${message}` : message;
+  }
+  return undefined;
+}
+
 async function request<T>(
   path: string,
   input: unknown,
@@ -29,7 +59,7 @@ async function request<T>(
   };
   if (!response.ok || body.error) {
     throw new ApiError(
-      body.error?.json?.message ?? "Anfrage fehlgeschlagen",
+      readableMessage(body.error?.json?.message) ?? "Anfrage fehlgeschlagen",
       response.status,
       body.error?.json?.code,
     );

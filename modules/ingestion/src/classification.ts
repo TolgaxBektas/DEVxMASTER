@@ -111,20 +111,35 @@ function deriveRegion(text: string) {
   const district = districtCandidate && districtCandidate.length <= 100
     ? [districtPrefix, formatRegionName(districtCandidate)].filter(Boolean).join(" ")
     : null;
-  const placeMatch =
-    normalized.match(/\b(?:Bezirksamt|Gemeinde|Stadt)\s+([A-ZÄÖÜ][\wÄÖÜäöüß-]*(?:\s+[A-ZÄÖÜ][\wÄÖÜäöüß-]*){0,2})/i)
-    ?? normalized.match(/\bim\s+Bezirk\s+([A-ZÄÖÜ][\wÄÖÜäöüß-]*(?:\s+[A-ZÄÖÜ][\wÄÖÜäöüß-]*){0,2})/i)
-    ?? normalized.match(/\bder\s+Stadt\s+([A-ZÄÖÜ][\wÄÖÜäöüß-]*(?:\s+[A-ZÄÖÜ][\wÄÖÜäöüß-]*){0,2})/i)
-    ?? normalized.match(/\bwillkommen\s+in\s+([A-ZÄÖÜ][\wÄÖÜäöüß-]*)/i);
-  const placeCandidate = placeMatch?.[1] ? clean(placeMatch[1]) : null;
-  const place = placeCandidate && !/^(?:zu|für|und|der|die|das|im|in|mit|von)\b/i.test(placeCandidate)
-    ? formatRegionName(placeCandidate)
+  const placePatterns = [
+    /\b(?:Bezirksamt|Gemeinde|Stadt)\s+([A-ZÄÖÜ][\wÄÖÜäöüß-]*(?:\s+[A-ZÄÖÜ][\wÄÖÜäöüß-]*){0,2})/gi,
+    /\bim\s+Bezirk\s+([A-ZÄÖÜ][\wÄÖÜäöüß-]*(?:\s+[A-ZÄÖÜ][\wÄÖÜäöüß-]*){0,2})/gi,
+    /\bder\s+Stadt\s+([A-ZÄÖÜ][\wÄÖÜäöüß-]*(?:\s+[A-ZÄÖÜ][\wÄÖÜäöüß-]*){0,2})/gi,
+    /\bwillkommen\s+in\s+([A-ZÄÖÜ][\wÄÖÜäöüß-]*)/gi,
+  ];
+  const placeCandidates = placePatterns.flatMap((pattern) => [...normalized.matchAll(pattern)]
+    .map((match) => clean(match[1] ?? ""))
+    .filter(Boolean)
+    .filter((candidate) => !/^(?:zu|für|und|der|die|das|im|in|mit|von)\b/i.test(candidate))
+    .map((candidate) => formatRegionName(candidate)));
+  const placeCounts = new Map<string, number>();
+  for (const candidate of placeCandidates) {
+    placeCounts.set(candidate, (placeCounts.get(candidate) ?? 0) + 1);
+  }
+  const strongestPlace = [...placeCounts.entries()].sort((left, right) => right[1] - left[1])[0] ?? null;
+  const districtName = district ? district.replace(/^(?:StädteRegion|Landkreis|Kreis)\s+/i, "") : null;
+  const districtMentions = districtName
+    ? (normalized.match(new RegExp(`\\b${districtName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi")) ?? []).length
+    : 0;
+  const place = strongestPlace
+    && (!district || strongestPlace[1] >= 2 || districtMentions <= strongestPlace[1] * 4)
+    ? strongestPlace[0]
     : null;
   return {
     place,
     district,
     state,
-    confidence: state && (district || place) ? 0.9 : state ? 0.96 : district ? 0.72 : place ? 0.62 : null,
+    confidence: state && (district || place) ? 0.9 : state ? 0.96 : district ? 0.72 : place ? (strongestPlace?.[1] && strongestPlace[1] > 1 ? 0.78 : 0.52) : null,
   };
 }
 

@@ -41,12 +41,13 @@ export function IngestionPage({ api }: ModulePageProps) {
   const [type, setType] = useState("");
   const [regionState, setRegionState] = useState("");
   const [periodYear, setPeriodYear] = useState("");
+  const [appliedFilters, setAppliedFilters] = useState({ type: "", regionState: "", periodYear: "" });
   const [message, setMessage] = useState("");
   const [touchedFields, setTouchedFields] = useState<Record<number, string[]>>({});
   const filters = {
-    ...(type ? { type } : {}),
-    ...(regionState ? { regionState } : {}),
-    ...(periodYear ? { periodYear: Number(periodYear) } : {}),
+    ...(appliedFilters.type ? { type: appliedFilters.type } : {}),
+    ...(appliedFilters.regionState ? { regionState: appliedFilters.regionState } : {}),
+    ...(appliedFilters.periodYear ? { periodYear: Number(appliedFilters.periodYear) } : {}),
   };
   const documents = useModuleQuery<Row[]>(api, "modules.ingestion.documents.list", filters);
   const capabilities = useModuleQuery<{ correct: boolean }>(
@@ -120,6 +121,10 @@ export function IngestionPage({ api }: ModulePageProps) {
         values[name] = raw ? Number(raw) : null;
       }
     }
+    if (Object.keys(values).length === 0) {
+      setMessage("Keine Änderung vorgenommen.");
+      return;
+    }
     setMessage("");
     try {
       await api.mutate("modules.ingestion.documents.correct", {
@@ -175,6 +180,7 @@ export function IngestionPage({ api }: ModulePageProps) {
           <input value={periodYear} onChange={(event) => setPeriodYear(event.target.value.replace(/\D/g, "").slice(0, 4))} inputMode="numeric" placeholder="z. B. 2020" />
         </label>
       </div>
+      <Button onClick={() => setAppliedFilters({ type, regionState, periodYear })}>Filtern</Button>
     </Card>
     <Card>
       <h2>Dokumente</h2>

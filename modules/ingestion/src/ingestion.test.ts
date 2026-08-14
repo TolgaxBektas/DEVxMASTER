@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { MemoryEventRepository } from "@xmaster-center/kernel";
+import { MemoryAuditRepository, MemoryEventRepository } from "@xmaster-center/kernel";
+import type { AuthContext } from "@xmaster-center/contracts";
 import { MemoryIngestionRepository } from "./memory-repository.js";
 import { advertisementEventIdempotencyKey, createIngestionModule } from "./module.js";
 import { deriveDocumentClassification } from "./classification.js";
-import { classificationCorrectionSchema } from "./router.js";
+import { classificationCorrectionSchema, createIngestionRouter } from "./router.js";
+import { periodIncludesYear } from "./repository.js";
 
 const context = (tenantId: string | null, payload: unknown) => ({
   job: { tenantId, payload },
@@ -144,6 +146,24 @@ describe("Ingestion-Bestand", () => {
     expect(result.regionPlace).toBeNull();
   });
 
+  it("gewichtet Ortsbezüge nach Häufigkeit gegenüber einem einzelnen beiläufigen Treffer", () => {
+    const result = deriveDocumentClassification({
+      filename: "Amtsblatt Landkreis Beispiel.pdf",
+      pages: [{
+        pageNumber: 1,
+        text: [
+          "Amtsblatt für den Landkreis Beispiel",
+          "Landkreis Beispiel",
+          "Landkreis Beispiel",
+          "Landkreis Beispiel",
+          "Gemeinde Gilching genehmigt ein Bauvorhaben.",
+        ].join("\n"),
+      }],
+    });
+    expect(result.regionDistrict).toBe("Landkreis Beispiel");
+    expect(result.regionPlace).toBeNull();
+  });
+
   it("bewahrt manuelle Korrekturen bei einer erneuten Ableitung", async () => {
     const repository = new MemoryIngestionRepository();
     const document = await repository.createUploadedDocument("1", {
@@ -217,6 +237,14 @@ describe("Ingestion-Bestand", () => {
       .toThrow("Das Endjahr darf nicht vor dem Startjahr liegen.");
     expect(classificationCorrectionSchema.parse({ id: 1, periodStartYear: 2020, periodEndYear: 2021 }))
       .toMatchObject({ periodStartYear: 2020, periodEndYear: 2021 });
+    expect(() => classificationCorrectionSchema.parse({ id: 1, publicationName: "x".repeat(256) }))
+      .toThrow("Der Publikationsname darf höchstens 255 Zeichen lang sein.");
+  });
+
+  it("verwendet für Speicher- und SQL-Zeiträume dieselbe inklusive Semantik", () => {
+    expect(periodIncludesYear(2020, 2026, 2020)).toBe(true);
+    expect(periodIncludesYear(2020, 2026, 2026)).toBe(true);
+    expect(periodIncludesYear(2020, 2026, 2027)).toBe(false);
   });
 
   it("filtert Speicher-Dokumente nur innerhalb des vollständigen Zeitraums", async () => {
@@ -241,6 +269,63 @@ describe("Ingestion-Bestand", () => {
     expect((await repository.listDocuments("1", { periodYear: 2021 })).map((row) => row.id))
       .toContain(document.document.id);
     expect(await repository.listDocuments("1", { periodYear: 2022 })).toHaveLength(0);
+  });
+
+  it("weist eine Korrektur ohne angefasste Felder zurück", async () => {
+    const repository = new MemoryIngestionRepository();
+    const document = await repository.createUploadedDocument("1", {
+      filename: "leer.pdf",
+      sha256: "c".repeat(64),
+      storageKey: "tenants/1/originals/c/leer.pdf",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "upload",
+    });
+    await repository.upsertDerivedClassification("1", document.document.id, {
+      type: null, typeSource: "first-pages", typeConfidence: null,
+      publicationName: "Titel", publicationNameSource: "first-pages", publicationNameConfidence: 0.5,
+      editionLabel: null, editionSource: "first-pages", editionConfidence: null,
+      periodStartYear: null, periodEndYear: null, periodIssue: null,
+      periodSource: "first-pages", periodConfidence: null,
+      regionPlace: null, regionDistrict: null, regionState: null,
+      regionSource: "first-pages", regionConfidence: null,
+    });
+    await expect(repository.updateClassificationManual("1", document.document.id, {}, "user-1"))
+      .rejects.toThrow("Keine Änderung vorgenommen.");
+    expect((await repository.getDocument("1", document.document.id)).classification?.correctedAt).toBeNull();
+  });
+
+  it("protokolliert keine Audit-Zeile für eine Scheinkorrektur", async () => {
+    const repository = new MemoryIngestionRepository();
+    const document = await repository.createUploadedDocument("1", {
+      filename: "audit.pdf",
+      sha256: "a".repeat(64),
+      storageKey: "tenants/1/originals/a/audit.pdf",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "upload",
+    });
+    await repository.upsertDerivedClassification("1", document.document.id, {
+      type: null, typeSource: "first-pages", typeConfidence: null,
+      publicationName: "Titel", publicationNameSource: "first-pages", publicationNameConfidence: 0.5,
+      editionLabel: null, editionSource: "first-pages", editionConfidence: null,
+      periodStartYear: null, periodEndYear: null, periodIssue: null,
+      periodSource: "first-pages", periodConfidence: null,
+      regionPlace: null, regionDistrict: null, regionState: null,
+      regionSource: "first-pages", regionConfidence: null,
+    });
+    const audit = new MemoryAuditRepository();
+    const auth: AuthContext = {
+      tenantId: "1",
+      user: { id: "user-1", email: null, displayName: "Test" },
+      permissions: new Set(["ingestion.document.classify"]),
+      provider: "local",
+    };
+    const caller = createIngestionRouter(repository, async () => undefined, undefined, undefined, audit)
+      .createCaller({ auth });
+    await expect(caller.documents.correct({ id: document.document.id }))
+      .rejects.toThrow("Keine Änderung vorgenommen.");
+    expect(audit.entries).toHaveLength(0);
   });
 
   it("dedupliziert Dokumente über den Inhalts-Hash", async () => {
