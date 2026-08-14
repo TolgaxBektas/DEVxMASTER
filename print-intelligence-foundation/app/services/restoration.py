@@ -2,6 +2,7 @@ from collections import Counter, deque
 from dataclasses import dataclass
 import re
 from pathlib import Path
+from typing import Iterable
 
 from PIL import Image
 
@@ -51,6 +52,202 @@ class RestorationResult:
     image: Image.Image | None
     manifest: dict
     review_reason: str | None
+
+
+def approved_artwork_box(
+    detector_box: Box,
+    artwork_size: tuple[int, int],
+    render_dpi: int,
+    artwork_dpi: int,
+    artwork_crop_origin: tuple[int, int],
+) -> Box:
+    scale_x = artwork_dpi / render_dpi
+    scale_y = artwork_dpi / render_dpi
+    return Box(
+        max(
+            0,
+            min(
+                artwork_size[0],
+                round(detector_box.left * scale_x - artwork_crop_origin[0]),
+            ),
+        ),
+        max(
+            0,
+            min(
+                artwork_size[1],
+                round(detector_box.top * scale_y - artwork_crop_origin[1]),
+            ),
+        ),
+        max(
+            0,
+            min(
+                artwork_size[0],
+                round(detector_box.right * scale_x - artwork_crop_origin[0]),
+            ),
+        ),
+        max(
+            0,
+            min(
+                artwork_size[1],
+                round(detector_box.bottom * scale_y - artwork_crop_origin[1]),
+            ),
+        ),
+    )
+
+
+def _normalize_anchor(value: str) -> str:
+    compact = re.sub(r"\s+", " ", value.casefold()).strip()
+    if PHONE_RE.search(compact):
+        return re.sub(r"\D", "", compact)
+    if EMAIL_RE.search(compact) or DOMAIN_RE.search(compact):
+        return re.sub(r"[^a-z0-9@._+-]", "", compact)
+    return compact
+
+
+def _anchor_count(text: str, anchor: str) -> int:
+    if PHONE_RE.search(anchor):
+        return _normalize_anchor(text).count(_normalize_anchor(anchor))
+    normalized_text = " ".join(text.casefold().split())
+    normalized_anchor = " ".join(anchor.casefold().split())
+    if EMAIL_RE.search(anchor) or DOMAIN_RE.search(anchor):
+        normalized_text = re.sub(r"[^a-z0-9@._+-]", "", normalized_text)
+        normalized_anchor = re.sub(r"[^a-z0-9@._+-]", "", normalized_anchor)
+    return normalized_text.count(normalized_anchor)
+
+
+def _tokens(text: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"\w+(?:[.@+_-]\w+)*", text.casefold())
+        if len(token) > 2 and any(character.isalnum() for character in token)
+    }
+
+
+def _quantized_colors(image: Image.Image, boundary: Box, limit: int = 5):
+    pixels = image.load()
+    colors = Counter(
+        tuple((channel // 16) * 16 for channel in pixels[x, y])
+        for y in range(boundary.top, boundary.bottom)
+        for x in range(boundary.left, boundary.right)
+    )
+    total = max(1, boundary.area)
+    return {color: count / total for color, count in colors.most_common(limit)}
+
+
+def verify_generative_proposal(
+    source: Image.Image,
+    proposed: Image.Image,
+    boundary: Box,
+    expected_anchors: Iterable[str],
+    original_ocr_text: str,
+    proposed_ocr_text: str,
+    color_tolerance: float = 0.12,
+) -> dict:
+    checks = []
+    if proposed.size != source.size:
+        checks.append(
+            {
+                "name": "dimensions",
+                "status": "failed",
+                "reason": "proposal dimensions differ from source artwork",
+            }
+        )
+        return {"status": "failed", "checks": checks}
+    checks.append(
+        {
+            "name": "dimensions",
+            "status": "passed",
+            "source_size": list(source.size),
+            "proposal_size": list(proposed.size),
+        }
+    )
+    valid_boundary = (
+        0 <= boundary.left < boundary.right <= source.width
+        and 0 <= boundary.top < boundary.bottom <= source.height
+    )
+    outside_equal = valid_boundary and all(
+        source.getpixel((x, y)) == proposed.getpixel((x, y))
+        for y in range(source.height)
+        for x in range(source.width)
+        if not (boundary.left <= x < boundary.right and boundary.top <= y < boundary.bottom)
+    )
+    checks.append(
+        {
+            "name": "approved_boundary",
+            "status": "passed" if outside_equal else "failed",
+            "reason": ""
+            if outside_equal
+            else "approved boundary is invalid or proposal differs outside it",
+        }
+    )
+    anchors = [_normalize_anchor(anchor) for anchor in expected_anchors if anchor.strip()]
+    original_text = " ".join(original_ocr_text.casefold().split())
+    if not anchors or not original_text:
+        checks.append(
+            {
+                "name": "ocr_assessable",
+                "status": "not_assessed",
+                "reason": "original OCR did not provide usable evidence for anchors",
+            }
+        )
+        return {"status": "not_assessed", "checks": checks}
+    checks.append(
+        {
+            "name": "ocr_assessable",
+            "status": "passed",
+            "reason": "original OCR evidence is available",
+        }
+    )
+    anchor_matches = [_anchor_count(proposed_ocr_text, anchor) for anchor in anchors]
+    checks.append(
+        {
+            "name": "text_anchors",
+            "status": "passed" if all(count == 1 for count in anchor_matches) else "failed",
+            "anchors": anchors,
+            "matches": anchor_matches,
+            "reason": ""
+            if all(count == 1 for count in anchor_matches)
+            else "an expected communication anchor is missing or duplicated",
+        }
+    )
+    original_tokens = _tokens(original_ocr_text)
+    proposed_tokens = _tokens(proposed_ocr_text)
+    new_tokens = sorted(proposed_tokens - original_tokens)
+    checks.append(
+        {
+            "name": "no_new_text",
+            "status": "passed" if not new_tokens else "failed",
+            "new_tokens": new_tokens,
+            "reason": ""
+            if not new_tokens
+            else "OCR detected text that was not present in the original",
+        }
+    )
+    original_colors = _quantized_colors(source, boundary)
+    proposed_colors = _quantized_colors(proposed, boundary)
+    color_failures = [
+        color
+        for color, share in original_colors.items()
+        if abs(proposed_colors.get(color, 0.0) - share) > color_tolerance
+    ]
+    new_dominant = [
+        color
+        for color, share in proposed_colors.items()
+        if share > 0.15 and color not in original_colors
+    ]
+    checks.append(
+        {
+            "name": "brand_colors",
+            "status": "passed" if not color_failures and not new_dominant else "failed",
+            "missing_or_changed": [list(color) for color in color_failures],
+            "new_dominant": [list(color) for color in new_dominant],
+            "reason": ""
+            if not color_failures and not new_dominant
+            else "dominant artwork colors changed beyond the configured tolerance",
+        }
+    )
+    failed = [check for check in checks if check["status"] == "failed"]
+    return {"status": "passed" if not failed else "failed", "checks": checks}
 
 
 def _anchor_matches(
@@ -667,11 +864,8 @@ def propose_level_one(
             "restoration refused: forbidden-content finding requires review",
         )
 
-    approved_box = Box(
-        round(detector_box.left * scale - artwork_crop_origin[0]),
-        round(detector_box.top * scale - artwork_crop_origin[1]),
-        round(detector_box.right * scale - artwork_crop_origin[0]),
-        round(detector_box.bottom * scale - artwork_crop_origin[1]),
+    approved_box = approved_artwork_box(
+        detector_box, artwork.size, render_dpi, artwork_dpi, artwork_crop_origin
     )
     base_manifest["ad_boundary"] = [
         approved_box.left,
