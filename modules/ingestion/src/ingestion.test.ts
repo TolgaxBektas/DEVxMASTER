@@ -3,7 +3,7 @@ import { MemoryAuditRepository, MemoryEventRepository } from "@xmaster-center/ke
 import type { AuthContext } from "@xmaster-center/contracts";
 import { MemoryIngestionRepository } from "./memory-repository.js";
 import { advertisementEventIdempotencyKey, createIngestionModule } from "./module.js";
-import { deriveDocumentClassification } from "./classification.js";
+import { deriveDocumentClassification, selectRegionSource } from "./classification.js";
 import { classificationCorrectionSchema, createIngestionRouter } from "./router.js";
 import { periodIncludesYear } from "./repository.js";
 
@@ -23,7 +23,6 @@ describe("Ingestion-Bestand", () => {
     expect(result.type).toBe("bürger-und-seniorenwegweiser");
     expect(result.regionDistrict).toBe("Rhein-Neckar-Kreis");
     expect(result.regionState).toBe("Baden-Württemberg");
-    expect(result.regionSource).toBe("title-page");
     expect(result.regionSource).toBe("title-page");
     expect(result.periodStartYear).toBe(2020);
     expect(result.periodEndYear).toBe(2020);
@@ -45,22 +44,28 @@ describe("Ingestion-Bestand", () => {
       filename: "magazin.pdf",
       pages: [{ pageNumber: 1, text: "Das Magazin" }],
     })).toMatchObject({ regionState: null, regionSource: null });
+    expect(selectRegionSource(
+      { place: "Frankfurt", district: null, state: null, confidence: 0.5 },
+      [{ source: "filename", value: { place: null, district: null, state: "Bayern", confidence: 0.5 } }],
+    )).toBeNull();
   });
 
-  it("liefert die Regionsherkunft aus der verwendeten Evidenz oder leer", () => {
-    expect(deriveDocumentClassification({
-      filename: "Bayern-Magazin.pdf",
-      pages: [{ pageNumber: 1, text: "Das Magazin" }],
-    })).toMatchObject({ regionState: "Bayern", regionSource: "filename" });
-    expect(deriveDocumentClassification({
-      filename: "magazin.pdf",
-      pdfMetadata: { title: "Amtsblatt Bayern" },
-      pages: [{ pageNumber: 1, text: "Das Magazin" }],
-    })).toMatchObject({ regionState: "Bayern", regionSource: "pdf-metadata" });
-    expect(deriveDocumentClassification({
-      filename: "magazin.pdf",
-      pages: [{ pageNumber: 1, text: "Das Magazin" }],
-    })).toMatchObject({ regionState: null, regionSource: null });
+  it("meldet eine fehlende Quelle verständlich als nicht gefunden", async () => {
+    const repository = new MemoryIngestionRepository();
+    const audit = new MemoryAuditRepository();
+    const auth: AuthContext = {
+      tenantId: "1",
+      user: { id: "user-1", email: null, displayName: "Test" },
+      permissions: new Set(["ingestion.source.fetch"]),
+      provider: "local",
+    };
+    const caller = createIngestionRouter(repository, async () => undefined, async () => undefined)
+      .createCaller({ auth });
+    await expect(caller.sources.fetch({ id: 999 })).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: "Quelle nicht gefunden.",
+    });
+    expect(audit.entries).toHaveLength(0);
   });
 
   it("erkennt die vereinbarten Publikationsarten ohne KI", () => {
@@ -457,7 +462,7 @@ describe("Ingestion-Bestand", () => {
     await expect(caller.documents.correct({
       id: document.document.id,
       periodEndYear: 2019,
-    })).rejects.toThrow("Endjahr");
+    })).rejects.toThrow("Das Endjahr darf nicht vor dem Startjahr liegen.");
     expect((await repository.getDocument("1", document.document.id)).classification)
       .toMatchObject({ periodStartYear: 2024, periodEndYear: 2026 });
   });

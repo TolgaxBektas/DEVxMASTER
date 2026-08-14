@@ -5,7 +5,7 @@ import type {
   IngestionSource,
 } from "./repository.js";
 import type { DerivedClassification, DocumentClassification } from "./classification.js";
-import { periodIncludesYear, type DocumentListFilters } from "./repository.js";
+import { IngestionSourceNotFoundError, periodIncludesYear, type DocumentListFilters } from "./repository.js";
 
 export class MemoryIngestionRepository implements IngestionRepository {
   sources: IngestionSource[] = [];
@@ -39,7 +39,7 @@ export class MemoryIngestionRepository implements IngestionRepository {
   }
   async getSource(tenantId: string, sourceId: number) {
     const source = this.sources.find((item) => item.tenantId === tenantId && item.id === sourceId);
-    if (!source) throw new Error("Quelle nicht gefunden");
+    if (!source) throw new IngestionSourceNotFoundError();
     return source;
   }
   async updateSource(tenantId: string, sourceId: number, input: {

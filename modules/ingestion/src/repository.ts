@@ -1,5 +1,12 @@
 import type { DerivedClassification, DocumentClassification } from "./classification.js";
 
+export class IngestionSourceNotFoundError extends Error {
+  constructor() {
+    super("Quelle nicht gefunden");
+    this.name = "IngestionSourceNotFoundError";
+  }
+}
+
 export type IngestionSource = {
   id: number;
   tenantId: string;

@@ -2,7 +2,7 @@ import type { MySql2Database } from "drizzle-orm/mysql2";
 import { and, desc, eq, gte, lte } from "drizzle-orm";
 import { classifications, documents, occurrences, pages, sources, ingestionSchema } from "./schema.js";
 import type { DerivedClassification, DocumentClassification } from "./classification.js";
-import type { DocumentListFilters, IngestionOccurrence, IngestionRepository } from "./repository.js";
+import { IngestionSourceNotFoundError, type DocumentListFilters, type IngestionOccurrence, type IngestionRepository } from "./repository.js";
 
 type IngestionDb = MySql2Database<typeof ingestionSchema>;
 
@@ -68,7 +68,7 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
         eq(sources.id, sourceId),
         eq(sources.tenantId, Number(tenantId)),
       )).limit(1))[0];
-      if (!source) throw new Error("Quelle nicht gefunden");
+      if (!source) throw new IngestionSourceNotFoundError();
       return source as never;
     },
     async updateSource(tenantId, sourceId, input) {

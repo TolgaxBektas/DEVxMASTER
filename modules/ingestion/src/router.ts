@@ -6,8 +6,8 @@ import {
   type AuditRepository,
   TRPCError,
 } from "@xmaster-center/kernel";
-import { z } from "zod";
-import type { IngestionRepository } from "./repository.js";
+import { ZodError, z } from "zod";
+import { IngestionSourceNotFoundError, type IngestionRepository } from "./repository.js";
 
 export const classificationCorrectionSchema = z.object({
   id: z.number().int().positive(),
@@ -108,7 +108,7 @@ export function createIngestionRouter(
           try {
             source = await repository.getSource(ctx.auth.tenantId, input.id);
           } catch (error) {
-            if (String(error).includes("Quelle nicht gefunden")) {
+            if (error instanceof IngestionSourceNotFoundError) {
               throw new TRPCError({ code: "NOT_FOUND", message: "Quelle nicht gefunden." });
             }
             throw error;
@@ -180,7 +180,12 @@ export function createIngestionRouter(
           if (effectiveStart != null && effectiveEnd != null && effectiveEnd < effectiveStart) {
             throw new TRPCError({
               code: "BAD_REQUEST",
-              message: "Endjahr: Das Endjahr darf nicht vor dem Startjahr liegen.",
+              message: "Das Endjahr darf nicht vor dem Startjahr liegen.",
+              cause: new ZodError([{
+                code: z.ZodIssueCode.custom,
+                path: ["periodEndYear"],
+                message: "Das Endjahr darf nicht vor dem Startjahr liegen.",
+              }]),
             });
           }
           const result = await repository.updateClassificationManual(

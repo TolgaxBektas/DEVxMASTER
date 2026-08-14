@@ -41,7 +41,7 @@ const fieldLabels: Record<string, string> = {
   regionState: "Bundesland",
 };
 
-function formatValidationPath(path: readonly unknown[]): string {
+export function formatValidationPath(path: readonly unknown[]): string {
   return path
     .filter((part): part is string => typeof part === "string")
     .map((part) => fieldLabels[part] ?? part)

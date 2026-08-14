@@ -263,6 +263,27 @@ function deriveRegion(text: string) {
   };
 }
 
+export function selectRegionSource(
+  region: ReturnType<typeof deriveRegion>,
+  candidates: Array<{
+    source: ClassificationValueSource;
+    value: ReturnType<typeof deriveRegion>;
+  }>,
+): ClassificationValueSource | null {
+  const selectedFields = [region.place, region.district, region.state].filter(Boolean);
+  const bestCandidate = candidates
+    .map((candidate) => ({
+      ...candidate,
+      matches: [region.place, region.district, region.state]
+        .filter((field) => field && [candidate.value.place, candidate.value.district, candidate.value.state].includes(field))
+        .length,
+    }))
+    .sort((left, right) => right.matches - left.matches)[0];
+  return selectedFields.length > 0 && (bestCandidate?.matches ?? 0) > 0
+    ? bestCandidate!.source
+    : null;
+}
+
 export function deriveDocumentClassification(input: {
   filename: string;
   pages: Array<{
@@ -330,17 +351,7 @@ export function deriveDocumentClassification(input: {
     { source: "title-page" as const, value: deriveRegion(firstPage) },
     { source: "first-pages" as const, value: deriveRegion(firstPages) },
   ];
-  const selectedRegionFields = [region.place, region.district, region.state].filter(Boolean);
-  const regionSource = selectedRegionFields.length === 0
-    ? null
-    : regionCandidates
-      .map((candidate) => ({
-        ...candidate,
-        matches: [region.place, region.district, region.state]
-          .filter((field) => field && [candidate.value.place, candidate.value.district, candidate.value.state].includes(field))
-          .length,
-      }))
-      .sort((left, right) => right.matches - left.matches)[0]?.source ?? null;
+  const regionSource = selectRegionSource(region, regionCandidates);
   return {
     type: typeDecision?.value ?? null,
     typeConfidence: typeDecision?.confidence ?? null,
