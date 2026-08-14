@@ -10,7 +10,7 @@ Pipeline: discover → download → deduplicate → render → classify → dete
 
 ## Configuration and running
 
-Copy `.env.example` to `.env`. Configuration includes `DATABASE_URL`, `STORAGE_BACKEND`, `STORAGE_PATH`, `LOCAL_WORK_DIR`, `S3_ENDPOINT_URL`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_REGION`, `VISION_PROVIDER=recorded|ollama`, `VISION_RECORDED_DIR`, `OLLAMA_URL`, `OLLAMA_MODEL`, `OLLAMA_TIMEOUT`, `VISION_CONSENSUS_RUNS`, `RESTORATION_ENABLED`, `IMAGE_EDIT_PROVIDER=none|recorded|openai`, `IMAGE_EDIT_RECORDED_DIR`, `IMAGE_EDIT_BASE_URL`, `IMAGE_EDIT_MODEL`, `IMAGE_EDIT_API_KEY`, `IMAGE_EDIT_TIMEOUT`, `IMAGE_EDIT_MAX_COST`, `IMAGE_EDIT_HARD_STOP`, `IMAGE_EDIT_MAX_ATTEMPTS`, `IMAGE_EDIT_COLOR_TOLERANCE`, `RENDER_DPI`, `ARTWORK_DPI`, `ARTWORK_PADDING`, `ARTWORK_TRIM_CAP`, `CONFIDENCE_THRESHOLD`, `MAX_DOWNLOAD_BYTES`, `BBOX_IOU_THRESHOLD`, `MAX_JOB_ATTEMPTS`, `STAGE_TIMEOUT_SECONDS`, `REDIS_URL`, and `REDIS_QUEUE`.
+Copy `.env.example` to `.env`. Configuration includes `DATABASE_URL`, `STORAGE_BACKEND`, `STORAGE_PATH`, `LOCAL_WORK_DIR`, `S3_ENDPOINT_URL`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_REGION`, `VISION_PROVIDER=recorded|ollama`, `VISION_RECORDED_DIR`, `OLLAMA_URL`, `OLLAMA_MODEL`, `OLLAMA_TIMEOUT`, `VISION_CONSENSUS_RUNS`, `RESTORATION_ENABLED`, `IMAGE_EDIT_PROVIDER=none|recorded|openai`, `IMAGE_EDIT_RECORDED_DIR`, `IMAGE_EDIT_BASE_URL`, `IMAGE_EDIT_MODEL`, `IMAGE_EDIT_API_KEY`, `IMAGE_EDIT_TIMEOUT`, `IMAGE_EDIT_MAX_COST_CENTS`, `IMAGE_EDIT_HARD_STOP_CENTS`, `IMAGE_EDIT_MAX_ATTEMPTS`, `IMAGE_EDIT_COLOR_TOLERANCE`, `RENDER_DPI`, `ARTWORK_DPI`, `ARTWORK_PADDING`, `ARTWORK_TRIM_CAP`, `CONFIDENCE_THRESHOLD`, `MAX_DOWNLOAD_BYTES`, `BBOX_IOU_THRESHOLD`, `MAX_JOB_ATTEMPTS`, `STAGE_TIMEOUT_SECONDS`, `REDIS_URL`, and `REDIS_QUEUE`.
 
 `VISION_CONSENSUS_RUNS` defaults to `1`, preserving the existing single-run
 behaviour. Values above one run vision detection repeatedly and retain only
@@ -119,8 +119,9 @@ brand colors. If the original is not OCR-assessable, the verdict is
 with a pending human review item and records provider, model, prompt version
 and digest, image hashes, attempt, and cost. A missing provider leaves the
 existing pixel-only behavior unchanged. Calls are reserved against
-`IMAGE_EDIT_HARD_STOP` before execution and fail closed when the next upper
-bound would exceed it.
+`IMAGE_EDIT_HARD_STOP_CENTS` before execution and fail closed when the next
+upper bound would exceed it. The hard stop applies per document run and is
+reset when ingestion of a document begins.
 Restoration does not upscale source detail, remove backgrounds, sharpen, or add
 transparency. Order-form artwork is only exported when the framed advert has
 sufficient detector confidence and passes a cheap geometric plausibility check.

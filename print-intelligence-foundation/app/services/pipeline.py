@@ -24,11 +24,8 @@ from app.services.order_forms import (
 from app.services.ocr import OCRResult
 from app.services.render import render_page, render_pdf
 from app.services.restoration import (
-    Glyph,
-    _communication_kind,
-    _group_lines,
-    _page_glyphs,
     approved_artwork_box,
+    communication_lines_for_box,
     propose_level_one,
     verify_generative_proposal,
     verify_proposal,
@@ -71,8 +68,8 @@ class Pipeline:
         vision_consensus_runs=1,
         restoration_enabled=False,
         image_edit_provider: ImageEditProvider | None = None,
-        image_edit_max_cost: float = 1.0,
-        image_edit_hard_stop: float = 1.0,
+        image_edit_max_cost_cents: int = 100,
+        image_edit_hard_stop_cents: int = 100,
         image_edit_max_attempts: int = 1,
         image_edit_color_tolerance: float = 0.12,
     ):
@@ -96,11 +93,11 @@ class Pipeline:
         self.vision_consensus_runs = max(1, int(vision_consensus_runs))
         self.restoration_enabled = restoration_enabled
         self.image_edit_provider = image_edit_provider
-        self.image_edit_max_cost = max(0.0, image_edit_max_cost)
-        self.image_edit_hard_stop = max(0.0, image_edit_hard_stop)
+        self.image_edit_max_cost_cents = max(0, int(image_edit_max_cost_cents))
+        self.image_edit_hard_stop_cents = max(0, int(image_edit_hard_stop_cents))
         self.image_edit_max_attempts = max(1, int(image_edit_max_attempts))
         self.image_edit_color_tolerance = image_edit_color_tolerance
-        self._restoration_cost_used = 0.0
+        self._restoration_cost_used = 0
         self._form_results: dict[int, FormParseResult] = {}
         self._form_results_source: str | None = None
 
@@ -128,7 +125,7 @@ class Pipeline:
             return self._ingest_locked(pdf, filename, source_url, force, digest)
 
     def _ingest_locked(self, pdf, filename, source_url, force, digest):
-        self._restoration_cost_used = 0.0
+        self._restoration_cost_used = 0
         doc = self.session.scalar(
             select(Document).where(Document.content_sha256 == digest)
         )
@@ -531,12 +528,13 @@ class Pipeline:
     def _write_artwork(
         self, occurrence, artwork_page, box, detector_size, digest, number, index
     ):
-        artwork_box = approved_artwork_box(
-            box,
-            artwork_page.size,
-            self.render_dpi,
-            self.artwork_dpi,
-            (0, 0),
+        scale_x = artwork_page.width / detector_size[0]
+        scale_y = artwork_page.height / detector_size[1]
+        artwork_box = Box(
+            round(box.left * scale_x),
+            round(box.top * scale_y),
+            round(box.right * scale_x),
+            round(box.bottom * scale_y),
         )
         output = self.local_work_dir / digest / "artwork" / f"page_{number}_{index}.png"
         trimmed = (
@@ -576,12 +574,13 @@ class Pipeline:
         return output, padded_box
 
     def _artwork_padded_box(self, box, detector_size, artwork_size):
-        artwork_box = approved_artwork_box(
-            box,
-            artwork_size,
-            self.render_dpi,
-            self.artwork_dpi,
-            (0, 0),
+        scale_x = artwork_size[0] / detector_size[0]
+        scale_y = artwork_size[1] / detector_size[1]
+        artwork_box = Box(
+            round(box.left * scale_x),
+            round(box.top * scale_y),
+            round(box.right * scale_x),
+            round(box.bottom * scale_y),
         )
         return Box(
             max(0, artwork_box.left - self.artwork_padding),
@@ -710,40 +709,33 @@ class Pipeline:
             return None, "restoration refused: approved advertisement boundary is empty"
         previous_reasons = [pixel_result.review_reason] if pixel_result.review_reason else []
         fields = json.loads(occurrence.fields_json or "{}").get("fields", {})
-        glyphs, _, _ = _page_glyphs(source, page_number, detector_box, self.render_dpi)
-        scale = self.artwork_dpi / self.render_dpi
-        local_glyphs = [
-            Glyph(
-                glyph.text,
-                Box(
-                    round(glyph.box.left * scale - padded_box.left),
-                    round(glyph.box.top * scale - padded_box.top),
-                    round(glyph.box.right * scale - padded_box.left),
-                    round(glyph.box.bottom * scale - padded_box.top),
-                ),
-            )
-            for glyph in glyphs
-        ]
-        expected = [
-            line.text
-            for line in _group_lines(local_glyphs, 5)
-            if _communication_kind(line.text) is not None
-        ]
+        expected = communication_lines_for_box(
+            source,
+            page_number,
+            detector_box,
+            self.render_dpi,
+            self.artwork_dpi,
+            (padded_box.left, padded_box.top),
+        )
         expected.extend(str(value) for value in fields.values() if value)
         original_crop = artwork.crop(
             (boundary.left, boundary.top, boundary.right, boundary.bottom)
         )
         original_ocr_text = ""
         for attempt in range(self.image_edit_max_attempts):
-            if self._restoration_cost_used + self.image_edit_max_cost > self.image_edit_hard_stop:
+            if (
+                self._restoration_cost_used + self.image_edit_max_cost_cents
+                > self.image_edit_hard_stop_cents
+            ):
                 manifest["generative"] = {
                     "status": "refused",
                     "attempt": attempt + 1,
-                    "cost": self._restoration_cost_used,
+                    "cost": 0,
+                    "document_cost_cents": self._restoration_cost_used,
                     "reason": "image edit hard stop reached before provider call",
                 }
                 return None, "restoration refused: image edit cost hard stop"
-            self._restoration_cost_used += self.image_edit_max_cost
+            self._restoration_cost_used += self.image_edit_max_cost_cents
             try:
                 edited = self.image_edit_provider.edit(
                     original_crop, IMAGE_EDIT_PROMPT, previous_reasons
@@ -752,13 +744,16 @@ class Pipeline:
                 manifest["generative"] = {
                     "status": "refused",
                     "attempt": attempt + 1,
-                    "cost": self.image_edit_max_cost,
+                    "cost": self.image_edit_max_cost_cents,
+                    "document_cost_cents": self._restoration_cost_used,
                     "reason": f"image edit provider failed: {exc}",
                 }
                 return None, "restoration refused: image edit provider failed"
             reported = edited.reported_cost
-            charged = max(self.image_edit_max_cost, float(reported or 0.0))
-            self._restoration_cost_used += max(0.0, charged - self.image_edit_max_cost)
+            charged = max(self.image_edit_max_cost_cents, int(round(reported or 0)))
+            self._restoration_cost_used += max(
+                0, charged - self.image_edit_max_cost_cents
+            )
             with tempfile.NamedTemporaryFile(suffix=".png") as original_file, tempfile.NamedTemporaryFile(
                 suffix=".png"
             ) as result_file:
@@ -784,33 +779,18 @@ class Pipeline:
                 else:
                     result_ocr_text = ""
             composed = artwork.copy()
-            if edited.image.size != original_crop.size:
-                verification = {
-                    "status": "failed",
-                    "checks": [
-                        {
-                            "name": "dimensions",
-                            "status": "passed",
-                            "reason": "composed artwork dimensions remain unchanged",
-                        },
-                        {
-                            "name": "approved_boundary",
-                            "status": "failed",
-                            "reason": "provider returned dimensions different from approved artwork crop",
-                        }
-                    ],
-                }
-            else:
+            if edited.image.size == original_crop.size:
                 composed.paste(edited.image.convert("RGB"), (boundary.left, boundary.top))
-                verification = verify_generative_proposal(
-                    artwork,
-                    composed,
-                    boundary,
-                    expected,
-                    original_ocr_text,
-                    result_ocr_text,
-                    self.image_edit_color_tolerance,
-                )
+            verification = verify_generative_proposal(
+                artwork,
+                composed,
+                boundary,
+                expected,
+                original_ocr_text,
+                result_ocr_text,
+                self.image_edit_color_tolerance,
+                edited.image.size,
+            )
             manifest["generative"] = {
                 "status": verification["status"],
                 "provider": type(self.image_edit_provider).__name__,
@@ -821,6 +801,7 @@ class Pipeline:
                 "output_sha256": image_sha256(edited.image),
                 "attempt": attempt + 1,
                 "cost": charged,
+                "document_cost_cents": self._restoration_cost_used,
                 "verification": verification,
                 "pixel_stage_reason": pixel_result.review_reason,
                 "review_required": True,

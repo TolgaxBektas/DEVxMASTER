@@ -84,8 +84,8 @@ def make_pipeline(session, settings: Settings):
         settings.vision_consensus_runs,
         settings.restoration_enabled,
         make_image_edit_provider(settings),
-        settings.image_edit_max_cost,
-        settings.image_edit_hard_stop,
+        settings.image_edit_max_cost_cents,
+        settings.image_edit_hard_stop_cents,
         settings.image_edit_max_attempts,
         settings.image_edit_color_tolerance,
     )

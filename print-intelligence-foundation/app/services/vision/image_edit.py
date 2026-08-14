@@ -1,8 +1,7 @@
-from __future__ import annotations
-
 import base64
 from dataclasses import dataclass
 import hashlib
+import io
 import json
 from pathlib import Path
 from typing import Protocol
@@ -30,8 +29,6 @@ class ImageEditProvider(Protocol):
 
 
 def image_sha256(image: Image.Image) -> str:
-    import io
-
     buffer = io.BytesIO()
     image.convert("RGB").save(buffer, format="PNG", optimize=False)
     return hashlib.sha256(buffer.getvalue()).hexdigest()
@@ -83,8 +80,6 @@ class OpenAIImageEditProvider:
         prompt: str,
         rejection_reasons: list[str] | None = None,
     ) -> ImageEditResult:
-        import io
-
         buffer = io.BytesIO()
         image.convert("RGB").save(buffer, format="PNG", optimize=False)
         full_prompt = prompt
@@ -100,7 +95,6 @@ class OpenAIImageEditProvider:
                 data={
                     "model": self.model,
                     "prompt": full_prompt,
-                    "response_format": "b64_json",
                 },
                 timeout=self.timeout,
             )

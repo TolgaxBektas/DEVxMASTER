@@ -61,35 +61,34 @@ def approved_artwork_box(
     artwork_dpi: int,
     artwork_crop_origin: tuple[int, int],
 ) -> Box:
-    scale_x = artwork_dpi / render_dpi
-    scale_y = artwork_dpi / render_dpi
+    scale = artwork_dpi / render_dpi
     return Box(
         max(
             0,
             min(
                 artwork_size[0],
-                round(detector_box.left * scale_x - artwork_crop_origin[0]),
+                round(detector_box.left * scale - artwork_crop_origin[0]),
             ),
         ),
         max(
             0,
             min(
                 artwork_size[1],
-                round(detector_box.top * scale_y - artwork_crop_origin[1]),
+                round(detector_box.top * scale - artwork_crop_origin[1]),
             ),
         ),
         max(
             0,
             min(
                 artwork_size[0],
-                round(detector_box.right * scale_x - artwork_crop_origin[0]),
+                round(detector_box.right * scale - artwork_crop_origin[0]),
             ),
         ),
         max(
             0,
             min(
                 artwork_size[1],
-                round(detector_box.bottom * scale_y - artwork_crop_origin[1]),
+                round(detector_box.bottom * scale - artwork_crop_origin[1]),
             ),
         ),
     )
@@ -142,8 +141,24 @@ def verify_generative_proposal(
     original_ocr_text: str,
     proposed_ocr_text: str,
     color_tolerance: float = 0.12,
+    provided_crop_size: tuple[int, int] | None = None,
 ) -> dict:
     checks = []
+    if provided_crop_size is not None:
+        expected_crop_size = (boundary.right - boundary.left, boundary.bottom - boundary.top)
+        if provided_crop_size != expected_crop_size:
+            return {
+                "status": "failed",
+                "checks": [
+                    {
+                        "name": "dimensions",
+                        "status": "failed",
+                        "reason": "provider result dimensions differ from approved artwork crop",
+                        "expected_crop_size": list(expected_crop_size),
+                        "provided_crop_size": list(provided_crop_size),
+                    }
+                ],
+            }
     if proposed.size != source.size:
         checks.append(
             {
@@ -394,22 +409,14 @@ def verify_proposal(
         }
     )
 
-    scale = artwork_dpi / render_dpi
-    glyphs, _, _ = _page_glyphs(
-        pdf_path, page_number, detector_box, render_dpi
+    local_glyphs = _local_glyphs(
+        pdf_path,
+        page_number,
+        detector_box,
+        render_dpi,
+        artwork_dpi,
+        artwork_crop_origin,
     )
-    local_glyphs = [
-        Glyph(
-            glyph.text,
-            Box(
-                round(glyph.box.left * scale - artwork_crop_origin[0]),
-                round(glyph.box.top * scale - artwork_crop_origin[1]),
-                round(glyph.box.right * scale - artwork_crop_origin[0]),
-                round(glyph.box.bottom * scale - artwork_crop_origin[1]),
-            ),
-        )
-        for glyph in glyphs
-    ]
     lines = _group_lines(local_glyphs, 5)
     background = _dominant_color(source, boundary)[0]
     anchors = [
@@ -548,6 +555,63 @@ def _page_glyphs(pdf_path: str | Path, page_number: int, ad_box: Box, render_dpi
                 text_page.close()
         finally:
             page.close()
+
+
+def _local_glyphs(
+    pdf_path: str | Path,
+    page_number: int,
+    detector_box: Box,
+    render_dpi: int,
+    artwork_dpi: int,
+    artwork_crop_origin: tuple[int, int],
+) -> list[Glyph]:
+    glyphs, _, _ = _page_glyphs(pdf_path, page_number, detector_box, render_dpi)
+    return _to_local_glyphs(glyphs, artwork_dpi, render_dpi, artwork_crop_origin)
+
+
+def _to_local_glyphs(
+    glyphs: list[Glyph],
+    artwork_dpi: int,
+    render_dpi: int,
+    artwork_crop_origin: tuple[int, int],
+) -> list[Glyph]:
+    scale = artwork_dpi / render_dpi
+    return [
+        Glyph(
+            glyph.text,
+            Box(
+                round(glyph.box.left * scale - artwork_crop_origin[0]),
+                round(glyph.box.top * scale - artwork_crop_origin[1]),
+                round(glyph.box.right * scale - artwork_crop_origin[0]),
+                round(glyph.box.bottom * scale - artwork_crop_origin[1]),
+            ),
+        )
+        for glyph in glyphs
+    ]
+
+
+def communication_lines_for_box(
+    pdf_path: str | Path,
+    page_number: int,
+    detector_box: Box,
+    render_dpi: int,
+    artwork_dpi: int,
+    artwork_crop_origin: tuple[int, int],
+) -> list[str]:
+    lines = _group_lines(
+        _local_glyphs(
+            pdf_path,
+            page_number,
+            detector_box,
+            render_dpi,
+            artwork_dpi,
+            artwork_crop_origin,
+        ),
+        5,
+    )
+    return [
+        line.text for line in lines if _communication_kind(line.text) is not None
+    ]
 
 
 def _group_lines(glyphs: list[Glyph], tolerance: float) -> list[TextLine]:
@@ -761,22 +825,12 @@ def propose_level_one(
 ) -> RestorationResult:
     image = Image.open(artwork_path).convert("RGB")
     artwork = image.copy()
-    scale = artwork_dpi / render_dpi
     glyphs, invalid, char_count = _page_glyphs(
         pdf_path, page_number, detector_box, render_dpi
     )
-    local_glyphs = [
-        Glyph(
-            glyph.text,
-            Box(
-                round(glyph.box.left * scale - artwork_crop_origin[0]),
-                round(glyph.box.top * scale - artwork_crop_origin[1]),
-                round(glyph.box.right * scale - artwork_crop_origin[0]),
-                round(glyph.box.bottom * scale - artwork_crop_origin[1]),
-            ),
-        )
-        for glyph in glyphs
-    ]
+    local_glyphs = _to_local_glyphs(
+        glyphs, artwork_dpi, render_dpi, artwork_crop_origin
+    )
     invalid_ratio = invalid / max(char_count, 1)
     overlap_count = 0
     for index, first in enumerate(local_glyphs):

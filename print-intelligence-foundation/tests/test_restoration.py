@@ -11,7 +11,6 @@ from app.services.bbox import Box
 from app.models import AdOccurrence, Page, ReviewItem
 from app.services.pipeline import Pipeline
 from app.services.restoration import (
-    Glyph,
     _is_ink,
     verify_generative_proposal,
     verify_proposal,
@@ -492,7 +491,7 @@ def test_generative_fallback_composites_crop_and_records_pending_review(
         def edit(self, image, prompt, rejection_reasons=None):
             del prompt, rejection_reasons
             self.calls += 1
-            return ImageEditResult(image.copy(), "stub-image-model", 0.1)
+            return ImageEditResult(image.copy(), "stub-image-model", 250)
 
         def available(self):
             return True
@@ -508,8 +507,8 @@ def test_generative_fallback_composites_crop_and_records_pending_review(
 
     monkeypatch.setattr(
         pipeline_module,
-        "_page_glyphs",
-        lambda *_args: ([Glyph("Tel 01234 56789", Box(10, 10, 100, 20))], 0, 1),
+        "communication_lines_for_box",
+        lambda *_args: ["Tel 01234 56789"],
     )
     provider = _StubImageEditProvider()
     engine = create_engine(f"sqlite:///{tmp_path / 'generative.db'}")
@@ -525,8 +524,8 @@ def test_generative_fallback_composites_crop_and_records_pending_review(
             restoration_enabled=True,
             ocr_provider=_StubOCRProvider(),
             image_edit_provider=provider,
-            image_edit_max_cost=1.0,
-            image_edit_hard_stop=1.0,
+            image_edit_max_cost_cents=100,
+            image_edit_hard_stop_cents=100,
         )
         document = pipeline.ingest(FIXTURE.read_bytes())
         ads = session.scalars(
@@ -546,7 +545,8 @@ def test_generative_fallback_composites_crop_and_records_pending_review(
         assert ad.restoration_path
         assert manifest["generative"]["model"] == "stub-image-model"
         assert manifest["generative"]["prompt_sha256"]
-        assert manifest["generative"]["cost"] == 1.0
+        assert manifest["generative"]["cost"] == 250
+        assert manifest["generative"]["document_cost_cents"] == 250
         assert manifest["verification"]["status"] == "passed"
         assert manifest["review_status"] == "pending"
         assert session.scalar(select(ReviewItem).where(ReviewItem.ad_id == ad.id))
