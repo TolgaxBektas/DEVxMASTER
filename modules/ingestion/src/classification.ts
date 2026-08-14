@@ -99,6 +99,101 @@ function usableTitle(value: string): string | null {
   return title;
 }
 
+function plausibleRegionName(value: string, maximumLength: number): boolean {
+  const candidate = clean(value);
+  return candidate.length >= 3
+    && candidate.length <= maximumLength
+    && candidate.split(/\s+/).every((part) => part.replace(/-/g, "").length >= 3)
+    && /[A-Za-zÄÖÜäöüß]{3}/.test(candidate);
+}
+
+type PeriodDecision = {
+  editionLabel: string | null;
+  editionConfidence: number | null;
+  periodStartYear: number;
+  periodEndYear: number;
+  periodIssue: number | null;
+  periodConfidence: number;
+  source: "filename" | "pdf-metadata" | "title-page" | "first-pages";
+};
+
+function derivePeriodCandidate(
+  text: string,
+  source: PeriodDecision["source"],
+  allowBareYear: boolean,
+): PeriodDecision | null {
+  const periodMatch = text.match(/\b(20\d{2})\s*[\/-]\s*(20\d{2})\b/);
+  if (periodMatch) {
+    return {
+      editionLabel: periodMatch[0],
+      editionConfidence: 0.86,
+      periodStartYear: Number(periodMatch[1]),
+      periodEndYear: Number(periodMatch[2]),
+      periodIssue: null,
+      periodConfidence: 0.86,
+      source,
+    };
+  }
+  const editionWithYear = text.match(/\b(?:ausgabe|edition)\s*(?:Nr\.?\s*)?(\d{1,3})\s*[\/-]\s*(20\d{2})\b/i);
+  if (editionWithYear) {
+    return {
+      editionLabel: `Ausgabe ${editionWithYear[1]}/${editionWithYear[2]}`,
+      editionConfidence: 0.86,
+      periodStartYear: Number(editionWithYear[2]),
+      periodEndYear: Number(editionWithYear[2]),
+      periodIssue: Number(editionWithYear[1]),
+      periodConfidence: 0.86,
+      source,
+    };
+  }
+  const editionMatch = text.match(/\b(?:ausgabe|edition)\s*(?:Nr\.?\s*)?(\d{1,4})\b/i);
+  if (editionMatch && Number(editionMatch[1]) < 1000) {
+    return {
+      editionLabel: `Ausgabe ${editionMatch[1]}`,
+      editionConfidence: 0.7,
+      periodStartYear: 0,
+      periodEndYear: 0,
+      periodIssue: Number(editionMatch[1]),
+      periodConfidence: 0,
+      source,
+    };
+  }
+  const contextualYear = text.match(/\b(?:ausgabe|edition|jahrgang)\s*(?:Nr\.?\s*)?(20\d{2})\b/i);
+  if (contextualYear) {
+    return {
+      editionLabel: `Ausgabe ${contextualYear[1]}`,
+      editionConfidence: 0.75,
+      periodStartYear: Number(contextualYear[1]),
+      periodEndYear: Number(contextualYear[1]),
+      periodIssue: null,
+      periodConfidence: 0.75,
+      source,
+    };
+  }
+  const dateYear = text.match(/\b\d{1,2}\.\s*-\s*\d{1,2}\.\s+\p{L}+\s+(20\d{2})\b/u);
+  if (dateYear) {
+    return {
+      editionLabel: null,
+      editionConfidence: null,
+      periodStartYear: Number(dateYear[1]),
+      periodEndYear: Number(dateYear[1]),
+      periodIssue: null,
+      periodConfidence: 0.75,
+      source,
+    };
+  }
+  const bareYear = allowBareYear ? text.match(/\b(20\d{2})\b/) : null;
+  return bareYear ? {
+    editionLabel: null,
+    editionConfidence: null,
+    periodStartYear: Number(bareYear[1]),
+    periodEndYear: Number(bareYear[1]),
+    periodIssue: null,
+    periodConfidence: 0.45,
+    source,
+  } : null;
+}
+
 function deriveRegion(text: string) {
   const normalized = clean(text);
   const state = STATES.find((item) => new RegExp(`\\b${item.replace(/-/g, "[- ]")}\\b`, "i").test(normalized)) ?? null;
@@ -108,7 +203,7 @@ function deriveRegion(text: string) {
     ?? normalized.match(/\b(?:Landkreis|Kreis)\s+([A-ZÄÖÜ][\wÄÖÜäöüß-]*(?:\s+[A-ZÄÖÜ][\wÄÖÜäöüß-]*){0,3})/);
   const districtCandidate = districtMatch?.[1] ? clean(districtMatch[1]) : null;
   const districtPrefix = districtMatch?.[0]?.match(/^(StädteRegion|Landkreis|Kreis)\b/i)?.[1] ?? null;
-  const district = districtCandidate && districtCandidate.length <= 100
+  const district = districtCandidate && plausibleRegionName(districtCandidate, 100)
     ? [districtPrefix, formatRegionName(districtCandidate)].filter(Boolean).join(" ")
     : null;
   const placePatterns = [
@@ -120,6 +215,7 @@ function deriveRegion(text: string) {
   const placeCandidates = placePatterns.flatMap((pattern) => [...normalized.matchAll(pattern)]
     .map((match) => clean(match[1] ?? ""))
     .filter(Boolean)
+    .filter((candidate) => plausibleRegionName(candidate, 100))
     .filter((candidate) => !/^(?:zu|für|und|der|die|das|im|in|mit|von)\b/i.test(candidate))
     .map((candidate) => formatRegionName(candidate)));
   const placeCounts = new Map<string, number>();
@@ -205,39 +301,15 @@ export function deriveDocumentClassification(input: {
     usableTitle(textTitle ?? "") ? { value: usableTitle(textTitle ?? "")!, source: "title-page" as const, confidence: 0.45 } : null,
     { value: clean(input.filename.replace(/\.pdf$/i, "")), source: "filename" as const, confidence: 0.35 },
   ].find((candidate) => Boolean(candidate?.value))!;
-  const contextualLines = firstPages
-    .split(/\r?\n/)
-    .filter((line) => /\b(?:ausgabe|edition|jahrgang)\b/i.test(line)
-      || /\b\d{1,2}\.\s*-\s*\d{1,2}\.\s+\p{L}+\s+20\d{2}\b/u.test(line))
+  const firstPagesPeriodEvidence = [...pages.slice(1), ...imprintPages]
+    .map((page) => page.text)
     .join("\n");
-  const periodEvidence = `${input.filename}\n${metadataText}\n${contextualLines}`;
-  const periodMatch = periodEvidence.match(/\b(20\d{2})\s*[\/-]\s*(20\d{2})\b/);
-  const editionWithYear = periodEvidence.match(/\b(?:ausgabe|edition)\s*(?:Nr\.?\s*)?(\d{1,3})\s*[\/-]\s*(20\d{2})\b/i);
-  const editionMatch = periodEvidence.match(/\b(?:ausgabe|edition)\s*(?:Nr\.?\s*)?(\d{1,4})\b/i);
-  const contextualYear = periodEvidence.match(/\b(?:ausgabe|edition|jahrgang)\s*(?:Nr\.?\s*)?(20\d{2})\b/i);
-  const dateYear = periodEvidence.match(/\b\d{1,2}\.\s*-\s*\d{1,2}\.\s+\p{L}+\s+(20\d{2})\b/u);
-  const yearMatch = editionWithYear ? editionWithYear : contextualYear ?? dateYear ?? periodEvidence.match(/\b(20\d{2})\b/);
-  const issueMatch = editionMatch && Number(editionMatch[1]) < 1000 ? editionMatch : null;
-  const metadataPeriodEvidence = metadataText;
-  const titlePagePeriodEvidence = firstPage;
-  const firstPagesPeriodEvidence = [...pages.slice(1), ...imprintPages].map((page) => page.text).join("\n");
-  const hasPeriodCandidate = (value: string) =>
-    /\b20\d{2}\b/.test(value)
-    || /\b(?:ausgabe|edition)\s*(?:Nr\.?\s*)?\d/i.test(value)
-    || /\bjahrgang\s*(?:Nr\.?\s*)?20\d{2}\b/i.test(value)
-    || /\b\d{1,2}\.\s*-\s*\d{1,2}\.\s+\p{L}+\s+20\d{2}\b/u.test(value);
-  const periodSource = metadataPeriodEvidence && hasPeriodCandidate(metadataPeriodEvidence)
-    ? "pdf-metadata" as const
-    : titlePagePeriodEvidence && /(?:20\d{2}|ausgabe|edition|jahrgang)/i.test(titlePagePeriodEvidence)
-      ? "title-page" as const
-      : firstPagesPeriodEvidence && /(?:20\d{2}|ausgabe|edition|jahrgang)/i.test(firstPagesPeriodEvidence)
-        ? "first-pages" as const
-        : input.filename.match(/20\d{2}/)
-          ? "filename" as const
-          : null;
-  const editionSource = (editionWithYear || periodMatch || editionMatch)
-    ? periodSource
-    : null;
+  const periodDecision = [
+    derivePeriodCandidate(metadataText, "pdf-metadata", false),
+    derivePeriodCandidate(input.filename, "filename", true),
+    derivePeriodCandidate(firstPage, "title-page", false),
+    derivePeriodCandidate(firstPagesPeriodEvidence, "first-pages", false),
+  ].find((candidate): candidate is PeriodDecision => Boolean(candidate)) ?? null;
   const region = deriveRegion(evidence);
   return {
     type: typeDecision?.value ?? null,
@@ -246,14 +318,14 @@ export function deriveDocumentClassification(input: {
     publicationName: titleDecision.value,
     publicationNameConfidence: titleDecision.confidence,
     publicationNameSource: titleDecision.source,
-    editionLabel: editionWithYear ? `Ausgabe ${editionWithYear[1]}/${editionWithYear[2]}` : periodMatch?.[0] ?? (editionMatch ? `Ausgabe ${editionMatch[1]}` : null),
-    editionConfidence: editionWithYear || periodMatch ? 0.86 : editionMatch ? 0.7 : null,
-    editionSource,
-    periodStartYear: periodMatch ? Number(periodMatch[1]) : editionWithYear ? Number(editionWithYear[2]) : yearMatch ? Number(yearMatch[1]) : null,
-    periodEndYear: periodMatch ? Number(periodMatch[2]) : editionWithYear ? Number(editionWithYear[2]) : yearMatch ? Number(yearMatch[1]) : null,
-    periodIssue: editionWithYear ? Number(editionWithYear[1]) : issueMatch ? Number(issueMatch[1]) : null,
-    periodConfidence: periodMatch || editionWithYear ? 0.86 : contextualYear || dateYear ? 0.75 : yearMatch ? 0.45 : null,
-    periodSource: yearMatch ? periodSource : null,
+    editionLabel: periodDecision?.editionLabel ?? null,
+    editionConfidence: periodDecision?.editionConfidence ?? null,
+    editionSource: periodDecision?.editionLabel ? periodDecision.source : null,
+    periodStartYear: periodDecision && periodDecision.periodStartYear > 0 ? periodDecision.periodStartYear : null,
+    periodEndYear: periodDecision && periodDecision.periodEndYear > 0 ? periodDecision.periodEndYear : null,
+    periodIssue: periodDecision?.periodIssue ?? null,
+    periodConfidence: periodDecision && periodDecision.periodConfidence > 0 ? periodDecision.periodConfidence : null,
+    periodSource: periodDecision && periodDecision.periodConfidence > 0 ? periodDecision.source : null,
     regionPlace: region.place,
     regionDistrict: region.district,
     regionState: region.state,

@@ -154,12 +154,32 @@ describe("Ingestion-Bestand", () => {
     expect(result.periodSource).toBe("title-page");
   });
 
+  it("ignoriert eine irrelevante Metadaten-Jahreszahl zugunsten des verwendeten Seitentreffers", () => {
+    const result = deriveDocumentClassification({
+      filename: "unbekannt.pdf",
+      pdfMetadata: { title: "Dokument erstellt 2019" },
+      pages: [{ pageNumber: 1, text: "Ausgabe 3/2024" }],
+    });
+    expect(result.editionLabel).toBe("Ausgabe 3/2024");
+    expect(result.editionSource).toBe("title-page");
+    expect(result.periodStartYear).toBe(2024);
+    expect(result.periodSource).toBe("title-page");
+  });
+
   it("verwirft Fließtext als Ortsnamen", () => {
     const result = deriveDocumentClassification({
       filename: "magazin.pdf",
       pages: [{ pageNumber: 1, text: "Stadt Zu Verlieben\nDas Magazin" }],
     });
     expect(result.regionPlace).toBeNull();
+    expect(deriveDocumentClassification({
+      filename: "magazin.pdf",
+      pages: [{ pageNumber: 1, text: "Stadt Wa\nDas Magazin" }],
+    }).regionPlace).toBeNull();
+    expect(deriveDocumentClassification({
+      filename: "amtsblatt.pdf",
+      pages: [{ pageNumber: 1, text: "Landkreis A informiert" }],
+    }).regionDistrict).toBeNull();
   });
 
   it("gewichtet Ortsbezüge nach Häufigkeit gegenüber einem einzelnen beiläufigen Treffer", () => {
