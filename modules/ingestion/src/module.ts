@@ -15,6 +15,7 @@ import { createDrizzleIngestionRepository } from "./drizzle-repository.js";
 import type { IngestionRepository } from "./repository.js";
 import { registerUploadRoute } from "./rest.js";
 import { persistDocumentBytes } from "./rest.js";
+import { deriveDocumentClassification } from "./classification.js";
 import { ingestionPages, IngestionPage, OccurrencesPage } from "./ui/index.js";
 
 export type ProcessedPage = {
@@ -120,7 +121,13 @@ export function createIngestionModule(deps: {
     icon: "file",
     version: "0.1.0",
     schema: ingestionSchema,
-    router: createIngestionRouter(repository, deps.publish, deps.enqueue, deps.discoverProposals),
+    router: createIngestionRouter(
+      repository,
+      deps.publish,
+      deps.enqueue,
+      deps.discoverProposals,
+      deps.audit,
+    ),
     ...(deps.db && deps.storage && deps.audit && deps.transaction && deps.enqueue
       ? {
           rest: (app: Parameters<typeof registerUploadRoute>[0]) =>
@@ -160,6 +167,7 @@ export function createIngestionModule(deps: {
       { permission: "ingestion.document.read", title: "Dokumente lesen" },
       { permission: "ingestion.document.write", title: "Dokumente aufnehmen" },
       { permission: "ingestion.document.upload", title: "Dokumente hochladen" },
+      { permission: "ingestion.document.classify", title: "Dokumente einordnen" },
       { permission: "ingestion.occurrence.read", title: "Fundstellen lesen" },
     ],
     jobs: [
@@ -249,6 +257,14 @@ export function createIngestionModule(deps: {
               await deps.transaction(async (db) => {
                 const txRepository = deps.repositoryForTransaction?.(db)
                   ?? createDrizzleIngestionRepository(db);
+                await txRepository.upsertDerivedClassification(
+                  tenantId,
+                  document.id,
+                  deriveDocumentClassification({
+                    filename: document.filename,
+                    pages,
+                  }),
+                );
                 const occurrences = await txRepository.replaceProcessedDocument(
                   tenantId,
                   document.id,

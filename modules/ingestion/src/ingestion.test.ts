@@ -2,12 +2,76 @@ import { describe, expect, it } from "vitest";
 import { MemoryEventRepository } from "@xmaster-center/kernel";
 import { MemoryIngestionRepository } from "./memory-repository.js";
 import { advertisementEventIdempotencyKey, createIngestionModule } from "./module.js";
+import { deriveDocumentClassification } from "./classification.js";
 
 const context = (tenantId: string | null, payload: unknown) => ({
   job: { tenantId, payload },
 });
 
 describe("Ingestion-Bestand", () => {
+  it("leitet Arten, Zeitraum und strukturierte Regionen aus echten Titeltexten ab", () => {
+    const result = deriveDocumentClassification({
+      filename: "Seniorenwegweiser.pdf",
+      pages: [{
+        pageNumber: 1,
+        text: "LEBEN UND ÄLTER WERDEN IM RHEIN-NECKAR-KREIS\nAUSGABE 2020",
+      }],
+    });
+    expect(result.type).toBe("bürger-und-seniorenwegweiser");
+    expect(result.regionDistrict).toBe("Rhein-Neckar-Kreis");
+    expect(result.regionState).toBe("Baden-Württemberg");
+    expect(result.periodStartYear).toBe(2020);
+    expect(result.periodEndYear).toBe(2020);
+    expect(result.typeConfidence).toBeGreaterThan(0.9);
+    expect(result.editionLabel).toBe("Ausgabe 2020");
+  });
+
+  it("erkennt die vereinbarten Publikationsarten ohne KI", () => {
+    const examples = [
+      ["Amtsblatt der Gemeinde Oststeinbek.pdf", "AMTSBLATT DER GEMEINDE OSTSTEINBEK", "kommunales-amtsblatt"],
+      ["Stadtmagazin Aachen.pdf", "STADTMAGAZIN AACHEN", "stadt-und-gemeindemagazin"],
+      ["Seniorenwegweiser.pdf", "SENIORENWEGWEISER", "bürger-und-seniorenwegweiser"],
+      ["Branchenführer 2024.pdf", "BRANCHENFÜHRER", "branchenführer"],
+      ["Messekatalog 2024.pdf", "MESSEKATALOG", "messekatalog"],
+    ] as const;
+    for (const [filename, text, type] of examples) {
+      expect(deriveDocumentClassification({
+        filename,
+        pages: [{ pageNumber: 1, text }],
+      }).type).toBe(type);
+    }
+  });
+
+  it("bewahrt manuelle Korrekturen bei einer erneuten Ableitung", async () => {
+    const repository = new MemoryIngestionRepository();
+    const document = await repository.createUploadedDocument("1", {
+      filename: "wegweiser.pdf",
+      sha256: "f".repeat(64),
+      storageKey: "tenants/1/originals/f/wegweiser.pdf",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "upload",
+    });
+    await repository.upsertDerivedClassification("1", document.document.id, deriveDocumentClassification({
+      filename: "wegweiser.pdf",
+      pages: [{ pageNumber: 1, text: "SENIORENWEGWEISER HAMBURG 2020" }],
+    }));
+    await repository.updateClassificationManual("1", document.document.id, {
+      type: "stadt-und-gemeindemagazin",
+      regionState: "Schleswig-Holstein",
+    }, "user-1");
+    await repository.upsertDerivedClassification("1", document.document.id, deriveDocumentClassification({
+      filename: "wegweiser.pdf",
+      pages: [{ pageNumber: 1, text: "SENIORENWEGWEISER HAMBURG 2021" }],
+    }));
+    const result = (await repository.getDocument("1", document.document.id)).classification;
+    expect(result?.type).toBe("stadt-und-gemeindemagazin");
+    expect(result?.typeSource).toBe("manual");
+    expect(result?.regionState).toBe("Schleswig-Holstein");
+    expect(result?.regionSource).toBe("manual");
+    expect(result?.periodStartYear).toBe(2021);
+  });
+
   it("dedupliziert Dokumente über den Inhalts-Hash", async () => {
     const repository = new MemoryIngestionRepository();
     const input = {

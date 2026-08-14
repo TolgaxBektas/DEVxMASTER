@@ -1,12 +1,49 @@
 import type { MySql2Database } from "drizzle-orm/mysql2";
 import { and, desc, eq } from "drizzle-orm";
-import { documents, occurrences, pages, sources, ingestionSchema } from "./schema.js";
-import type { IngestionOccurrence, IngestionRepository } from "./repository.js";
+import { classifications, documents, occurrences, pages, sources, ingestionSchema } from "./schema.js";
+import type { DerivedClassification, DocumentClassification } from "./classification.js";
+import type { DocumentListFilters, IngestionOccurrence, IngestionRepository } from "./repository.js";
 
 type IngestionDb = MySql2Database<typeof ingestionSchema>;
 
 export function createDrizzleIngestionRepository(db: unknown): IngestionRepository {
   const database = db as IngestionDb;
+  const readClassification = async (tenantId: string, documentId: number) => {
+    const row = (await database.select().from(classifications).where(and(
+      eq(classifications.tenantId, Number(tenantId)),
+      eq(classifications.documentId, documentId),
+    )).limit(1))[0];
+    if (!row) return null;
+    return {
+      type: row.type,
+      typeSource: row.typeSource as DocumentClassification["typeSource"],
+      typeConfidence: row.typeConfidence,
+      publicationName: row.publicationName,
+      publicationNameSource: row.publicationNameSource as DocumentClassification["publicationNameSource"],
+      publicationNameConfidence: row.publicationNameConfidence,
+      editionLabel: row.editionLabel,
+      editionSource: row.editionSource as DocumentClassification["editionSource"],
+      editionConfidence: row.editionConfidence,
+      periodStartYear: row.periodStartYear,
+      periodEndYear: row.periodEndYear,
+      periodIssue: row.periodIssue,
+      periodSource: row.periodSource as DocumentClassification["periodSource"],
+      periodConfidence: row.periodConfidence,
+      regionPlace: row.regionPlace,
+      regionDistrict: row.regionDistrict,
+      regionState: row.regionState,
+      regionSource: row.regionSource as DocumentClassification["regionSource"],
+      regionConfidence: row.regionConfidence,
+      derivedAt: row.derivedAt,
+      correctedAt: row.correctedAt,
+      correctedBy: row.correctedBy,
+    } satisfies DocumentClassification;
+  };
+  const withClassification = async (tenantId: string, row: any) => ({
+    ...row,
+    tenantId: String(row.tenantId),
+    classification: await readClassification(tenantId, Number(row.id)),
+  });
   return {
     async listSources(tenantId) {
       return database.select().from(sources)
@@ -46,10 +83,112 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
       ));
       return this.getSource(tenantId, sourceId);
     },
-    async listDocuments(tenantId) {
-      return database.select().from(documents)
+    async listDocuments(tenantId, filters: DocumentListFilters = {}) {
+      const rows = await database.select().from(documents)
         .where(eq(documents.tenantId, Number(tenantId)))
-        .orderBy(desc(documents.createdAt)) as never;
+        .orderBy(desc(documents.createdAt));
+      const result = await Promise.all(rows.map((row) => withClassification(tenantId, row)));
+      return result.filter((row) => {
+        const value = row.classification;
+        if (filters.type && value?.type !== filters.type) return false;
+        if (filters.regionState && value?.regionState !== filters.regionState) return false;
+        if (filters.regionDistrict && value?.regionDistrict !== filters.regionDistrict) return false;
+        if (filters.periodYear && !(
+          value?.periodStartYear != null
+          && value.periodEndYear != null
+          && filters.periodYear >= value.periodStartYear
+          && filters.periodYear <= value.periodEndYear
+        )) return false;
+        return true;
+      }) as never;
+    },
+    async upsertDerivedClassification(tenantId, documentId, value) {
+      const existing = (await database.select().from(classifications).where(and(
+        eq(classifications.tenantId, Number(tenantId)),
+        eq(classifications.documentId, documentId),
+      )).limit(1))[0];
+      const derived = {
+        type: value.type,
+        typeSource: value.typeSource,
+        typeConfidence: value.typeConfidence,
+        publicationName: value.publicationName,
+        publicationNameSource: value.publicationNameSource,
+        publicationNameConfidence: value.publicationNameConfidence,
+        editionLabel: value.editionLabel,
+        editionSource: value.editionSource,
+        editionConfidence: value.editionConfidence,
+        periodStartYear: value.periodStartYear,
+        periodEndYear: value.periodEndYear,
+        periodIssue: value.periodIssue,
+        periodSource: value.periodSource,
+        periodConfidence: value.periodConfidence,
+        regionPlace: value.regionPlace,
+        regionDistrict: value.regionDistrict,
+        regionState: value.regionState,
+        regionSource: value.regionSource,
+        regionConfidence: value.regionConfidence,
+        derivedAt: new Date(),
+      };
+      if (!existing) {
+        await database.insert(classifications).values({
+          tenantId: Number(tenantId),
+          documentId,
+          ...derived,
+          typeSource: value.typeSource,
+          publicationNameSource: value.publicationNameSource,
+          editionSource: value.editionSource,
+          periodSource: value.periodSource,
+          regionSource: value.regionSource,
+        });
+      } else {
+        const update: Record<string, unknown> = { derivedAt: derived.derivedAt };
+        if (existing.typeSource !== "manual") Object.assign(update, { type: derived.type, typeConfidence: derived.typeConfidence, typeSource: derived.typeSource });
+        if (existing.publicationNameSource !== "manual") Object.assign(update, { publicationName: derived.publicationName, publicationNameConfidence: derived.publicationNameConfidence, publicationNameSource: derived.publicationNameSource });
+        if (existing.editionSource !== "manual") Object.assign(update, { editionLabel: derived.editionLabel, editionConfidence: derived.editionConfidence, editionSource: derived.editionSource });
+        if (existing.periodSource !== "manual") Object.assign(update, {
+          periodStartYear: derived.periodStartYear, periodEndYear: derived.periodEndYear,
+          periodIssue: derived.periodIssue, periodConfidence: derived.periodConfidence, periodSource: derived.periodSource,
+        });
+        if (existing.regionSource !== "manual") Object.assign(update, {
+          regionPlace: derived.regionPlace, regionDistrict: derived.regionDistrict,
+          regionState: derived.regionState, regionConfidence: derived.regionConfidence, regionSource: derived.regionSource,
+        });
+        await database.update(classifications).set(update).where(eq(classifications.id, existing.id));
+      }
+      const result = await readClassification(tenantId, documentId);
+      if (!result) throw new Error("Dokumenteinordnung konnte nicht gespeichert werden");
+      return result;
+    },
+    async updateClassificationManual(tenantId, documentId, value, actor) {
+      const current = await readClassification(tenantId, documentId);
+      if (!current) throw new Error("Dokumenteinordnung ist noch nicht vorhanden");
+      const update: Record<string, unknown> = { correctedAt: new Date(), correctedBy: actor };
+      if (value.type !== undefined) Object.assign(update, { type: value.type, typeSource: "manual" });
+      if (value.publicationName !== undefined) Object.assign(update, { publicationName: value.publicationName, publicationNameSource: "manual" });
+      if (value.editionLabel !== undefined) Object.assign(update, { editionLabel: value.editionLabel, editionSource: "manual" });
+      if (value.periodStartYear !== undefined || value.periodEndYear !== undefined || value.periodIssue !== undefined) {
+        Object.assign(update, {
+          ...(value.periodStartYear !== undefined ? { periodStartYear: value.periodStartYear } : {}),
+          ...(value.periodEndYear !== undefined ? { periodEndYear: value.periodEndYear } : {}),
+          ...(value.periodIssue !== undefined ? { periodIssue: value.periodIssue } : {}),
+          periodSource: "manual",
+        });
+      }
+      if (value.regionPlace !== undefined || value.regionDistrict !== undefined || value.regionState !== undefined) {
+        Object.assign(update, {
+          ...(value.regionPlace !== undefined ? { regionPlace: value.regionPlace } : {}),
+          ...(value.regionDistrict !== undefined ? { regionDistrict: value.regionDistrict } : {}),
+          ...(value.regionState !== undefined ? { regionState: value.regionState } : {}),
+          regionSource: "manual",
+        });
+      }
+      await database.update(classifications).set(update).where(and(
+        eq(classifications.tenantId, Number(tenantId)),
+        eq(classifications.documentId, documentId),
+      ));
+      const result = await readClassification(tenantId, documentId);
+      if (!result) throw new Error("Dokumenteinordnung konnte nicht geändert werden");
+      return result;
     },
     async listOccurrences(tenantId) {
       return database.select().from(occurrences)

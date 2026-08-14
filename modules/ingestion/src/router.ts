@@ -1,4 +1,10 @@
-import { permissionProcedure, protectedProcedure, router } from "@xmaster-center/kernel";
+import {
+  appendAudit,
+  permissionProcedure,
+  protectedProcedure,
+  router,
+  type AuditRepository,
+} from "@xmaster-center/kernel";
 import { z } from "zod";
 import type { IngestionRepository } from "./repository.js";
 
@@ -16,6 +22,7 @@ export function createIngestionRouter(
   discover?: (input: { seedPages: string[]; searchTerms: string[]; maxResults: number }) => Promise<Array<{
     url: string; score: number; metadata: Record<string, unknown>;
   }>>,
+  audit?: AuditRepository,
 ) {
   return router({
     sources: router({
@@ -82,9 +89,58 @@ export function createIngestionRouter(
         }),
     }),
     documents: router({
-      list: permissionProcedure("ingestion.document.read").query(({ ctx }) =>
-        repository.listDocuments(ctx.auth.tenantId),
-      ),
+      capabilities: protectedProcedure.query(({ ctx }) => ({
+        correct: ctx.auth.permissions.has("ingestion.document.classify"),
+      })),
+      list: permissionProcedure("ingestion.document.read")
+        .input(z.object({
+          type: z.string().optional(),
+          regionState: z.string().optional(),
+          regionDistrict: z.string().optional(),
+          periodYear: z.number().int().optional(),
+        }).optional())
+        .query(({ ctx, input }) => repository.listDocuments(
+          ctx.auth.tenantId,
+          Object.fromEntries(
+            Object.entries(input ?? {}).filter(([, value]) => value !== undefined),
+          ),
+        )),
+      correct: permissionProcedure("ingestion.document.classify")
+        .input(z.object({
+          id: z.number().int().positive(),
+          type: z.string().nullable().optional(),
+          publicationName: z.string().nullable().optional(),
+          editionLabel: z.string().nullable().optional(),
+          periodStartYear: z.number().int().nullable().optional(),
+          periodEndYear: z.number().int().nullable().optional(),
+          periodIssue: z.number().int().nullable().optional(),
+          regionPlace: z.string().nullable().optional(),
+          regionDistrict: z.string().nullable().optional(),
+          regionState: z.string().nullable().optional(),
+        }))
+        .mutation(async ({ ctx, input }) => {
+          if (!audit) throw new Error("Audit ist nicht konfiguriert");
+          const { id, ...rawValue } = input;
+          const value = Object.fromEntries(
+            Object.entries(rawValue).filter(([, item]) => item !== undefined),
+          );
+          const result = await repository.updateClassificationManual(
+            ctx.auth.tenantId,
+            id,
+            value,
+            ctx.auth.user.id,
+          );
+          await appendAudit(audit, {
+            tenantId: ctx.auth.tenantId,
+            action: "ingestion.document.classification.corrected",
+            entityType: "ingestion_document",
+            entityId: id,
+            actorId: ctx.auth.user.id,
+            actorName: ctx.auth.user.displayName,
+            detailsJson: JSON.stringify(value),
+          });
+          return result;
+        }),
     }),
     occurrences: router({
       list: permissionProcedure("ingestion.occurrence.read").query(({ ctx }) =>

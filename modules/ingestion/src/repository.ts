@@ -1,3 +1,5 @@
+import type { DerivedClassification, DocumentClassification } from "./classification.js";
+
 export type IngestionSource = {
   id: number;
   tenantId: string;
@@ -10,6 +12,7 @@ export type IngestionSource = {
   lastFetchedAt: Date | null;
   lastError: string | null;
 };
+
 export type IngestionDocument = {
   id: number;
   tenantId: string;
@@ -22,6 +25,13 @@ export type IngestionDocument = {
   origin: string;
   state: string;
   error: string | null;
+  classification: DocumentClassification | null;
+};
+export type DocumentListFilters = {
+  type?: string;
+  regionState?: string;
+  regionDistrict?: string;
+  periodYear?: number;
 };
 export type IngestionOccurrence = {
   id: number;
@@ -45,7 +55,18 @@ export type IngestionRepository = {
     lastFetchedAt?: Date | null;
     lastError?: string | null;
   }): Promise<IngestionSource>;
-  listDocuments(tenantId: string): Promise<IngestionDocument[]>;
+  listDocuments(tenantId: string, filters?: DocumentListFilters): Promise<IngestionDocument[]>;
+  upsertDerivedClassification(
+    tenantId: string,
+    documentId: number,
+    value: DerivedClassification,
+  ): Promise<DocumentClassification>;
+  updateClassificationManual(
+    tenantId: string,
+    documentId: number,
+    value: Partial<DerivedClassification>,
+    actor: string,
+  ): Promise<DocumentClassification>;
   listOccurrences(tenantId: string): Promise<IngestionOccurrence[]>;
   createUploadedDocument(
     tenantId: string,

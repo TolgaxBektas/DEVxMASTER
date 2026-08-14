@@ -4,11 +4,14 @@ import type {
   IngestionRepository,
   IngestionSource,
 } from "./repository.js";
+import type { DerivedClassification, DocumentClassification } from "./classification.js";
+import type { DocumentListFilters } from "./repository.js";
 
 export class MemoryIngestionRepository implements IngestionRepository {
   sources: IngestionSource[] = [];
   documents: IngestionDocument[] = [];
   occurrences: IngestionOccurrence[] = [];
+  classifications = new Map<string, DocumentClassification>();
   private sourceId = 0;
   private documentId = 0;
   private occurrenceId = 0;
@@ -47,8 +50,71 @@ export class MemoryIngestionRepository implements IngestionRepository {
     Object.assign(source, input);
     return source;
   }
-  async listDocuments(tenantId: string) {
-    return this.documents.filter((document) => document.tenantId === tenantId);
+  async listDocuments(tenantId: string, filters: DocumentListFilters = {}) {
+    return this.documents.filter((document) => {
+      if (document.tenantId !== tenantId) return false;
+      const value = this.classifications.get(`${tenantId}:${document.id}`);
+      if (filters.type && value?.type !== filters.type) return false;
+      if (filters.regionState && value?.regionState !== filters.regionState) return false;
+      if (filters.regionDistrict && value?.regionDistrict !== filters.regionDistrict) return false;
+      if (filters.periodYear && !value?.periodStartYear) return false;
+      return true;
+    }).map((document) => ({
+      ...document,
+      classification: this.classifications.get(`${tenantId}:${document.id}`) ?? null,
+    }));
+  }
+  async upsertDerivedClassification(tenantId: string, documentId: number, value: DerivedClassification) {
+    const key = `${tenantId}:${documentId}`;
+    const existing = this.classifications.get(key);
+    const next: DocumentClassification = existing ?? {
+      type: null, typeSource: "first-pages", typeConfidence: null,
+      publicationName: null, publicationNameSource: "first-pages", publicationNameConfidence: null,
+      editionLabel: null, editionSource: "first-pages", editionConfidence: null,
+      periodStartYear: null, periodEndYear: null, periodIssue: null, periodSource: "first-pages", periodConfidence: null,
+      regionPlace: null, regionDistrict: null, regionState: null, regionSource: "first-pages", regionConfidence: null,
+      derivedAt: null, correctedAt: null, correctedBy: null,
+    };
+    if (next.typeSource !== "manual") Object.assign(next, { type: value.type, typeConfidence: value.typeConfidence, typeSource: value.typeSource });
+    if (next.publicationNameSource !== "manual") Object.assign(next, { publicationName: value.publicationName, publicationNameConfidence: value.publicationNameConfidence, publicationNameSource: value.publicationNameSource });
+    if (next.editionSource !== "manual") Object.assign(next, { editionLabel: value.editionLabel, editionConfidence: value.editionConfidence, editionSource: value.editionSource });
+    if (next.periodSource !== "manual") Object.assign(next, {
+      periodStartYear: value.periodStartYear, periodEndYear: value.periodEndYear,
+      periodIssue: value.periodIssue, periodConfidence: value.periodConfidence, periodSource: value.periodSource,
+    });
+    if (next.regionSource !== "manual") Object.assign(next, {
+      regionPlace: value.regionPlace, regionDistrict: value.regionDistrict,
+      regionState: value.regionState, regionConfidence: value.regionConfidence, regionSource: value.regionSource,
+    });
+    next.derivedAt = new Date();
+    this.classifications.set(key, next);
+    return next;
+  }
+  async updateClassificationManual(tenantId: string, documentId: number, value: Partial<DerivedClassification>, actor: string) {
+    const current = this.classifications.get(`${tenantId}:${documentId}`);
+    if (!current) throw new Error("Dokumenteinordnung ist noch nicht vorhanden");
+    if (value.type !== undefined) Object.assign(current, { type: value.type, typeSource: "manual" });
+    if (value.publicationName !== undefined) Object.assign(current, { publicationName: value.publicationName, publicationNameSource: "manual" });
+    if (value.editionLabel !== undefined) Object.assign(current, { editionLabel: value.editionLabel, editionSource: "manual" });
+    if (value.periodStartYear !== undefined || value.periodEndYear !== undefined || value.periodIssue !== undefined) {
+      Object.assign(current, {
+        ...(value.periodStartYear !== undefined ? { periodStartYear: value.periodStartYear } : {}),
+        ...(value.periodEndYear !== undefined ? { periodEndYear: value.periodEndYear } : {}),
+        ...(value.periodIssue !== undefined ? { periodIssue: value.periodIssue } : {}),
+        periodSource: "manual",
+      });
+    }
+    if (value.regionPlace !== undefined || value.regionDistrict !== undefined || value.regionState !== undefined) {
+      Object.assign(current, {
+        ...(value.regionPlace !== undefined ? { regionPlace: value.regionPlace } : {}),
+        ...(value.regionDistrict !== undefined ? { regionDistrict: value.regionDistrict } : {}),
+        ...(value.regionState !== undefined ? { regionState: value.regionState } : {}),
+        regionSource: "manual",
+      });
+    }
+    current.correctedAt = new Date();
+    current.correctedBy = actor;
+    return current;
   }
   async listOccurrences(tenantId: string) {
     const documents = new Set((await this.listDocuments(tenantId)).map((document) => document.id));
@@ -79,18 +145,21 @@ export class MemoryIngestionRepository implements IngestionRepository {
       origin: input.origin,
       state: "uploaded",
       error: null,
+      classification: null,
     };
     this.documents.push(document);
     return { document, deduplicated: false };
   }
   async getDocument(tenantId: string, documentId: number) {
-    const document = (await this.listDocuments(tenantId)).find((item) => item.id === documentId);
+    const document = this.documents.find((item) => item.tenantId === tenantId && item.id === documentId);
     if (!document) throw new Error("Dokument nicht gefunden");
+    document.classification = this.classifications.get(`${tenantId}:${documentId}`) ?? null;
     return document;
   }
   async getDocumentById(documentId: number) {
     const document = this.documents.find((item) => item.id === documentId);
     if (!document) throw new Error("Dokument nicht gefunden");
+    document.classification = this.classifications.get(`${document.tenantId}:${documentId}`) ?? null;
     return document;
   }
   async replaceProcessedDocument(tenantId: string, documentId: number, processedPages: Array<{
@@ -129,8 +198,7 @@ export class MemoryIngestionRepository implements IngestionRepository {
     state: string,
     error: string | null = null,
   ) {
-    const document = (await this.listDocuments(tenantId)).find((item) => item.id === documentId);
-    if (!document) throw new Error("Dokument nicht gefunden");
+    const document = await this.getDocument(tenantId, documentId);
     const allowed: Record<string, string[]> = {
       uploaded: ["processing", "failed"],
       discovered: ["processing", "failed"],
