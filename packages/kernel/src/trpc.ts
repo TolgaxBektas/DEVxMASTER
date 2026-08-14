@@ -10,6 +10,25 @@ export type TrpcContext = {
   auth: AuthContext | null;
 };
 
+function formatValidationMessage(message: string): string | null {
+  try {
+    const parsed: unknown = JSON.parse(message);
+    if (!Array.isArray(parsed)) return null;
+    const messages = parsed.flatMap((item) => {
+      if (!item || typeof item !== "object") return [];
+      const issue = item as { path?: unknown; message?: unknown };
+      if (typeof issue.message !== "string") return [];
+      const path = Array.isArray(issue.path)
+        ? issue.path.filter((part): part is string => typeof part === "string").join(".")
+        : "";
+      return [path ? `${path}: ${issue.message}` : issue.message];
+    });
+    return messages.length ? messages.join(" ") : null;
+  } catch {
+    return null;
+  }
+}
+
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
   errorFormatter({ shape, error }) {
@@ -19,11 +38,14 @@ const t = initTRPC.context<TrpcContext>().create({
           return path ? `${path}: ${issue.message}` : issue.message;
         }).join(" ")
       : null;
+    const serializedValidationMessage = validationMessage
+      ? null
+      : formatValidationMessage(shape.message);
     return {
       ...shape,
       message: error.code === "INTERNAL_SERVER_ERROR"
         ? "Interner Serverfehler"
-        : validationMessage ?? shape.message,
+        : validationMessage ?? serializedValidationMessage ?? shape.message,
     };
   },
 });
