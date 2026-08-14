@@ -183,11 +183,11 @@ describe("Ingestion-Bestand", () => {
     expect(deriveDocumentClassification({
       filename: "stadtmagazin.pdf",
       pages: [{ pageNumber: 1, text: "Stadt Frankfurt am Main" }],
-    }).regionPlace).toBe("Frankfurt Am Main");
+    }).regionPlace).toBe("Frankfurt am Main");
     expect(deriveDocumentClassification({
       filename: "amtsblatt.pdf",
       pages: [{ pageNumber: 1, text: "Landkreis Rothenburg ob der Tauber" }],
-    }).regionDistrict).toBe("Landkreis Rothenburg Ob Der Tauber");
+    }).regionDistrict).toBe("Landkreis Rothenburg ob der Tauber");
   });
 
   it("gewichtet Ortsbezüge nach Häufigkeit gegenüber einem einzelnen beiläufigen Treffer", () => {

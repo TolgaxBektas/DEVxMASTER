@@ -73,10 +73,19 @@ function clean(value: string): string {
 }
 
 function formatRegionName(value: string): string {
+  const connectors = new Set(["am", "an", "auf", "bei", "der", "die", "das", "im", "in", "ob", "oder", "von", "zu", "zum", "zur"]);
+  let wordIndex = 0;
   const formatted = value
     .toLocaleLowerCase("de-DE")
     .split(/([ -])/)
-    .map((part) => /^[a-zäöüß]/i.test(part) ? part.charAt(0).toLocaleUpperCase("de-DE") + part.slice(1) : part)
+    .map((part) => {
+      if (!/^[a-zäöüß]/i.test(part)) return part;
+      const formattedPart = wordIndex > 0 && connectors.has(part)
+        ? part
+        : part.charAt(0).toLocaleUpperCase("de-DE") + part.slice(1);
+      wordIndex += 1;
+      return formattedPart;
+    })
     .join("");
   return formatted.replace(/^Städteregion\b/i, "StädteRegion");
 }
