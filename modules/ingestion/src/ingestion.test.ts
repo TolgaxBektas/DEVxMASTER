@@ -77,7 +77,12 @@ describe("Ingestion-Bestand", () => {
         text: "Der Landkreis Musterstadt informiert seine Bürgerinnen und Bürger über neue Regelungen.",
       }],
     });
-    expect(longDistrict.regionDistrict).toBeNull();
+    expect(longDistrict.regionDistrict).toBe("Landkreis Musterstadt");
+    const overlongDistrict = deriveDocumentClassification({
+      filename: "Amtsblatt Landkreis.pdf",
+      pages: [{ pageNumber: 1, text: `Landkreis ${"A".repeat(101)}` }],
+    });
+    expect(overlongDistrict.regionDistrict).toBeNull();
 
     for (const expected of [
       "Mecklenburg-Vorpommern",
@@ -190,9 +195,14 @@ describe("Ingestion-Bestand", () => {
       filename: "wegweiser.pdf",
       pages: [{ pageNumber: 1, text: "BRANCHENFÜHRER BERLIN\nAusgabe 2021" }],
     }));
+    await repository.updateClassificationManual("1", document.document.id, {
+      publicationName: "Manueller Titel",
+    }, "user-1");
     const result = (await repository.getDocument("1", document.document.id)).classification;
     expect(result?.regionState).toBeNull();
     expect(result?.regionSource).toBe("manual");
+    expect(result?.publicationName).toBe("Manueller Titel");
+    expect(result?.publicationNameSource).toBe("manual");
     expect(result?.type).toBe("branchenführer");
     expect(result?.typeSource).toBe("title-page");
     expect(result?.periodStartYear).toBe(2021);

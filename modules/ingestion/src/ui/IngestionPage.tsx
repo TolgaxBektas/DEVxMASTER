@@ -42,6 +42,7 @@ export function IngestionPage({ api }: ModulePageProps) {
   const [regionState, setRegionState] = useState("");
   const [periodYear, setPeriodYear] = useState("");
   const [message, setMessage] = useState("");
+  const [touchedFields, setTouchedFields] = useState<Record<number, string[]>>({});
   const filters = {
     ...(type ? { type } : {}),
     ...(regionState ? { regionState } : {}),
@@ -104,7 +105,7 @@ export function IngestionPage({ api }: ModulePageProps) {
 
   const correct = async (row: Row, form: HTMLFormElement) => {
     const data = new FormData(form);
-    const touched = new Set((form.dataset.touched ?? "").split(",").filter(Boolean));
+    const touched = new Set(touchedFields[row.id] ?? []);
     const values: Record<string, string | number | null> = {};
     const stringFields = ["type", "publicationName", "editionLabel", "regionPlace", "regionDistrict", "regionState"];
     for (const name of stringFields) {
@@ -126,6 +127,11 @@ export function IngestionPage({ api }: ModulePageProps) {
         ...values,
       });
       await api.invalidate?.("modules.ingestion.documents.list");
+      setTouchedFields((current) => {
+        const next = { ...current };
+        delete next[row.id];
+        return next;
+      });
       setMessage("Korrektur gespeichert.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Korrektur fehlgeschlagen");
@@ -176,13 +182,15 @@ export function IngestionPage({ api }: ModulePageProps) {
       <div className="stack">
         {documents.data?.map((row) => {
           const value = row.classification;
-          return <form className="list-row" key={row.id} data-touched="" onChange={(event) => {
-            const form = event.currentTarget;
+          return <form className="list-row" key={row.id} onChange={(event) => {
             const name = (event.target as HTMLInputElement | HTMLSelectElement).name;
             if (!name) return;
-            const fields = new Set((form.dataset.touched ?? "").split(",").filter(Boolean));
-            fields.add(name);
-            form.dataset.touched = [...fields].join(",");
+            setTouchedFields((current) => {
+              const fields = current[row.id] ?? [];
+              return fields.includes(name)
+                ? current
+                : { ...current, [row.id]: [...fields, name] };
+            });
           }} onSubmit={(event) => { event.preventDefault(); void correct(row, event.currentTarget); }}>
             <div className="proposal-meta">
               <strong>{row.filename}</strong>

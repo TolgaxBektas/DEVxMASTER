@@ -107,12 +107,9 @@ function deriveRegion(text: string) {
     ?? normalized.match(/\b([A-ZÄÖÜ][\wÄÖÜäöüß-]*(?:-[A-ZÄÖÜ][\wÄÖÜäöüß-]*)*-Kreis)\b/i)
     ?? normalized.match(/\b(?:Landkreis|Kreis)\s+([A-ZÄÖÜ][\wÄÖÜäöüß-]*(?:\s+[A-ZÄÖÜ][\wÄÖÜäöüß-]*){0,3})/);
   const districtCandidate = districtMatch?.[1] ? clean(districtMatch[1]) : null;
-  const districtRemainder = districtMatch?.[0]
-    ? normalized.slice(normalized.indexOf(districtMatch[0]) + districtMatch[0].length)
-    : "";
-  const districtIsProse = /\b(?:informiert|seine|ihre|die|der|und|über)\b/i.test(districtRemainder.slice(0, 80));
-  const district = districtCandidate && districtCandidate.length <= 100 && !districtIsProse
-    ? `${/^\s*(?:Landkreis|Kreis)\b/i.test(districtMatch?.[0] ?? "") ? `${/^\s*(Landkreis|Kreis)\b/i.exec(districtMatch?.[0] ?? "")?.[1]} ` : ""}${formatRegionName(districtCandidate)}`
+  const districtPrefix = districtMatch?.[0]?.match(/^(StädteRegion|Landkreis|Kreis)\b/i)?.[1] ?? null;
+  const district = districtCandidate && districtCandidate.length <= 100
+    ? [districtPrefix, formatRegionName(districtCandidate)].filter(Boolean).join(" ")
     : null;
   const placeMatch =
     normalized.match(/\b(?:Bezirksamt|Gemeinde|Stadt)\s+([A-ZÄÖÜ][\wÄÖÜäöüß-]*(?:\s+[A-ZÄÖÜ][\wÄÖÜäöüß-]*){0,2})/i)
