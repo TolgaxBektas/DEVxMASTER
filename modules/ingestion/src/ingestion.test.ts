@@ -14,7 +14,7 @@ describe("Ingestion-Bestand", () => {
       filename: "Seniorenwegweiser.pdf",
       pages: [{
         pageNumber: 1,
-        text: "LEBEN UND ÄLTER WERDEN IM RHEIN-NECKAR-KREIS\nAUSGABE 2020",
+        text: "LEBEN UND ÄLTER WERDEN IM RHEIN-NECKAR-KREIS\nBaden-Württemberg\nAUSGABE 2020",
       }],
     });
     expect(result.type).toBe("bürger-und-seniorenwegweiser");
@@ -42,6 +42,38 @@ describe("Ingestion-Bestand", () => {
     }
   });
 
+  it("erkennt unbekannte Kreise und Gemeinden über Namensmuster statt Listen", () => {
+    const result = deriveDocumentClassification({
+      filename: "Amtsblatt Landkreis Schaumburg.pdf",
+      pages: [{
+        pageNumber: 1,
+        text: "AMTSBLATT LANDKREIS SCHAUMBURG\nNiedersachsen\nAusgabe 3/2024",
+      }],
+    });
+    expect(result.regionDistrict).toBe("Landkreis Schaumburg");
+    expect(result.regionState).toBe("Niedersachsen");
+    expect(result.periodIssue).toBe(3);
+    expect(result.periodStartYear).toBe(2024);
+    expect(result.periodConfidence).toBeGreaterThan(0.8);
+
+    const municipality = deriveDocumentClassification({
+      filename: "Gemeinde Wusterhausen.pdf",
+      pages: [{ pageNumber: 1, text: "Gemeinde Wusterhausen\nBrandenburg" }],
+    });
+    expect(municipality.regionPlace).toBe("Wusterhausen");
+    expect(municipality.regionState).toBe("Brandenburg");
+  });
+
+  it("hält schwache und kontextlose Signale unsicher oder leer", () => {
+    const result = deriveDocumentClassification({
+      filename: "Informationen.pdf",
+      pages: [{ pageNumber: 1, text: "Messezeiten und Gottesdienste\nStand: 2019" }],
+    });
+    expect(result.type).toBeNull();
+    expect(result.periodStartYear).toBeNull();
+    expect(result.periodConfidence).toBeNull();
+  });
+
   it("bewahrt manuelle Korrekturen bei einer erneuten Ableitung", async () => {
     const repository = new MemoryIngestionRepository();
     const document = await repository.createUploadedDocument("1", {
@@ -62,7 +94,7 @@ describe("Ingestion-Bestand", () => {
     }, "user-1");
     await repository.upsertDerivedClassification("1", document.document.id, deriveDocumentClassification({
       filename: "wegweiser.pdf",
-      pages: [{ pageNumber: 1, text: "SENIORENWEGWEISER HAMBURG 2021" }],
+      pages: [{ pageNumber: 1, text: "SENIORENWEGWEISER HAMBURG\nAusgabe 2021" }],
     }));
     const result = (await repository.getDocument("1", document.document.id)).classification;
     expect(result?.type).toBe("stadt-und-gemeindemagazin");

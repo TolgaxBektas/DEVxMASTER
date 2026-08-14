@@ -54,15 +54,31 @@ export type DerivedClassification = Pick<
 >;
 
 const TYPE_RULES: Array<[string, RegExp, number]> = [
-  ["kommunales-amtsblatt", /\bamtsblatt\b/i, 0.96],
-  ["stadt-und-gemeindemagazin", /\b(stadt|gemeinde)(s)?magazin\b/i, 0.9],
-  ["bürger-und-seniorenwegweiser", /\b(?:seniorenwegweiser|bürgerwegweiser|senioren.{0,20}wegweiser)\b/i, 0.97],
-  ["branchenführer", /\bbranchenf(ü|u)hrer\b/i, 0.96],
-  ["messekatalog", /\bmesse(katalog)?\b/i, 0.9],
+  ["kommunales-amtsblatt", /\bamtsblatt\b/i, 0.94],
+  ["stadt-und-gemeindemagazin", /(?:\b(?:stadt|gemeinde)[- ]?magazin\b|[A-Za-zÄÖÜäöüß-]{3,}[- ]magazin\b)/i, 0.86],
+  ["bürger-und-seniorenwegweiser", /\b(?:seniorenwegweiser|bürgerwegweiser|wegweiser\s+für\s+(?:senior|bürger)|senioren.{0,20}wegweiser)\b/i, 0.95],
+  ["branchenführer", /\bbranchenf(ü|u)hrer\b/i, 0.95],
+  ["messekatalog", /messe[- ]?(?:katalog|führer)/i, 0.9],
+];
+
+const STATES = [
+  "Baden-Württemberg", "Bayern", "Berlin", "Brandenburg", "Bremen",
+  "Hamburg", "Hessen", "Mecklenburg-Vorpommern", "Niedersachsen",
+  "Nordrhein-Westfalen", "Rheinland-Pfalz", "Saarland", "Sachsen",
+  "Sachsen-Anhalt", "Schleswig-Holstein", "Thüringen",
 ];
 
 function clean(value: string): string {
   return value.normalize("NFKC").replace(/\s+/g, " ").trim();
+}
+
+function formatRegionName(value: string): string {
+  const formatted = value
+    .toLocaleLowerCase("de-DE")
+    .split(/([ -])/)
+    .map((part) => /^[a-zäöüß]/i.test(part) ? part.charAt(0).toLocaleUpperCase("de-DE") + part.slice(1) : part)
+    .join("");
+  return formatted.replace(/^Städteregion\b/i, "StädteRegion");
 }
 
 function firstMeaningfulLine(text: string): string | null {
@@ -74,25 +90,24 @@ function firstMeaningfulLine(text: string): string | null {
 
 function deriveRegion(text: string) {
   const normalized = clean(text);
-  const district =
-    /\bRhein-Neckar-Kreis\b/i.test(normalized) ? "Rhein-Neckar-Kreis" :
-    /\bStädteRegion Aachen\b/i.test(normalized) ? "StädteRegion Aachen" :
-    /\bWandsbek\b/i.test(normalized) ? "Wandsbek" :
-    /\bHarburg\b/i.test(normalized) ? "Harburg" :
-    null;
-  const place = /\bOststeinbek\b/i.test(normalized) ? "Oststeinbek" : null;
-  let state: string | null = null;
-  if (/\bHamburg\b/i.test(normalized) || district === "Wandsbek" || district === "Harburg")
-    state = "Hamburg";
-  else if (district === "Rhein-Neckar-Kreis") state = "Baden-Württemberg";
-  else if (/\bSchleswig-Holstein\b/i.test(normalized)) state = "Schleswig-Holstein";
-  else if (/\bNordrhein-Westfalen\b|\bNRW\b/i.test(normalized) || district === "StädteRegion Aachen")
-    state = "Nordrhein-Westfalen";
+  const state = STATES.find((item) => new RegExp(`\\b${item.replace("-", "[- ]")}\\b`, "i").test(normalized)) ?? null;
+  const districtMatch =
+    normalized.match(/\bStädteRegion\s+([A-ZÄÖÜ][\wÄÖÜäöüß-]*(?:\s+[A-ZÄÖÜ][\wÄÖÜäöüß-]*){0,3})/i)
+    ?? normalized.match(/\b([A-ZÄÖÜ][\wÄÖÜäöüß-]*(?:-[A-ZÄÖÜ][\wÄÖÜäöüß-]*)*-Kreis)\b/i)
+    ?? normalized.match(/\b(?:Landkreis|Kreis)\s+([A-ZÄÖÜ][^\n,.;|]+)/i);
+  const district = districtMatch
+    ? formatRegionName(clean(districtMatch[0]).replace(/\s+\d+$/, ""))
+    : null;
+  const placeMatch =
+    normalized.match(/\b(?:Bezirksamt|Gemeinde|Stadt)\s+([A-ZÄÖÜ][\wÄÖÜäöüß-]*(?:\s+[A-ZÄÖÜ][\wÄÖÜäöüß-]*){0,2})/i)
+    ?? normalized.match(/\bim\s+Bezirk\s+([A-ZÄÖÜ][\wÄÖÜäöüß-]*(?:\s+[A-ZÄÖÜ][\wÄÖÜäöüß-]*){0,2})/i)
+    ?? normalized.match(/\bder\s+Stadt\s+([A-ZÄÖÜ][\wÄÖÜäöüß-]*(?:\s+[A-ZÄÖÜ][\wÄÖÜäöüß-]*){0,2})/i);
+  const place = placeMatch?.[1] ? formatRegionName(clean(placeMatch[1])) : null;
   return {
     place,
     district,
     state,
-    confidence: district || place || state ? (place || district ? 0.9 : 0.65) : null,
+    confidence: state && (district || place) ? 0.9 : state ? 0.96 : district ? 0.72 : place ? 0.62 : null,
   };
 }
 
@@ -101,11 +116,11 @@ export function deriveDocumentClassification(input: {
   pages: Array<{ pageNumber: number; text: string }>;
   pdfMetadata?: { title?: string; subject?: string; creationDate?: string };
 }): DerivedClassification {
-  const firstPages = input.pages
+  const pages = input.pages
     .filter((page) => page.pageNumber <= 3)
     .sort((a, b) => a.pageNumber - b.pageNumber)
-    .map((page) => page.text)
-    .join("\n");
+  const firstPage = pages.find((page) => page.pageNumber === 1)?.text ?? "";
+  const firstPages = pages.map((page) => page.text).join("\n");
   const metadataText = [input.pdfMetadata?.title, input.pdfMetadata?.subject]
     .filter(Boolean).join("\n");
   const evidence = `${input.filename}\n${metadataText}\n${firstPages}`;
@@ -114,9 +129,18 @@ export function deriveDocumentClassification(input: {
   const title = clean(input.pdfMetadata?.title ?? "")
     || firstMeaningfulLine(firstPages)
     || clean(input.filename.replace(/\.pdf$/i, ""));
-  const periodMatch = evidence.match(/\b(20\d{2})\s*[\/-]\s*(20\d{2})\b/);
-  const yearMatch = evidence.match(/\b(20\d{2})\b/);
-  const editionMatch = evidence.match(/\b(?:ausgabe|edition)\s*(?:Nr\.?\s*)?(\d{1,4})\b/i);
+  const contextualLines = firstPages
+    .split(/\r?\n/)
+    .filter((line) => /\b(?:ausgabe|edition|jahrgang)\b/i.test(line)
+      || /\b\d{1,2}\.\s*-\s*\d{1,2}\.\s+\p{L}+\s+20\d{2}\b/u.test(line))
+    .join("\n");
+  const periodEvidence = `${input.filename}\n${metadataText}\n${contextualLines}`;
+  const periodMatch = periodEvidence.match(/\b(20\d{2})\s*[\/-]\s*(20\d{2})\b/);
+  const editionWithYear = periodEvidence.match(/\b(?:ausgabe|edition)\s*(?:Nr\.?\s*)?(\d{1,3})\s*[\/-]\s*(20\d{2})\b/i);
+  const editionMatch = periodEvidence.match(/\b(?:ausgabe|edition)\s*(?:Nr\.?\s*)?(\d{1,4})\b/i);
+  const contextualYear = periodEvidence.match(/\b(?:ausgabe|edition|jahrgang)\s*(?:Nr\.?\s*)?(20\d{2})\b/i);
+  const dateYear = periodEvidence.match(/\b\d{1,2}\.\s*-\s*\d{1,2}\.\s+\p{L}+\s+(20\d{2})\b/u);
+  const yearMatch = editionWithYear ? editionWithYear : contextualYear ?? dateYear ?? periodEvidence.match(/\b(20\d{2})\b/);
   const issueMatch = editionMatch && Number(editionMatch[1]) < 1000 ? editionMatch : null;
   const region = deriveRegion(evidence);
   return {
@@ -126,13 +150,13 @@ export function deriveDocumentClassification(input: {
     publicationName: title,
     publicationNameConfidence: firstPages ? 0.72 : 0.35,
     publicationNameSource: input.pdfMetadata?.title ? "pdf-metadata" : firstPages ? "title-page" : "filename",
-    editionLabel: periodMatch?.[0] ?? (editionMatch ? `Ausgabe ${editionMatch[1]}` : null),
-    editionConfidence: periodMatch || editionMatch ? 0.82 : null,
+    editionLabel: editionWithYear ? `Ausgabe ${editionWithYear[1]}/${editionWithYear[2]}` : periodMatch?.[0] ?? (editionMatch ? `Ausgabe ${editionMatch[1]}` : null),
+    editionConfidence: editionWithYear || periodMatch ? 0.86 : editionMatch ? 0.7 : null,
     editionSource: metadataText ? "pdf-metadata" : "first-pages",
-    periodStartYear: periodMatch ? Number(periodMatch[1]) : yearMatch ? Number(yearMatch[1]) : null,
-    periodEndYear: periodMatch ? Number(periodMatch[2]) : yearMatch ? Number(yearMatch[1]) : null,
-    periodIssue: issueMatch ? Number(issueMatch[1]) : null,
-    periodConfidence: periodMatch ? 0.9 : yearMatch ? 0.7 : null,
+    periodStartYear: periodMatch ? Number(periodMatch[1]) : editionWithYear ? Number(editionWithYear[2]) : yearMatch ? Number(yearMatch[1]) : null,
+    periodEndYear: periodMatch ? Number(periodMatch[2]) : editionWithYear ? Number(editionWithYear[2]) : yearMatch ? Number(yearMatch[1]) : null,
+    periodIssue: editionWithYear ? Number(editionWithYear[1]) : issueMatch ? Number(issueMatch[1]) : null,
+    periodConfidence: periodMatch || editionWithYear ? 0.86 : contextualYear || dateYear ? 0.75 : yearMatch ? 0.45 : null,
     periodSource: metadataText && yearMatch && !firstPages.includes(yearMatch[0]) ? "pdf-metadata" : "first-pages",
     regionPlace: region.place,
     regionDistrict: region.district,
