@@ -4,6 +4,8 @@ import type { AuthContext } from "@xmaster-center/contracts";
 import { MemoryIngestionRepository } from "./memory-repository.js";
 import { advertisementEventIdempotencyKey, createIngestionModule } from "./module.js";
 import { deriveDocumentClassification, selectRegionSource } from "./classification.js";
+import { createDrizzleIngestionRepository } from "./drizzle-repository.js";
+import { classifications, documents } from "./schema.js";
 import { classificationCorrectionSchema, createIngestionRouter } from "./router.js";
 import { periodIncludesYear } from "./repository.js";
 
@@ -434,7 +436,12 @@ describe("Ingestion-Bestand", () => {
     expect(audit.entries).toHaveLength(0);
   });
 
-  it("prüft ein einzeln gesendetes Endjahr gegen den wirksamen Startwert", async () => {
+  it.each([
+    ["nur Bis", { periodEndYear: 2019 }, false],
+    ["nur Von", { periodStartYear: 2027 }, false],
+    ["beide widersprüchlich", { periodStartYear: 2027, periodEndYear: 2019 }, false],
+    ["beide gültig", { periodStartYear: 2024, periodEndYear: 2026 }, true],
+  ])("prüft den wirksamen Zeitraum bei %s", async (_case, correction, valid) => {
     const repository = new MemoryIngestionRepository();
     const document = await repository.createUploadedDocument("1", {
       filename: "zeitraum-korrektur.pdf",
@@ -462,12 +469,75 @@ describe("Ingestion-Bestand", () => {
     };
     const caller = createIngestionRouter(repository, async () => undefined, undefined, undefined, audit)
       .createCaller({ auth });
-    await expect(caller.documents.correct({
+    const request = caller.documents.correct({
       id: document.document.id,
-      periodEndYear: 2019,
-    })).rejects.toThrow("Das Endjahr darf nicht vor dem Startjahr liegen.");
+      ...correction,
+    });
+    if (valid) {
+      await expect(request).resolves.toMatchObject({
+        periodStartYear: 2024,
+        periodEndYear: 2026,
+      });
+      expect(audit.entries).toHaveLength(1);
+    } else {
+      await expect(request).rejects.toThrow("Das Endjahr darf nicht vor dem Startjahr liegen.");
+      expect(audit.entries).toHaveLength(0);
+    }
     expect((await repository.getDocument("1", document.document.id)).classification)
       .toMatchObject({ periodStartYear: 2024, periodEndYear: 2026 });
+  });
+
+  it("liefert die Klassifikation auch aus der Drizzle-Fassung des Dokumentvertrags", async () => {
+    const documentRow = {
+      id: 1104,
+      tenantId: 1,
+      sourceId: null,
+      filename: "1104.pdf",
+      sha256: "a".repeat(64),
+      storageKey: "tenants/1/originals/a/1104.pdf",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "upload",
+      state: "processed",
+      error: null,
+    };
+    const classificationRow = {
+      type: null,
+      typeSource: null,
+      typeConfidence: null,
+      publicationName: "Test",
+      publicationNameSource: "manual",
+      publicationNameConfidence: null,
+      editionLabel: null,
+      editionSource: null,
+      editionConfidence: null,
+      periodStartYear: 2024,
+      periodEndYear: 2026,
+      periodIssue: null,
+      periodSource: "manual",
+      periodConfidence: null,
+      regionPlace: null,
+      regionDistrict: null,
+      regionState: null,
+      regionSource: null,
+      regionConfidence: null,
+      derivedAt: null,
+      correctedAt: null,
+      correctedBy: null,
+    };
+    const database = {
+      select: () => ({
+        from: (table: unknown) => ({
+          where: () => ({
+            limit: async () => table === documents ? [documentRow] : table === classifications ? [classificationRow] : [],
+          }),
+        }),
+      }),
+    };
+    const repository = createDrizzleIngestionRepository(database);
+    await expect(repository.getDocument("1", 1104)).resolves.toMatchObject({
+      classification: { periodStartYear: 2024, periodEndYear: 2026 },
+    });
   });
 
   it("behandelt ein Dokument eines fremden Mandanten als nicht vorhanden", async () => {

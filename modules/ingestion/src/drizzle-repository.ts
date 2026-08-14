@@ -2,12 +2,20 @@ import type { MySql2Database } from "drizzle-orm/mysql2";
 import { and, desc, eq, gte, lte } from "drizzle-orm";
 import { classifications, documents, occurrences, pages, sources, ingestionSchema } from "./schema.js";
 import type { DerivedClassification, DocumentClassification } from "./classification.js";
-import { IngestionSourceNotFoundError, type DocumentListFilters, type IngestionOccurrence, type IngestionRepository } from "./repository.js";
+import { IngestionSourceNotFoundError, type DocumentListFilters, type IngestionDocument, type IngestionOccurrence, type IngestionRepository } from "./repository.js";
 
 type IngestionDb = MySql2Database<typeof ingestionSchema>;
 
 export function createDrizzleIngestionRepository(db: unknown): IngestionRepository {
   const database = db as IngestionDb;
+  const toDocument = <T extends Omit<IngestionDocument, "tenantId" | "classification"> & { tenantId: number }>(
+    document: T,
+    classification: DocumentClassification | null,
+  ): IngestionDocument => ({
+    ...document,
+    tenantId: String(document.tenantId),
+    classification,
+  });
   const readClassification = async (tenantId: string, documentId: number) => {
     const row = (await database.select().from(classifications).where(and(
       eq(classifications.tenantId, Number(tenantId)),
@@ -233,7 +241,10 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
       const existing = await database.select().from(documents).where(
         and(eq(documents.tenantId, Number(tenantId)), eq(documents.sha256, input.sha256)),
       ).limit(1);
-      if (existing[0]) return { document: existing[0] as never, deduplicated: true };
+      if (existing[0]) return {
+        document: toDocument(existing[0], null),
+        deduplicated: true,
+      };
       try {
         const documentRow = await database.insert(documents).values({
           tenantId: Number(tenantId),
@@ -250,14 +261,17 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
         const document = (await database.select().from(documents)
           .where(eq(documents.id, documentId)).limit(1))[0];
         if (!document) throw new Error("Dokument konnte nicht angelegt werden");
-        return { document: document as never, deduplicated: false };
+        return { document: toDocument(document, null), deduplicated: false };
       } catch (error) {
         if (!/duplicate|unique|ER_DUP_ENTRY/i.test(String(error))) throw error;
         const concurrent = await database.select().from(documents).where(
           and(eq(documents.tenantId, Number(tenantId)), eq(documents.sha256, input.sha256)),
         ).limit(1);
         if (!concurrent[0]) throw error;
-        return { document: concurrent[0] as never, deduplicated: true };
+        return {
+          document: toDocument(concurrent[0], null),
+          deduplicated: true,
+        };
       }
     },
     async getDocument(tenantId, documentId) {
@@ -265,13 +279,13 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
         and(eq(documents.id, documentId), eq(documents.tenantId, Number(tenantId))),
       ).limit(1))[0];
       if (!document) throw new Error("Dokument nicht gefunden");
-      return document as never;
+      return toDocument(document, await readClassification(tenantId, documentId));
     },
     async getDocumentById(documentId) {
       const document = (await database.select().from(documents)
         .where(eq(documents.id, documentId)).limit(1))[0];
       if (!document) throw new Error("Dokument nicht gefunden");
-      return document as never;
+      return toDocument(document, await readClassification(String(document.tenantId), documentId));
     },
     async replaceProcessedDocument(tenantId, documentId, processedPages) {
       const document = await this.getDocument(tenantId, documentId);
@@ -338,7 +352,7 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
         and(eq(documents.id, documentId), eq(documents.tenantId, Number(tenantId))),
       ).limit(1))[0];
       if (!row) throw new Error("Dokument nicht gefunden");
-      return { ...row, tenantId: String(row.tenantId) } as never;
+      return toDocument(row, await readClassification(tenantId, documentId));
     },
   };
 }
