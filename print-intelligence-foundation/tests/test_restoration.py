@@ -2,6 +2,7 @@ import json
 from collections import Counter
 from pathlib import Path
 
+import pytest
 from PIL import Image, ImageChops, ImageDraw
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -17,6 +18,7 @@ from app.services.restoration import (
 )
 from app.services.vision.image_edit import (
     ImageEditResult,
+    OpenAIImageEditProvider,
     RecordedImageEditProvider,
     image_sha256,
 )
@@ -491,7 +493,7 @@ def test_generative_fallback_composites_crop_and_records_pending_review(
         def edit(self, image, prompt, rejection_reasons=None):
             del prompt, rejection_reasons
             self.calls += 1
-            return ImageEditResult(image.copy(), "stub-image-model", 250)
+            return ImageEditResult(image.copy(), "stub-image-model", "unknown")
 
         def available(self):
             return True
@@ -545,8 +547,34 @@ def test_generative_fallback_composites_crop_and_records_pending_review(
         assert ad.restoration_path
         assert manifest["generative"]["model"] == "stub-image-model"
         assert manifest["generative"]["prompt_sha256"]
-        assert manifest["generative"]["cost"] == 250
-        assert manifest["generative"]["document_cost_cents"] == 250
+        assert manifest["generative"]["cost"] == 100
+        assert manifest["generative"]["document_cost_cents"] == 100
+        assert manifest["ad_boundary"]
+        assert "passed independent verification" in manifest["cascade_justification"]
         assert manifest["verification"]["status"] == "passed"
         assert manifest["review_status"] == "pending"
         assert session.scalar(select(ReviewItem).where(ReviewItem.ad_id == ad.id))
+
+
+def test_image_edit_provider_rejects_invalid_url_and_empty_data(monkeypatch):
+    image = Image.new("RGB", (4, 4), "white")
+    insecure = OpenAIImageEditProvider("http://example.test/v1", "model", "key")
+    with pytest.raises(ValueError, match="must use https"):
+        insecure.edit(image, "prompt")
+
+    def empty_response(*_args, **_kwargs):
+        import httpx
+
+        return httpx.Response(
+            200,
+            json={"data": []},
+            request=httpx.Request("POST", "https://example.test/v1/images/edits"),
+        )
+
+    monkeypatch.setattr("app.services.vision.image_edit.httpx.post", empty_response)
+    monkeypatch.setattr(
+        "app.services.vision.image_edit.validate_public_url", lambda _url: None
+    )
+    provider = OpenAIImageEditProvider("https://example.test/v1", "model", "key")
+    with pytest.raises(ValueError, match="no image data"):
+        provider.edit(image, "prompt")

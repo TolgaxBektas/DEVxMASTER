@@ -180,8 +180,10 @@ def verify_generative_proposal(
         0 <= boundary.left < boundary.right <= source.width
         and 0 <= boundary.top < boundary.bottom <= source.height
     )
+    source_pixels = source.load()
+    proposed_pixels = proposed.load()
     outside_equal = valid_boundary and all(
-        source.getpixel((x, y)) == proposed.getpixel((x, y))
+        source_pixels[x, y] == proposed_pixels[x, y]
         for y in range(source.height)
         for x in range(source.width)
         if not (boundary.left <= x < boundary.right and boundary.top <= y < boundary.bottom)

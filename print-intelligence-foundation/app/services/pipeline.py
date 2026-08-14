@@ -1,5 +1,7 @@
 import json
 import logging
+import math
+from numbers import Real
 import re
 import tempfile
 from time import monotonic
@@ -740,7 +742,24 @@ class Pipeline:
                 edited = self.image_edit_provider.edit(
                     original_crop, IMAGE_EDIT_PROMPT, previous_reasons
                 )
-            except (OSError, ValueError, KeyError, TypeError) as exc:
+                reported = edited.reported_cost
+                reported_cents = (
+                    int(round(reported))
+                    if isinstance(reported, Real)
+                    and not isinstance(reported, bool)
+                    and math.isfinite(reported)
+                    else 0
+                )
+                charged = max(self.image_edit_max_cost_cents, reported_cents)
+            except (
+                OSError,
+                ValueError,
+                KeyError,
+                TypeError,
+                IndexError,
+                AttributeError,
+                OverflowError,
+            ) as exc:
                 manifest["generative"] = {
                     "status": "refused",
                     "attempt": attempt + 1,
@@ -749,8 +768,6 @@ class Pipeline:
                     "reason": f"image edit provider failed: {exc}",
                 }
                 return None, "restoration refused: image edit provider failed"
-            reported = edited.reported_cost
-            charged = max(self.image_edit_max_cost_cents, int(round(reported or 0)))
             self._restoration_cost_used += max(
                 0, charged - self.image_edit_max_cost_cents
             )
@@ -808,6 +825,16 @@ class Pipeline:
             }
             manifest["verification"] = verification
             if verification["status"] == "passed":
+                manifest["ad_boundary"] = [
+                    boundary.left,
+                    boundary.top,
+                    boundary.right,
+                    boundary.bottom,
+                ]
+                manifest["cascade_justification"] = (
+                    "Generative restoration passed independent verification; "
+                    "human review is required."
+                )
                 manifest["restoration_mode"] = "generative"
                 manifest["edit_status"] = "applied"
                 manifest["review_status"] = "pending"
