@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import hashlib
 import io
 import json
+import math
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import urlparse
@@ -26,6 +27,7 @@ class ImageEditProvider(Protocol):
         image: Image.Image,
         prompt: str,
         rejection_reasons: list[str] | None = None,
+        size: str | None = None,
     ) -> ImageEditResult: ...
 
     def available(self) -> bool: ...
@@ -37,6 +39,54 @@ def image_sha256(image: Image.Image) -> str:
     return hashlib.sha256(buffer.getvalue()).hexdigest()
 
 
+SUPPORTED_IMAGE_EDIT_SIZES = {
+    "1024x1024": (1024, 1024),
+    "1536x1024": (1536, 1024),
+    "1024x1536": (1024, 1536),
+}
+
+
+def select_image_edit_size(image_size: tuple[int, int]) -> tuple[str, tuple[int, int]]:
+    width, height = image_size
+    if width <= 0 or height <= 0:
+        raise ValueError("image edit source dimensions must be positive")
+    ratio = width / height
+    selected = min(
+        SUPPORTED_IMAGE_EDIT_SIZES,
+        key=lambda name: abs(
+            math.log(ratio)
+            - math.log(
+                SUPPORTED_IMAGE_EDIT_SIZES[name][0]
+                / SUPPORTED_IMAGE_EDIT_SIZES[name][1]
+            )
+        ),
+    )
+    return selected, SUPPORTED_IMAGE_EDIT_SIZES[selected]
+
+
+def prepare_image_edit_input(
+    image: Image.Image, target_size: tuple[int, int]
+) -> tuple[Image.Image, tuple[int, int, int, int]]:
+    target_width, target_height = target_size
+    scale = min(target_width / image.width, target_height / image.height)
+    resized_size = (round(image.width * scale), round(image.height * scale))
+    resized = image.convert("RGB").resize(resized_size, Image.Resampling.LANCZOS)
+    left = (target_width - resized.width) // 2
+    top = (target_height - resized.height) // 2
+    prepared = Image.new("RGB", target_size, (255, 255, 255))
+    prepared.paste(resized, (left, top))
+    return prepared, (left, top, left + resized.width, top + resized.height)
+
+
+def restore_image_edit_output(
+    image: Image.Image,
+    fitted_region: tuple[int, int, int, int],
+    source_size: tuple[int, int],
+) -> Image.Image:
+    cropped = image.crop(fitted_region)
+    return cropped.resize(source_size, Image.Resampling.LANCZOS)
+
+
 class RecordedImageEditProvider:
     def __init__(self, directory: str | Path):
         self.directory = Path(directory)
@@ -46,8 +96,9 @@ class RecordedImageEditProvider:
         image: Image.Image,
         prompt: str,
         rejection_reasons: list[str] | None = None,
+        size: str | None = None,
     ) -> ImageEditResult:
-        del prompt, rejection_reasons
+        del prompt, rejection_reasons, size
         digest = image_sha256(image)
         manifest_path = self.directory / f"{digest}.json"
         if not manifest_path.exists():
@@ -82,6 +133,7 @@ class OpenAIImageEditProvider:
         image: Image.Image,
         prompt: str,
         rejection_reasons: list[str] | None = None,
+        size: str | None = None,
     ) -> ImageEditResult:
         self._validate_base_url()
         buffer = io.BytesIO()
@@ -99,8 +151,10 @@ class OpenAIImageEditProvider:
                 data={
                     "model": self.model,
                     "prompt": full_prompt,
+                    "size": size or "auto",
                 },
                 timeout=self.timeout,
+                follow_redirects=False,
             )
             response.raise_for_status()
         except httpx.HTTPError as exc:
