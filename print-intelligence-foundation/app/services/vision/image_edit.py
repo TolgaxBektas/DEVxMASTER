@@ -5,9 +5,12 @@ import io
 import json
 from pathlib import Path
 from typing import Protocol
+from urllib.parse import urlparse
 
 import httpx
 from PIL import Image
+
+from app.services.downloader import validate_public_url
 
 
 @dataclass(frozen=True)
@@ -80,6 +83,7 @@ class OpenAIImageEditProvider:
         prompt: str,
         rejection_reasons: list[str] | None = None,
     ) -> ImageEditResult:
+        self._validate_base_url()
         buffer = io.BytesIO()
         image.convert("RGB").save(buffer, format="PNG", optimize=False)
         full_prompt = prompt
@@ -101,8 +105,11 @@ class OpenAIImageEditProvider:
             response.raise_for_status()
         except httpx.HTTPError as exc:
             raise ValueError(f"image edit HTTP request failed: {exc}") from exc
-        payload = response.json()
-        item = payload["data"][0]
+        try:
+            payload = response.json()
+            item = payload["data"][0]
+        except (TypeError, KeyError, IndexError, ValueError) as exc:
+            raise ValueError("image edit provider returned no image data") from exc
         encoded = item.get("b64_json")
         if not encoded:
             raise ValueError("image edit provider returned no b64_json image")
@@ -114,3 +121,13 @@ class OpenAIImageEditProvider:
 
     def available(self) -> bool:
         return bool(self.api_key)
+
+    def _validate_base_url(self) -> None:
+        parsed = urlparse(self.base_url)
+        if parsed.scheme != "https" or not parsed.hostname:
+            raise ValueError("image edit base URL must use https with a valid host")
+        try:
+            parsed.port
+        except ValueError as exc:
+            raise ValueError("image edit base URL has an invalid port") from exc
+        validate_public_url(self.base_url)

@@ -2,6 +2,8 @@ import json
 from collections import Counter
 from pathlib import Path
 
+import httpx
+import pytest
 from PIL import Image, ImageChops, ImageDraw
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -17,6 +19,7 @@ from app.services.restoration import (
 )
 from app.services.vision.image_edit import (
     ImageEditResult,
+    OpenAIImageEditProvider,
     RecordedImageEditProvider,
     image_sha256,
 )
@@ -547,6 +550,101 @@ def test_generative_fallback_composites_crop_and_records_pending_review(
         assert manifest["generative"]["prompt_sha256"]
         assert manifest["generative"]["cost"] == 250
         assert manifest["generative"]["document_cost_cents"] == 250
+        assert manifest["ad_boundary"]
+        assert "passed independent verification" in manifest["cascade_justification"]
         assert manifest["verification"]["status"] == "passed"
         assert manifest["review_status"] == "pending"
         assert session.scalar(select(ReviewItem).where(ReviewItem.ad_id == ad.id))
+
+
+def test_image_edit_provider_rejects_invalid_url_and_empty_data(monkeypatch):
+    image = Image.new("RGB", (4, 4), "white")
+    insecure = OpenAIImageEditProvider("http://example.test/v1", "model", "key")
+    with pytest.raises(ValueError, match="must use https"):
+        insecure.edit(image, "prompt")
+
+    def empty_response(*_args, **_kwargs):
+        return httpx.Response(
+            200,
+            json={"data": []},
+            request=httpx.Request("POST", "https://example.test/v1/images/edits"),
+        )
+
+    monkeypatch.setattr("app.services.vision.image_edit.httpx.post", empty_response)
+    monkeypatch.setattr(
+        "app.services.vision.image_edit.validate_public_url", lambda _url: None
+    )
+    provider = OpenAIImageEditProvider("https://example.test/v1", "model", "key")
+    with pytest.raises(ValueError, match="no image data"):
+        provider.edit(image, "prompt")
+
+
+def test_non_numeric_reported_cost_uses_upper_bound_and_completes_document(
+    tmp_path, monkeypatch
+):
+    class _StubImageEditProvider:
+        def __init__(self):
+            self.calls = 0
+
+        def edit(self, image, prompt, rejection_reasons=None):
+            del prompt, rejection_reasons
+            self.calls += 1
+            return ImageEditResult(image.copy(), "stub-image-model", "unknown")
+
+        def available(self):
+            return True
+
+    class _StubOCRProvider:
+        def extract_fields(self, crop_path):
+            del crop_path
+            from app.services.ocr import OCRResult
+
+            return OCRResult(
+                {"phone": "01234 56789"},
+                {"phone": 1.0},
+                "Tel 01234 56789",
+            )
+
+    import app.services.pipeline as pipeline_module
+
+    monkeypatch.setattr(
+        pipeline_module,
+        "communication_lines_for_box",
+        lambda *_args: ["Tel 01234 56789"],
+    )
+    provider = _StubImageEditProvider()
+    engine = create_engine(f"sqlite:///{tmp_path / 'generative.db'}")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with factory() as session:
+        pipeline = Pipeline(
+            session,
+            RecordedVisionProvider("tests/fixtures/qwen"),
+            LocalStorage(tmp_path / "storage"),
+            render_dpi=120,
+            local_work_dir=tmp_path / "work",
+            restoration_enabled=True,
+            ocr_provider=_StubOCRProvider(),
+            image_edit_provider=provider,
+            image_edit_max_cost_cents=100,
+            image_edit_hard_stop_cents=100,
+        )
+        document = pipeline.ingest(FIXTURE.read_bytes())
+        ads = session.scalars(
+            select(AdOccurrence)
+            .join(Page)
+            .where(Page.document_id == document.id, Page.page_number == 11)
+        ).all()
+        generative = [
+            json.loads(ad.restoration_manifest_json)
+            for ad in ads
+            if json.loads(ad.restoration_manifest_json).get("restoration_mode")
+            == "generative"
+        ]
+        assert provider.calls == 1
+        assert generative
+        manifest = generative[0]
+        assert manifest["generative"]["cost"] == 100
+        assert manifest["generative"]["document_cost_cents"] == 100
+        assert manifest["verification"]["status"] == "passed"
+        assert document.id is not None
