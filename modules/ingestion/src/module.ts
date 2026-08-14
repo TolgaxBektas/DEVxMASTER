@@ -24,6 +24,7 @@ export type ProcessedPage = {
   imageKey: string;
   classification: string;
   adProbability: number;
+  titleCandidates?: Array<{ text: string; size: number }>;
   occurrences: Array<{
     bbox: Record<string, number>;
     imageKey: string;
@@ -106,7 +107,11 @@ export function createIngestionModule(deps: {
     documentId: number;
     storageKey: string;
     outputPrefix: string;
-  }) => Promise<ProcessedPage[]>;
+  }) => Promise<ProcessedPage[] & { pdfMetadata?: {
+    title?: string;
+    subject?: string;
+    creationDate?: string;
+  } }>;
   fetchSource?: (input: { url: string }) => Promise<{ bytes: Buffer; filename: string }>;
   discoverProposals?: (input: { seedPages: string[]; searchTerms: string[]; maxResults: number }) => Promise<Array<{
     url: string; score: number; metadata: Record<string, unknown>;
@@ -257,14 +262,15 @@ export function createIngestionModule(deps: {
               await deps.transaction(async (db) => {
                 const txRepository = deps.repositoryForTransaction?.(db)
                   ?? createDrizzleIngestionRepository(db);
-                await txRepository.upsertDerivedClassification(
-                  tenantId,
-                  document.id,
-                  deriveDocumentClassification({
-                    filename: document.filename,
-                    pages,
-                  }),
-                );
+              await txRepository.upsertDerivedClassification(
+                tenantId,
+                document.id,
+                deriveDocumentClassification({
+                  filename: document.filename,
+                  pages,
+                  ...(pages.pdfMetadata ? { pdfMetadata: pages.pdfMetadata } : {}),
+                }),
+              );
                 const occurrences = await txRepository.replaceProcessedDocument(
                   tenantId,
                   document.id,

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 
 from app.core.config import settings
-from app.services.processor import heuristic_ad_regions, render_and_extract
+from app.services.processor import extract_pdf_metadata, heuristic_ad_regions, render_and_extract
 from app.services.storage import storage
 from app.services.downloader import download_pdf, DownloadError
 from app.api.routes import require_service_token
@@ -46,6 +46,7 @@ async def process_upload(
     if not data.startswith(b"%PDF-"):
         raise HTTPException(400, "not_a_real_pdf")
     pages = render_and_extract(data)
+    pdf_metadata = extract_pdf_metadata(data)
     result = []
     for page in pages:
         number = page["page_number"]
@@ -73,9 +74,10 @@ async def process_upload(
                 "classification": page["classification"],
                 "ad_probability": page["ad_probability"],
                 "occurrences": candidates,
+                "title_candidates": page.get("title_candidates", []),
             }
         )
-    return {"pages": result}
+    return {"metadata": pdf_metadata, "pages": result}
 
 
 def _company_from_text(text: str) -> str:

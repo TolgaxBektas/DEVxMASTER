@@ -88,6 +88,17 @@ function firstMeaningfulLine(text: string): string | null {
     .find((line) => line.length >= 5 && !/^[\d\W]+$/.test(line)) ?? null;
 }
 
+function usableTitle(value: string): string | null {
+  const title = clean(value);
+  if (title.length < 5
+    || /^(?:ausgabe|edition|jahrgang)\b/i.test(title)
+    || /\bausgabe\b.*\bvom\b/i.test(title)
+    || /^\d{1,2}\.\s*-\s*\d{1,2}\./.test(title)
+    || /^(?:stand|gegründet|impressum|inhalt|content|messe|katalog)\b/i.test(title)
+    || /\bfür\s+(?:liebhaber|entdecker)\b/i.test(title)) return null;
+  return title;
+}
+
 function deriveRegion(text: string) {
   const normalized = clean(text);
   const state = STATES.find((item) => new RegExp(`\\b${item.replace("-", "[- ]")}\\b`, "i").test(normalized)) ?? null;
@@ -101,8 +112,12 @@ function deriveRegion(text: string) {
   const placeMatch =
     normalized.match(/\b(?:Bezirksamt|Gemeinde|Stadt)\s+([A-ZÄÖÜ][\wÄÖÜäöüß-]*(?:\s+[A-ZÄÖÜ][\wÄÖÜäöüß-]*){0,2})/i)
     ?? normalized.match(/\bim\s+Bezirk\s+([A-ZÄÖÜ][\wÄÖÜäöüß-]*(?:\s+[A-ZÄÖÜ][\wÄÖÜäöüß-]*){0,2})/i)
-    ?? normalized.match(/\bder\s+Stadt\s+([A-ZÄÖÜ][\wÄÖÜäöüß-]*(?:\s+[A-ZÄÖÜ][\wÄÖÜäöüß-]*){0,2})/i);
-  const place = placeMatch?.[1] ? formatRegionName(clean(placeMatch[1])) : null;
+    ?? normalized.match(/\bder\s+Stadt\s+([A-ZÄÖÜ][\wÄÖÜäöüß-]*(?:\s+[A-ZÄÖÜ][\wÄÖÜäöüß-]*){0,2})/i)
+    ?? normalized.match(/\bwillkommen\s+in\s+([A-ZÄÖÜ][\wÄÖÜäöüß-]*)/i);
+  const placeCandidate = placeMatch?.[1] ? clean(placeMatch[1]) : null;
+  const place = placeCandidate && !/^(?:zu|für|und|der|die|das|im|in|mit|von)\b/i.test(placeCandidate)
+    ? formatRegionName(placeCandidate)
+    : null;
   return {
     place,
     district,
@@ -113,22 +128,48 @@ function deriveRegion(text: string) {
 
 export function deriveDocumentClassification(input: {
   filename: string;
-  pages: Array<{ pageNumber: number; text: string }>;
+  pages: Array<{
+    pageNumber: number;
+    text: string;
+    titleCandidates?: Array<{ text: string; size: number }>;
+  }>;
   pdfMetadata?: { title?: string; subject?: string; creationDate?: string };
 }): DerivedClassification {
   const pages = input.pages
-    .filter((page) => page.pageNumber <= 3)
+    .filter((page) => page.pageNumber <= 5)
     .sort((a, b) => a.pageNumber - b.pageNumber)
+  const imprintPages = input.pages.filter((page) => page.pageNumber > 5 && /\bimpressum\b/i.test(page.text));
   const firstPage = pages.find((page) => page.pageNumber === 1)?.text ?? "";
-  const firstPages = pages.map((page) => page.text).join("\n");
+  const firstPages = [...pages, ...imprintPages].map((page) => page.text).join("\n");
   const metadataText = [input.pdfMetadata?.title, input.pdfMetadata?.subject]
     .filter(Boolean).join("\n");
   const evidence = `${input.filename}\n${metadataText}\n${firstPages}`;
   const filenameTypeRule = TYPE_RULES.find(([, rule]) => rule.test(input.filename));
   const typeRule = filenameTypeRule ?? TYPE_RULES.find(([, rule]) => rule.test(`${metadataText}\n${firstPages}`));
-  const title = clean(input.pdfMetadata?.title ?? "")
-    || firstMeaningfulLine(firstPages)
+  const metadataTitle = usableTitle(input.pdfMetadata?.title ?? "");
+  const filenameTitle = /magazin/i.test(input.filename)
+    ? usableTitle(input.filename.replace(/\.pdf$/i, "").replace(/[-_]+/g, " "))
+    : null;
+  const visualTitle = pages
+    .sort((left, right) => left.pageNumber - right.pageNumber)
+    .flatMap((page) => (page.titleCandidates ?? [])
+      .slice()
+      .sort((left, right) => right.size - left.size)
+      .map((candidate) => usableTitle(candidate.text)))
+    .find((candidate): candidate is string => Boolean(candidate));
+  const textTitle = firstMeaningfulLine(firstPage);
+  const title = metadataTitle
+    || filenameTitle
+    || visualTitle
+    || usableTitle(textTitle ?? "")
     || clean(input.filename.replace(/\.pdf$/i, ""));
+  const titleSource = metadataTitle
+    ? "pdf-metadata"
+    : filenameTitle
+      ? "filename"
+    : visualTitle || textTitle
+      ? "title-page"
+      : "filename";
   const contextualLines = firstPages
     .split(/\r?\n/)
     .filter((line) => /\b(?:ausgabe|edition|jahrgang)\b/i.test(line)
@@ -148,8 +189,8 @@ export function deriveDocumentClassification(input: {
     typeConfidence: typeRule?.[2] ?? null,
     typeSource: filenameTypeRule ? "filename" : metadataText ? "pdf-metadata" : "title-page",
     publicationName: title,
-    publicationNameConfidence: firstPages ? 0.72 : 0.35,
-    publicationNameSource: input.pdfMetadata?.title ? "pdf-metadata" : firstPages ? "title-page" : "filename",
+    publicationNameConfidence: metadataTitle ? 0.92 : filenameTitle ? 0.68 : visualTitle ? 0.84 : textTitle ? 0.45 : 0.35,
+    publicationNameSource: titleSource,
     editionLabel: editionWithYear ? `Ausgabe ${editionWithYear[1]}/${editionWithYear[2]}` : periodMatch?.[0] ?? (editionMatch ? `Ausgabe ${editionMatch[1]}` : null),
     editionConfidence: editionWithYear || periodMatch ? 0.86 : editionMatch ? 0.7 : null,
     editionSource: metadataText ? "pdf-metadata" : "first-pages",

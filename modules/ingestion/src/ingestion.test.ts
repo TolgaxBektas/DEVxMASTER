@@ -74,6 +74,35 @@ describe("Ingestion-Bestand", () => {
     expect(result.periodConfidence).toBeNull();
   });
 
+  it("bevorzugt PDF-Metadaten und typografische Titel vor beliebigen Deckblattzeilen", () => {
+    const metadata = deriveDocumentClassification({
+      filename: "amtsblatt.pdf",
+      pages: [{ pageNumber: 1, text: "Ausgabe 2026\nSlogan", titleCandidates: [
+        { text: "Amtsblatt für den Landkreis Beispiel", size: 24 },
+      ] }],
+      pdfMetadata: { title: "Amtsblatt Ausgabe Nr. 1 vom 7. Januar 2026" },
+    });
+    expect(metadata.publicationName).toBe("Amtsblatt für den Landkreis Beispiel");
+    expect(metadata.publicationNameSource).toBe("title-page");
+
+    const typography = deriveDocumentClassification({
+      filename: "messe.pdf",
+      pages: [{ pageNumber: 1, text: "09.-10. September 2024", titleCandidates: [
+        { text: "18. Kulturbörse für Straßenkunst", size: 26 },
+        { text: "09.-10. September 2024", size: 15 },
+      ] }],
+    });
+    expect(typography.publicationName).toBe("18. Kulturbörse für Straßenkunst");
+  });
+
+  it("verwirft Fließtext als Ortsnamen", () => {
+    const result = deriveDocumentClassification({
+      filename: "magazin.pdf",
+      pages: [{ pageNumber: 1, text: "Stadt Zu Verlieben\nDas Magazin" }],
+    });
+    expect(result.regionPlace).toBeNull();
+  });
+
   it("bewahrt manuelle Korrekturen bei einer erneuten Ableitung", async () => {
     const repository = new MemoryIngestionRepository();
     const document = await repository.createUploadedDocument("1", {
