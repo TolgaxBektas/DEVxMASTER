@@ -1,0 +1,88 @@
+import re
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import Response
+
+from app.core.config import settings
+from app.services.processor import heuristic_ad_regions, render_and_extract
+from app.services.storage import storage
+from app.services.downloader import download_pdf, DownloadError
+from app.api.routes import require_service_token
+
+router = APIRouter()
+
+
+@router.post("/fetch")
+async def fetch_source(payload: dict, _token: None = Depends(require_service_token)):
+    url = payload.get("url")
+    if not isinstance(url, str):
+        raise HTTPException(400, "url_required")
+    try:
+        data, metadata = download_pdf(url)
+    except DownloadError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return Response(
+        content=data,
+        media_type="application/pdf",
+        headers={
+            "X-Source-Url": metadata["final_url"],
+            "X-Source-Sha256": metadata["sha256"],
+            "Content-Disposition": f'attachment; filename="{metadata["filename"]}"',
+        },
+    )
+
+
+@router.post("/process")
+async def process_upload(
+    file: UploadFile = File(...),
+    output_prefix: str = Form(...),
+    _token: None = Depends(require_service_token),
+):
+    if not re.fullmatch(r"[a-zA-Z0-9/_-]{1,200}", output_prefix):
+        raise HTTPException(400, "invalid_output_prefix")
+    data = await file.read(settings.max_download_mb * 1024 * 1024 + 1)
+    if len(data) > settings.max_download_mb * 1024 * 1024:
+        raise HTTPException(413, "file_too_large")
+    if not data.startswith(b"%PDF-"):
+        raise HTTPException(400, "not_a_real_pdf")
+    pages = render_and_extract(data)
+    result = []
+    for page in pages:
+        number = page["page_number"]
+        image_key = f"{output_prefix}/page-{number:04d}.png"
+        storage.put_bytes(image_key, page["image_bytes"], "image/png")
+        text = page["text"]
+        candidates = []
+        for region in heuristic_ad_regions(page["image_bytes"], text):
+            ad_key = f"{output_prefix}/ad-{number:04d}.png"
+            storage.put_bytes(ad_key, page["image_bytes"], "image/png")
+            candidates.append(
+                {
+                    "bbox": region,
+                    "image_key": ad_key,
+                    "confidence": region["confidence"],
+                    "company": _company_from_text(text),
+                    "preview": " ".join(text.split())[:1000],
+                }
+            )
+        result.append(
+            {
+                "page_number": number,
+                "text": text,
+                "image_key": image_key,
+                "classification": page["classification"],
+                "ad_probability": page["ad_probability"],
+                "occurrences": candidates,
+            }
+        )
+    return {"pages": result}
+
+
+def _company_from_text(text: str) -> str:
+    match = re.search(
+        r"\b([A-ZÄÖÜ][\wÄÖÜäöüß&.-]*(?:\s+[A-ZÄÖÜ][\wÄÖÜäöüß&.-]*)*\s+(?:GmbH|AG|KG|e\.V\.))\b",
+        text,
+    )
+    if match:
+        return match.group(1)
+    return " ".join(text.split())[:255] or "Unbekannte Firma"

@@ -1,0 +1,1 @@
+ALTER TABLE `ingestion_documents` ADD CONSTRAINT `ingestion_documents_tenant_hash` UNIQUE(`tenant_id`,`sha256`);

@@ -1,0 +1,250 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap");
+
+:root {
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  color: #e7f1ef;
+  background: #101d22;
+  font-synthesis: none;
+  --petrol: #12363c;
+  --petrol-light: #19484d;
+  --gold: #d2a94e;
+  --muted: #91a7a8;
+  --line: #2a4549;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  min-width: 320px;
+  background: #101d22;
+}
+button,
+input {
+  font: inherit;
+}
+.app-shell {
+  display: flex;
+  min-height: 100vh;
+}
+.app-sidebar {
+  width: 250px;
+  background: #0d292e;
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  padding: 18px 12px;
+  transition: width 0.2s;
+}
+.app-sidebar-collapsed {
+  width: 70px;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--gold);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  padding: 4px 10px 28px;
+}
+.nav-group {
+  margin-bottom: 22px;
+}
+.nav-title {
+  color: var(--muted);
+  text-transform: uppercase;
+  font:
+    600 11px "JetBrains Mono",
+    monospace;
+  letter-spacing: 0.08em;
+  padding: 0 10px 7px;
+}
+.nav-link {
+  display: block;
+  color: #bed0ce;
+  text-decoration: none;
+  padding: 9px 10px;
+  border-radius: 7px;
+  font-size: 14px;
+}
+.nav-link:hover,
+.nav-link.active {
+  color: #fff;
+  background: var(--petrol-light);
+}
+.nav-link.active {
+  box-shadow: inset 3px 0 var(--gold);
+}
+.sidebar-footer {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 8px;
+}
+.app-main {
+  flex: 1;
+  min-width: 0;
+}
+.app-header {
+  height: 62px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 28px;
+  background: #14272c;
+}
+.header-caption {
+  color: var(--muted);
+  font:
+    600 12px "JetBrains Mono",
+    monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.page-content {
+  padding: 32px;
+  max-width: 1400px;
+}
+.ui-button {
+  border: 0;
+  border-radius: 7px;
+  padding: 9px 14px;
+  color: #fff;
+  cursor: pointer;
+  transition: 0.15s;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.ui-button-primary {
+  background: var(--gold);
+  color: #152326;
+  font-weight: 700;
+}
+.ui-button-secondary {
+  background: var(--petrol-light);
+}
+.ui-button-danger {
+  background: #8f3f42;
+}
+.ui-button-ghost {
+  background: transparent;
+  color: var(--muted);
+  padding: 8px;
+}
+.ui-button:hover {
+  filter: brightness(1.1);
+}
+.ui-card {
+  background: #172c31;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 20px;
+}
+.ui-badge {
+  display: inline-flex;
+  border-radius: 999px;
+  padding: 4px 8px;
+  font:
+    600 11px "JetBrains Mono",
+    monospace;
+  background: #2a4145;
+}
+.ui-badge-success {
+  background: #1c5a4e;
+  color: #b5f1d4;
+}
+.ui-badge-danger {
+  background: #6d3139;
+  color: #ffd0d3;
+}
+.ui-input {
+  color: #fff;
+  background: #102126;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 9px 11px;
+  outline: none;
+  width: 100%;
+}
+.ui-input:focus {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 2px #d2a94e33;
+}
+.ui-table-wrap {
+  overflow-x: auto;
+}
+.ui-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.ui-table th {
+  color: var(--muted);
+  text-align: left;
+  font:
+    600 11px "JetBrains Mono",
+    monospace;
+  text-transform: uppercase;
+  padding: 10px;
+  border-bottom: 1px solid var(--line);
+}
+.ui-table td {
+  padding: 13px 10px;
+  border-bottom: 1px solid #233c40;
+}
+.ui-empty {
+  display: grid;
+  gap: 6px;
+  place-items: center;
+  padding: 42px;
+  color: var(--muted);
+  text-align: center;
+}
+.ui-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: #0008;
+  z-index: 10;
+}
+.ui-dialog {
+  width: min(520px, 100%);
+  background: #172c31;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 20px;
+  box-shadow: 0 20px 80px #0008;
+}
+.ui-toast {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  background: #1c5a4e;
+  color: #b5f1d4;
+  border-radius: 7px;
+  padding: 10px 14px;
+}
+.ui-empty strong {
+  color: #e7f1ef;
+}
+.ui-skeleton {
+  height: 100px;
+  border-radius: 8px;
+  background: linear-gradient(90deg, #1b3035, #29474b, #1b3035);
+  background-size: 200% 100%;
+  animation: pulse 1.5s infinite;
+}
+@keyframes pulse {
+  to {
+    background-position: -200% 0;
+  }
+}

@@ -1,0 +1,99 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: xmaster-center-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: xmaster_center
+      MYSQL_USER: xmaster
+      MYSQL_PASSWORD: xmaster_dev_password
+      MYSQL_ROOT_PASSWORD: xmaster_root_password
+    ports:
+      - "3307:3306"
+    volumes:
+      - xmaster_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-pxmaster_root_password"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  print-ingest:
+    build:
+      context: ./services/print-ingest
+    container_name: xmaster-center-print-ingest
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: sqlite:////data/print_intelligence.db
+      SERVICE_TOKEN: ${PRINT_INGEST_TOKEN:-local-print-ingest-token}
+      OUTBOUND_HTTP_ENABLED: "true"
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      S3_BUCKET: xmaster-center
+      SEARXNG_URL: http://searxng:8080
+    ports:
+      - "127.0.0.1:8010:8000"
+    volumes:
+      - print_ingest_data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  searxng:
+    image: searxng/searxng:latest
+    container_name: xmaster-center-searxng
+    restart: unless-stopped
+    environment:
+      BASE_URL: http://searxng:8080/
+      INSTANCE_NAME: xMaster Center Search
+    ports:
+      - "127.0.0.1:8081:8080"
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+      - searxng_data:/var/cache/searxng
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8080/"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    container_name: xmaster-center-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - print_ingest_storage:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      "mc alias set local http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD}
+      && mc mb --ignore-existing local/$${S3_BUCKET}"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      S3_BUCKET: ${S3_BUCKET:-xmaster-center}
+
+volumes:
+  xmaster_mysql_data:
+  print_ingest_data:
+  print_ingest_storage:
+  searxng_data:

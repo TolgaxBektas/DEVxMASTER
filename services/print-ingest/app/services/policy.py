@@ -1,0 +1,156 @@
+import ipaddress
+import socket
+import time
+from urllib.parse import urlparse
+from urllib.robotparser import RobotFileParser
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+from app.core.config import settings
+
+class PolicyResult(dict):
+    pass
+
+class DiscoveryBudget:
+    def __init__(self, *, max_requests=None, max_depth=None, max_seconds=None):
+        self.max_requests = settings.max_discovery_requests if max_requests is None else max_requests
+        self.max_depth = settings.max_discovery_depth if max_depth is None else max_depth
+        seconds = settings.max_discovery_seconds if max_seconds is None else max_seconds
+        self.deadline = time.monotonic() + seconds
+        self.requests = 0
+
+    def check(self, depth: int):
+        if depth > self.max_depth:
+            raise RuntimeError("discovery_depth_exceeded")
+        if self.requests >= self.max_requests:
+            raise RuntimeError("discovery_request_budget_exceeded")
+        if time.monotonic() >= self.deadline:
+            raise RuntimeError("discovery_time_budget_exceeded")
+        self.requests += 1
+
+class PinnedAddressAdapter(HTTPAdapter):
+    def __init__(self, hostname: str, address: str):
+        super().__init__(max_retries=Retry(total=0, redirect=0))
+        self.hostname = hostname
+        self.address = address
+
+    def get_connection(self, url, proxies=None):
+        parsed = urlparse(url)
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        pool_kwargs = {}
+        if parsed.scheme == "https":
+            pool_kwargs = {
+                "assert_hostname": self.hostname,
+                "server_hostname": self.hostname,
+            }
+        return self.poolmanager.connection_from_host(
+            self.address,
+            port=port,
+            scheme=parsed.scheme,
+            pool_kwargs=pool_kwargs,
+        )
+
+    def add_headers(self, request, **kwargs):
+        parsed = urlparse(request.url)
+        request.headers["Host"] = parsed.netloc
+
+def check_url_policy(url: str) -> PolicyResult:
+    if not settings.outbound_http_enabled:
+        return PolicyResult(status='BLOCKED', reason='outbound_http_disabled')
+    p = urlparse(url)
+    if p.scheme not in {'http','https'} or not p.hostname:
+        return PolicyResult(status='BLOCKED', reason='invalid_url')
+    addresses = _resolve_public_addresses(p.hostname)
+    if not addresses:
+        return PolicyResult(status='BLOCKED', reason='local_or_metadata_address')
+    robots_url = f'{p.scheme}://{p.netloc}/robots.txt'
+    try:
+        r = request_checked(
+            robots_url,
+            policy=PolicyResult(
+                status='APPROVED',
+                reason='policy_ok',
+                hostname=p.hostname,
+                address=addresses[0],
+            ),
+            timeout=min(settings.request_timeout_seconds, 10),
+            headers={'User-Agent': settings.crawl_user_agent},
+            allow_redirects=False,
+        )
+        if r.ok:
+            rp = RobotFileParser()
+            rp.parse(r.text.splitlines())
+            if not rp.can_fetch(settings.crawl_user_agent, url):
+                return PolicyResult(status='BLOCKED', reason='robots_disallow')
+    except requests.RequestException:
+        pass
+    return PolicyResult(
+        status='APPROVED',
+        reason='policy_ok',
+        hostname=p.hostname,
+        address=addresses[0],
+        addresses=addresses,
+    )
+
+def _resolve_public_addresses(hostname: str) -> list[str]:
+    try:
+        addresses = [ipaddress.ip_address(hostname)]
+    except ValueError:
+        try:
+            resolved = [
+                ipaddress.ip_address(item[4][0])
+                for item in socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM)
+            ]
+        except socket.gaierror:
+            return []
+        addresses = resolved
+    public = [
+        str(address)
+        for address in addresses
+        if not (
+            address.is_private
+            or address.is_loopback
+            or address.is_link_local
+            or address.is_reserved
+        )
+    ]
+    return list(dict.fromkeys(public))
+
+def request_checked(url: str, *, policy: PolicyResult | None = None, budget: DiscoveryBudget | None = None, depth: int = 0, **kwargs):
+    if budget:
+        budget.check(depth)
+    checked = policy or check_url_policy(url)
+    if checked["status"] != "APPROVED":
+        raise RuntimeError(f"policy_blocked:{checked['reason']}")
+    parsed = urlparse(url)
+    session = requests.Session()
+    session.trust_env = False
+    session.mount(parsed.scheme + "://", PinnedAddressAdapter(
+        str(checked["hostname"]),
+        str(checked["address"]),
+    ))
+    headers = dict(kwargs.pop("headers", {}) or {})
+    headers.setdefault("User-Agent", settings.crawl_user_agent)
+    response = session.request("GET", url, headers=headers, **kwargs)
+    response._xmaster_session = session
+    return response
+
+def close_checked_response(response):
+    close = getattr(response, "close", None)
+    if close is not None:
+        close()
+    session = getattr(response, "_xmaster_session", None)
+    if session is not None:
+        session.close()
+
+def read_limited_response(response, max_bytes: int) -> bytes:
+    chunks = []
+    total = 0
+    for chunk in response.iter_content(1024 * 1024):
+        if not chunk:
+            continue
+        total += len(chunk)
+        if total > max_bytes:
+            raise RuntimeError("response_too_large")
+        chunks.append(chunk)
+    return b"".join(chunks)
