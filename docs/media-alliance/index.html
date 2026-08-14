@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Media Alliance — Ihre Partner für Medien &amp; Kommunikation</title>
-<meta name="description" content="Media Alliance verbindet Print, Digital und Daten zu Kampagnen mit messbarer Wirkung. Mediaplanung, Anzeigenmanagement und Markenkommunikation aus einer Hand.">
+<title>MediaAlliance — Werbe- &amp; Marketingagentur</title>
+<meta name="description" content="MediaAlliance ist die Werbe- und Marketingagentur, die Print, Digital und Daten zu Kampagnen mit messbarer Wirkung verbindet — von der Idee bis zur Auswertung.">
 <style>
 :root{
   --paper:#faf7f2;
@@ -24,7 +24,7 @@ body{
   font-family:"Avenir Next",Avenir,"Segoe UI",Frutiger,ui-sans-serif,system-ui,sans-serif;
   font-size:17px;line-height:1.65;
 }
-h1,h2,h3{font-family:Georgia,"Times New Roman",serif;letter-spacing:-.015em;line-height:1.12;margin:0}
+h1,h2,h3{font-family:inherit;font-weight:800;letter-spacing:-.03em;line-height:1.08;margin:0}
 a{color:inherit}
 .wrap{max-width:1120px;margin:0 auto;padding:0 clamp(1rem,4vw,2.5rem)}
 
@@ -35,13 +35,14 @@ header{
   border-bottom:1px solid var(--line);
 }
 .nav{display:flex;align-items:center;justify-content:space-between;height:72px}
-.brand{display:flex;align-items:center;gap:.65rem;text-decoration:none;font-weight:700;font-size:1.15rem}
-.brand .mark{
-  width:36px;height:36px;border-radius:9px;display:grid;place-items:center;
-  background:var(--ink);color:var(--paper);font-family:Georgia,serif;font-size:1.05rem;
+.brand{display:flex;flex-direction:column;text-decoration:none;line-height:1}
+.brand .word{font-weight:800;letter-spacing:-.035em;white-space:nowrap}
+.brand .word .w1{font-size:1.55rem;color:var(--ink)}
+.brand .word .w2{font-size:1.05rem;color:var(--accent)}
+.brand .tld{
+  display:block;font-size:.6rem;transform:scale(.28);transform-origin:left top;
+  color:var(--muted);opacity:.55;letter-spacing:.08em;margin-top:1px;height:.35rem;
 }
-.brand .mark span{transform:translateY(-1px)}
-.brand em{font-style:normal;color:var(--accent)}
 nav.links{display:flex;gap:1.6rem;font-size:.95rem}
 nav.links a{text-decoration:none;color:var(--muted);font-weight:500}
 nav.links a:hover{color:var(--ink)}
@@ -60,8 +61,8 @@ nav.links a:hover{color:var(--ink)}
   color:var(--accent);background:#fbe9e2;border:1px solid #f3cdbf;
   padding:.35rem .8rem;border-radius:999px;margin-bottom:1.4rem;
 }
-.hero h1{font-size:clamp(2.4rem,6vw,4.3rem);max-width:17ch}
-.hero h1 em{font-style:italic;color:var(--accent)}
+.hero h1{font-size:clamp(2.5rem,6.5vw,4.8rem);max-width:16ch;text-transform:uppercase;letter-spacing:-.02em}
+.hero h1 em{font-family:Georgia,"Times New Roman",serif;font-style:italic;font-weight:500;color:var(--accent);text-transform:none;letter-spacing:0}
 .hero p.lead{font-size:clamp(1.05rem,1.8vw,1.3rem);color:var(--muted);max-width:56ch;margin:1.5rem 0 2.3rem}
 .hero .actions{display:flex;gap:1rem;flex-wrap:wrap}
 .ghost{
@@ -82,7 +83,7 @@ nav.links a:hover{color:var(--ink)}
 /* Sections */
 section{padding:clamp(3.5rem,8vw,6rem) 0}
 .sec-head{max-width:62ch;margin-bottom:3rem}
-.sec-head .num{font-family:Georgia,serif;font-style:italic;color:var(--accent);font-size:1.1rem}
+.sec-head .num{font-weight:800;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);font-size:.85rem}
 .sec-head h2{font-size:clamp(1.9rem,4vw,2.9rem);margin:.4rem 0 .9rem}
 .sec-head p{color:var(--muted);margin:0}
 
@@ -121,7 +122,7 @@ blockquote.pull footer{font-family:inherit;font-style:normal;font-size:.85rem;co
   border:1px solid var(--line);border-radius:var(--radius);background:#fff;
   padding:1.6rem 1.5rem;text-align:center;
 }
-.stat b{display:block;font-family:Georgia,serif;font-size:2.4rem;color:var(--accent);line-height:1.1}
+.stat b{display:block;font-weight:800;font-size:2.5rem;color:var(--accent);line-height:1.1;letter-spacing:-.03em}
 .stat span{color:var(--muted);font-size:.92rem}
 
 /* Kontakt */
@@ -162,7 +163,10 @@ footer.site nav a:hover{color:var(--ink)}
 
 <header>
   <div class="wrap nav">
-    <a class="brand" href="#top"><span class="mark"><span>MA</span></span>Media <em>Alliance</em></a>
+    <a class="brand" href="#top">
+      <span class="word"><span class="w1">Media</span><span class="w2">Alliance</span></span>
+      <span class="tld">.net</span>
+    </a>
     <nav class="links">
       <a href="#leistungen">Leistungen</a>
       <a href="#ueber-uns">Über uns</a>
@@ -178,9 +182,9 @@ footer.site nav a:hover{color:var(--ink)}
   <div class="hero">
     <div class="orb"></div>
     <div class="wrap">
-      <span class="kicker">Agentur für Medien &amp; Kommunikation</span>
-      <h1>Wir bringen Ihre Botschaft <em>dorthin, wo sie wirkt.</em></h1>
-      <p class="lead">Media Alliance verbindet Print, Digital und Daten zu Kampagnen mit messbarer Wirkung — von der Mediaplanung über das Anzeigenmanagement bis zur fertigen Publikation.</p>
+      <span class="kicker">Werbe- &amp; Marketingagentur</span>
+      <h1>Kampagnen, die man <em>nicht überblättert.</em></h1>
+      <p class="lead">MediaAlliance verbindet Print, Digital und Daten zu Kampagnen mit messbarer Wirkung — von der ersten Idee über Kreation und Mediabuchung bis zur Auswertung.</p>
       <div class="actions">
         <a class="cta" href="#kontakt">Unverbindlich beraten lassen</a>
         <a class="ghost" href="#leistungen">Leistungen ansehen</a>
@@ -245,7 +249,7 @@ footer.site nav a:hover{color:var(--ink)}
       <div class="sec-head">
         <span class="num">02 — Über uns</span>
         <h2>Eine Allianz. Ein Ansprechpartner. Ihre Kampagne.</h2>
-        <p>Media Alliance ist der Zusammenschluss erfahrener Medienprofis aus Verlag, Mediaberatung und Produktion.</p>
+        <p>MediaAlliance ist der Zusammenschluss erfahrener Kreativer und Medienprofis aus Werbung, Mediaberatung und Produktion.</p>
       </div>
       <div class="cols">
         <div>
@@ -254,7 +258,7 @@ footer.site nav a:hover{color:var(--ink)}
         </div>
         <blockquote class="pull">
           „Wir kaufen nicht einfach Reichweite ein. Wir sorgen dafür, dass jede gebuchte Seite und jeder Klick auf Ihr Ziel einzahlt.“
-          <footer>— Geschäftsführung, Media Alliance</footer>
+          <footer>— Geschäftsführung, MediaAlliance</footer>
         </blockquote>
       </div>
     </div>
@@ -279,11 +283,11 @@ footer.site nav a:hover{color:var(--ink)}
     <div class="wrap">
       <div class="box">
         <div>
-          <span class="num" style="font-family:Georgia,serif;font-style:italic;color:var(--accent)">04 — Kontakt</span>
+          <span class="num" style="font-weight:800;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);font-size:.85rem">04 — Kontakt</span>
           <h2>Lassen Sie uns über Ihre nächste Kampagne sprechen.</h2>
           <p>Schreiben Sie uns kurz, worum es geht — wir melden uns innerhalb eines Werktags mit einer ersten Einschätzung.</p>
           <ul>
-            <li><b>E-Mail</b><span>kontakt@media-alliance.de</span></li>
+            <li><b>E-Mail</b><span>kontakt@mediaalliance.net</span></li>
             <li><b>Telefon</b><span>+49 (0)00 000 000-0</span></li>
             <li><b>Adresse</b><span>Musterstraße 1, 00000 Musterstadt</span></li>
           </ul>
@@ -311,7 +315,7 @@ footer.site nav a:hover{color:var(--ink)}
 
 <footer class="site">
   <div class="wrap">
-    <small>© 2026 Media Alliance. Alle Rechte vorbehalten.</small>
+    <small>© 2026 MediaAlliance.net. Alle Rechte vorbehalten.</small>
     <nav>
       <a href="#leistungen">Leistungen</a>
       <a href="#kontakt">Kontakt</a>
