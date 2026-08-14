@@ -44,6 +44,9 @@ describe("Ingestion-Bestand", () => {
       filename: "magazin.pdf",
       pages: [{ pageNumber: 1, text: "Das Magazin" }],
     })).toMatchObject({ regionState: null, regionSource: null });
+  });
+
+  it("verwirft eine Regionsherkunft ohne echte Übereinstimmung", () => {
     expect(selectRegionSource(
       { place: "Frankfurt", district: null, state: null, confidence: 0.5 },
       [{ source: "filename", value: { place: null, district: null, state: "Bayern", confidence: 0.5 } }],
