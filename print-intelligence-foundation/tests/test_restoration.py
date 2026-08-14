@@ -417,6 +417,45 @@ def test_generative_verifier_checks_anchors_tokens_boundary_and_colors():
         if check["name"] == "approved_boundary"
     )["status"] == "failed"
 
+    duplicate_text = verify_generative_proposal(
+        source,
+        source.copy(),
+        boundary,
+        ["Tel 01234 56789"],
+        "Tel 01234 56789",
+        "Tel 01234 56789 Tel 01234 56789",
+    )
+    assert duplicate_text["status"] == "failed"
+    assert next(
+        check for check in duplicate_text["checks"] if check["name"] == "text_anchors"
+    )["status"] == "failed"
+
+    recolored = source.copy()
+    ImageDraw.Draw(recolored).rectangle((4, 4, 19, 19), fill=(220, 20, 20))
+    color_failure = verify_generative_proposal(
+        source,
+        recolored,
+        boundary,
+        ["Tel 01234 56789"],
+        "Tel 01234 56789",
+        "Tel 01234 56789",
+    )
+    assert color_failure["status"] == "failed"
+    assert next(
+        check for check in color_failure["checks"] if check["name"] == "brand_colors"
+    )["status"] == "failed"
+
+    dimension_failure = verify_generative_proposal(
+        source,
+        source.resize((25, 24)),
+        boundary,
+        ["Tel 01234 56789"],
+        "Tel 01234 56789",
+        "Tel 01234 56789",
+    )
+    assert dimension_failure["status"] == "failed"
+    assert dimension_failure["checks"][0]["name"] == "dimensions"
+
     not_assessed = verify_generative_proposal(
         source, source.copy(), boundary, ["Tel 01234 56789"], "", ""
     )
