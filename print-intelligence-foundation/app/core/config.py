@@ -20,6 +20,16 @@ class Settings(BaseSettings):
     artwork_padding: int = 8
     artwork_trim_cap: int = 4
     restoration_enabled: bool = False
+    image_edit_provider: str = "none"
+    image_edit_recorded_dir: Path = Path("tests/fixtures/image_edit")
+    image_edit_base_url: str = "https://api.openai.com/v1"
+    image_edit_model: str = "gpt-image-1"
+    image_edit_api_key: str | None = None
+    image_edit_timeout: float = 120.0
+    image_edit_max_cost_cents: int = 100
+    image_edit_hard_stop_cents: int = 100
+    image_edit_max_attempts: int = 1
+    image_edit_color_tolerance: float = 0.12
     confidence_threshold: float = 0.7
     vision_consensus_runs: int = 1
     max_download_bytes: int = 50_000_000

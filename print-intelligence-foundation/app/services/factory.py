@@ -1,7 +1,12 @@
 from app.core.config import Settings
 from app.services.pipeline import Pipeline
 from app.services.storage import LocalStorage, S3Storage
-from app.services.vision import OllamaVisionProvider, RecordedVisionProvider
+from app.services.vision import (
+    OllamaVisionProvider,
+    OpenAIImageEditProvider,
+    RecordedImageEditProvider,
+    RecordedVisionProvider,
+)
 from app.services.ocr import TesseractOCRProvider
 from app.services.search import SearXNGSearchProvider
 
@@ -32,6 +37,19 @@ def make_ocr_provider(settings: Settings):
     return TesseractOCRProvider(
         settings.ocr_languages, settings.ocr_confidence_threshold
     )
+
+
+def make_image_edit_provider(settings: Settings):
+    if settings.image_edit_provider == "recorded":
+        return RecordedImageEditProvider(settings.image_edit_recorded_dir)
+    if settings.image_edit_provider == "openai" and settings.image_edit_api_key:
+        return OpenAIImageEditProvider(
+            settings.image_edit_base_url,
+            settings.image_edit_model,
+            settings.image_edit_api_key,
+            settings.image_edit_timeout,
+        )
+    return None
 
 
 def make_search_provider(settings: Settings):
@@ -65,4 +83,9 @@ def make_pipeline(session, settings: Settings):
         settings.ocr_confidence_threshold,
         settings.vision_consensus_runs,
         settings.restoration_enabled,
+        make_image_edit_provider(settings),
+        settings.image_edit_max_cost_cents,
+        settings.image_edit_hard_stop_cents,
+        settings.image_edit_max_attempts,
+        settings.image_edit_color_tolerance,
     )

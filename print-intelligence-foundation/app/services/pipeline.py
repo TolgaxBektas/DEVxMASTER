@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import tempfile
 from time import monotonic
 from pathlib import Path
 from PIL import Image
@@ -22,12 +23,24 @@ from app.services.order_forms import (
 )
 from app.services.ocr import OCRResult
 from app.services.render import render_page, render_pdf
-from app.services.restoration import propose_level_one, verify_proposal
+from app.services.restoration import (
+    approved_artwork_box,
+    communication_lines_for_box,
+    propose_level_one,
+    verify_generative_proposal,
+    verify_proposal,
+)
 from app.services.storage import sha256
 from app.services.text_layer import (
     page_texts_in_boxes,
     page_text_in_box,
     remove_substring_bleed,
+)
+from app.services.vision.image_edit import ImageEditProvider, image_sha256
+from app.services.vision.image_edit_prompt import (
+    IMAGE_EDIT_PROMPT,
+    IMAGE_EDIT_PROMPT_SHA256,
+    IMAGE_EDIT_PROMPT_VERSION,
 )
 
 logger = logging.getLogger(__name__)
@@ -54,6 +67,11 @@ class Pipeline:
         ocr_confidence_threshold=None,
         vision_consensus_runs=1,
         restoration_enabled=False,
+        image_edit_provider: ImageEditProvider | None = None,
+        image_edit_max_cost_cents: int = 100,
+        image_edit_hard_stop_cents: int = 100,
+        image_edit_max_attempts: int = 1,
+        image_edit_color_tolerance: float = 0.12,
     ):
         self.session, self.provider, self.storage = session, provider, storage
         self.render_dpi, self.confidence_threshold = render_dpi, confidence_threshold
@@ -74,6 +92,12 @@ class Pipeline:
         )
         self.vision_consensus_runs = max(1, int(vision_consensus_runs))
         self.restoration_enabled = restoration_enabled
+        self.image_edit_provider = image_edit_provider
+        self.image_edit_max_cost_cents = max(0, int(image_edit_max_cost_cents))
+        self.image_edit_hard_stop_cents = max(0, int(image_edit_hard_stop_cents))
+        self.image_edit_max_attempts = max(1, int(image_edit_max_attempts))
+        self.image_edit_color_tolerance = image_edit_color_tolerance
+        self._restoration_cost_used = 0
         self._form_results: dict[int, FormParseResult] = {}
         self._form_results_source: str | None = None
 
@@ -101,6 +125,7 @@ class Pipeline:
             return self._ingest_locked(pdf, filename, source_url, force, digest)
 
     def _ingest_locked(self, pdf, filename, source_url, force, digest):
+        self._restoration_cost_used = 0
         doc = self.session.scalar(
             select(Document).where(Document.content_sha256 == digest)
         )
@@ -625,6 +650,18 @@ class Pipeline:
                     "Refused: independent restoration verification failed."
                 )
                 result.manifest["edit_status"] = "refused"
+            else:
+                result.manifest["restoration_mode"] = "pixel_shift"
+        if proposal_image is None and self.image_edit_provider is not None:
+            proposal_image, review_reason = self._try_generative_restoration(
+                result,
+                source,
+                page_number,
+                box,
+                artwork_output,
+                padded_box,
+                occurrence,
+            )
         occurrence.restoration_manifest_json = json.dumps(
             result.manifest, ensure_ascii=False
         )
@@ -644,6 +681,147 @@ class Pipeline:
             occurrence.restoration_path = None
         if review_reason:
             self._add_review(occurrence, review_reason)
+
+    def _try_generative_restoration(
+        self,
+        pixel_result,
+        source,
+        page_number,
+        detector_box,
+        artwork_output,
+        padded_box,
+        occurrence,
+    ):
+        manifest = pixel_result.manifest
+        artwork = Image.open(artwork_output).convert("RGB")
+        boundary = approved_artwork_box(
+            detector_box,
+            artwork.size,
+            self.render_dpi,
+            self.artwork_dpi,
+            (padded_box.left, padded_box.top),
+        )
+        if boundary.area <= 0:
+            manifest["generative"] = {
+                "status": "refused",
+                "reason": "approved advertisement boundary is empty",
+            }
+            return None, "restoration refused: approved advertisement boundary is empty"
+        previous_reasons = [pixel_result.review_reason] if pixel_result.review_reason else []
+        fields = json.loads(occurrence.fields_json or "{}").get("fields", {})
+        expected = communication_lines_for_box(
+            source,
+            page_number,
+            detector_box,
+            self.render_dpi,
+            self.artwork_dpi,
+            (padded_box.left, padded_box.top),
+        )
+        expected.extend(str(value) for value in fields.values() if value)
+        original_crop = artwork.crop(
+            (boundary.left, boundary.top, boundary.right, boundary.bottom)
+        )
+        original_ocr_text = ""
+        for attempt in range(self.image_edit_max_attempts):
+            if (
+                self._restoration_cost_used + self.image_edit_max_cost_cents
+                > self.image_edit_hard_stop_cents
+            ):
+                manifest["generative"] = {
+                    "status": "refused",
+                    "attempt": attempt + 1,
+                    "cost": 0,
+                    "document_cost_cents": self._restoration_cost_used,
+                    "reason": "image edit hard stop reached before provider call",
+                }
+                return None, "restoration refused: image edit cost hard stop"
+            self._restoration_cost_used += self.image_edit_max_cost_cents
+            try:
+                edited = self.image_edit_provider.edit(
+                    original_crop, IMAGE_EDIT_PROMPT, previous_reasons
+                )
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                manifest["generative"] = {
+                    "status": "refused",
+                    "attempt": attempt + 1,
+                    "cost": self.image_edit_max_cost_cents,
+                    "document_cost_cents": self._restoration_cost_used,
+                    "reason": f"image edit provider failed: {exc}",
+                }
+                return None, "restoration refused: image edit provider failed"
+            reported = edited.reported_cost
+            charged = max(self.image_edit_max_cost_cents, int(round(reported or 0)))
+            self._restoration_cost_used += max(
+                0, charged - self.image_edit_max_cost_cents
+            )
+            with tempfile.NamedTemporaryFile(suffix=".png") as original_file, tempfile.NamedTemporaryFile(
+                suffix=".png"
+            ) as result_file:
+                original_crop.save(original_file.name, format="PNG", optimize=False)
+                edited.image.save(result_file.name, format="PNG", optimize=False)
+                original_ocr_result = None
+                if self.ocr_provider is not None:
+                    original_ocr_result = self.ocr_provider.extract_fields(
+                        original_file.name
+                    )
+                    result_ocr_result = self.ocr_provider.extract_fields(
+                        result_file.name
+                    )
+                    result_ocr_text = result_ocr_result.text
+                    if original_ocr_result.confidence and max(
+                        original_ocr_result.confidence.values()
+                    ) >= self.ocr_confidence_threshold:
+                        original_ocr_text = (
+                            original_ocr_result.text + "\n" + "\n".join(expected)
+                        )
+                    else:
+                        original_ocr_text = ""
+                else:
+                    result_ocr_text = ""
+            composed = artwork.copy()
+            if edited.image.size == original_crop.size:
+                composed.paste(edited.image.convert("RGB"), (boundary.left, boundary.top))
+            verification = verify_generative_proposal(
+                artwork,
+                composed,
+                boundary,
+                expected,
+                original_ocr_text,
+                result_ocr_text,
+                self.image_edit_color_tolerance,
+                edited.image.size,
+            )
+            manifest["generative"] = {
+                "status": verification["status"],
+                "provider": type(self.image_edit_provider).__name__,
+                "model": edited.model,
+                "prompt_version": IMAGE_EDIT_PROMPT_VERSION,
+                "prompt_sha256": IMAGE_EDIT_PROMPT_SHA256,
+                "input_sha256": image_sha256(original_crop),
+                "output_sha256": image_sha256(edited.image),
+                "attempt": attempt + 1,
+                "cost": charged,
+                "document_cost_cents": self._restoration_cost_used,
+                "verification": verification,
+                "pixel_stage_reason": pixel_result.review_reason,
+                "review_required": True,
+            }
+            manifest["verification"] = verification
+            if verification["status"] == "passed":
+                manifest["restoration_mode"] = "generative"
+                manifest["edit_status"] = "applied"
+                manifest["review_status"] = "pending"
+                return (
+                    composed,
+                    "generative restoration proposal requires human review; "
+                    + (pixel_result.review_reason or "pixel stage refused"),
+                )
+            previous_reasons = [
+                check.get("reason", "")
+                for check in verification.get("checks", [])
+                if check.get("status") != "passed" and check.get("reason")
+            ]
+        return None, "restoration refused: generative verification failed"
 
     def _refuse_restoration(self, occurrence, reason):
         occurrence.restoration_manifest_json = json.dumps(

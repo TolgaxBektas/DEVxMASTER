@@ -10,7 +10,16 @@ from app.db.base import Base
 from app.services.bbox import Box
 from app.models import AdOccurrence, Page, ReviewItem
 from app.services.pipeline import Pipeline
-from app.services.restoration import _is_ink, verify_proposal
+from app.services.restoration import (
+    _is_ink,
+    verify_generative_proposal,
+    verify_proposal,
+)
+from app.services.vision.image_edit import (
+    ImageEditResult,
+    RecordedImageEditProvider,
+    image_sha256,
+)
 from app.services.storage import LocalStorage
 from app.services.vision.recorded import RecordedVisionProvider
 from tests.test_order_forms import _pdf
@@ -339,3 +348,205 @@ def test_existing_occurrence_restoration_recrops_when_artwork_file_is_missing(
         assert json.loads(refreshed[3].restoration_manifest_json)[
             "edit_status"
         ] == "applied"
+
+
+def test_generative_verifier_checks_anchors_tokens_boundary_and_colors():
+    source = Image.new("RGB", (24, 24), (240, 240, 240))
+    draw = ImageDraw.Draw(source)
+    draw.rectangle((4, 4, 19, 19), fill=(20, 20, 20))
+    boundary = Box(2, 2, 22, 22)
+    passed = verify_generative_proposal(
+        source,
+        source.copy(),
+        boundary,
+        ["Tel 01234 56789"],
+        "Tel 01234 56789",
+        "Tel 01234 56789",
+    )
+    assert passed["status"] == "passed"
+    assert {check["name"] for check in passed["checks"]} == {
+        "dimensions",
+        "approved_boundary",
+        "ocr_assessable",
+        "text_anchors",
+        "no_new_text",
+        "brand_colors",
+    }
+
+    missing = verify_generative_proposal(
+        source,
+        source.copy(),
+        boundary,
+        ["Tel 01234 56789"],
+        "Tel 01234 56789",
+        "Tel",
+    )
+    assert missing["status"] == "failed"
+    assert next(
+        check for check in missing["checks"] if check["name"] == "text_anchors"
+    )["status"] == "failed"
+
+    new_text = verify_generative_proposal(
+        source,
+        source.copy(),
+        boundary,
+        ["Tel 01234 56789"],
+        "Tel 01234 56789",
+        "Tel 01234 56789 invented",
+    )
+    assert new_text["status"] == "failed"
+    assert next(
+        check for check in new_text["checks"] if check["name"] == "no_new_text"
+    )["status"] == "failed"
+
+    outside = source.copy()
+    outside.putpixel((0, 0), (1, 2, 3))
+    boundary_failure = verify_generative_proposal(
+        source,
+        outside,
+        boundary,
+        ["Tel 01234 56789"],
+        "Tel 01234 56789",
+        "Tel 01234 56789",
+    )
+    assert boundary_failure["status"] == "failed"
+    assert next(
+        check
+        for check in boundary_failure["checks"]
+        if check["name"] == "approved_boundary"
+    )["status"] == "failed"
+
+    duplicate_text = verify_generative_proposal(
+        source,
+        source.copy(),
+        boundary,
+        ["Tel 01234 56789"],
+        "Tel 01234 56789",
+        "Tel 01234 56789 Tel 01234 56789",
+    )
+    assert duplicate_text["status"] == "failed"
+    assert next(
+        check for check in duplicate_text["checks"] if check["name"] == "text_anchors"
+    )["status"] == "failed"
+
+    recolored = source.copy()
+    ImageDraw.Draw(recolored).rectangle((4, 4, 19, 19), fill=(220, 20, 20))
+    color_failure = verify_generative_proposal(
+        source,
+        recolored,
+        boundary,
+        ["Tel 01234 56789"],
+        "Tel 01234 56789",
+        "Tel 01234 56789",
+    )
+    assert color_failure["status"] == "failed"
+    assert next(
+        check for check in color_failure["checks"] if check["name"] == "brand_colors"
+    )["status"] == "failed"
+
+    dimension_failure = verify_generative_proposal(
+        source,
+        source.resize((25, 24)),
+        boundary,
+        ["Tel 01234 56789"],
+        "Tel 01234 56789",
+        "Tel 01234 56789",
+    )
+    assert dimension_failure["status"] == "failed"
+    assert dimension_failure["checks"][0]["name"] == "dimensions"
+
+    not_assessed = verify_generative_proposal(
+        source, source.copy(), boundary, ["Tel 01234 56789"], "", ""
+    )
+    assert not_assessed["status"] == "not_assessed"
+
+
+def test_recorded_image_edit_provider_is_keyed_by_input_digest(tmp_path):
+    image = Image.new("RGB", (8, 8), (12, 34, 56))
+    result_path = tmp_path / "result.png"
+    image.save(result_path)
+    (tmp_path / f"{image_sha256(image)}.json").write_text(
+        json.dumps(
+            {
+                "image": result_path.name,
+                "model": "recorded-test",
+                "reported_cost": 0.25,
+            }
+        )
+    )
+    provider = RecordedImageEditProvider(tmp_path)
+    result = provider.edit(image, "prompt")
+    assert isinstance(result, ImageEditResult)
+    assert result.model == "recorded-test"
+    assert result.reported_cost == 0.25
+
+
+def test_generative_fallback_composites_crop_and_records_pending_review(
+    tmp_path, monkeypatch
+):
+    class _StubImageEditProvider:
+        def __init__(self):
+            self.calls = 0
+
+        def edit(self, image, prompt, rejection_reasons=None):
+            del prompt, rejection_reasons
+            self.calls += 1
+            return ImageEditResult(image.copy(), "stub-image-model", 250)
+
+        def available(self):
+            return True
+
+    class _StubOCRProvider:
+        def extract_fields(self, crop_path):
+            del crop_path
+            from app.services.ocr import OCRResult
+
+            return OCRResult({"phone": "01234 56789"}, {"phone": 1.0}, "Tel 01234 56789")
+
+    import app.services.pipeline as pipeline_module
+
+    monkeypatch.setattr(
+        pipeline_module,
+        "communication_lines_for_box",
+        lambda *_args: ["Tel 01234 56789"],
+    )
+    provider = _StubImageEditProvider()
+    engine = create_engine(f"sqlite:///{tmp_path / 'generative.db'}")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with factory() as session:
+        pipeline = Pipeline(
+            session,
+            RecordedVisionProvider("tests/fixtures/qwen"),
+            LocalStorage(tmp_path / "storage"),
+            render_dpi=120,
+            local_work_dir=tmp_path / "work",
+            restoration_enabled=True,
+            ocr_provider=_StubOCRProvider(),
+            image_edit_provider=provider,
+            image_edit_max_cost_cents=100,
+            image_edit_hard_stop_cents=100,
+        )
+        document = pipeline.ingest(FIXTURE.read_bytes())
+        ads = session.scalars(
+            select(AdOccurrence)
+            .join(Page)
+            .where(Page.document_id == document.id, Page.page_number == 11)
+        ).all()
+        generative = [
+            (ad, json.loads(ad.restoration_manifest_json))
+            for ad in ads
+            if json.loads(ad.restoration_manifest_json).get("restoration_mode")
+            == "generative"
+        ]
+        assert provider.calls == 1
+        assert generative
+        ad, manifest = generative[0]
+        assert ad.restoration_path
+        assert manifest["generative"]["model"] == "stub-image-model"
+        assert manifest["generative"]["prompt_sha256"]
+        assert manifest["generative"]["cost"] == 250
+        assert manifest["generative"]["document_cost_cents"] == 250
+        assert manifest["verification"]["status"] == "passed"
+        assert manifest["review_status"] == "pending"
+        assert session.scalar(select(ReviewItem).where(ReviewItem.ad_id == ad.id))
