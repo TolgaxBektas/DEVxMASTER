@@ -7,23 +7,23 @@ export type ClassificationValueSource =
 
 export type DocumentClassification = {
   type: string | null;
-  typeSource: ClassificationValueSource;
+  typeSource: ClassificationValueSource | null;
   typeConfidence: number | null;
   publicationName: string | null;
-  publicationNameSource: ClassificationValueSource;
+  publicationNameSource: ClassificationValueSource | null;
   publicationNameConfidence: number | null;
   editionLabel: string | null;
-  editionSource: ClassificationValueSource;
+  editionSource: ClassificationValueSource | null;
   editionConfidence: number | null;
   periodStartYear: number | null;
   periodEndYear: number | null;
   periodIssue: number | null;
-  periodSource: ClassificationValueSource;
+  periodSource: ClassificationValueSource | null;
   periodConfidence: number | null;
   regionPlace: string | null;
   regionDistrict: string | null;
   regionState: string | null;
-  regionSource: ClassificationValueSource;
+  regionSource: ClassificationValueSource | null;
   regionConfidence: number | null;
   derivedAt: Date | null;
   correctedAt: Date | null;
@@ -173,7 +173,19 @@ export function deriveDocumentClassification(input: {
     .filter(Boolean).join("\n");
   const evidence = `${input.filename}\n${metadataText}\n${firstPages}`;
   const filenameTypeRule = TYPE_RULES.find(([, rule]) => rule.test(input.filename));
-  const typeRule = filenameTypeRule ?? TYPE_RULES.find(([, rule]) => rule.test(`${metadataText}\n${firstPages}`));
+  const metadataTypeRule = TYPE_RULES.find(([, rule]) => rule.test(metadataText));
+  const titlePageTypeRule = TYPE_RULES.find(([, rule]) => rule.test(firstPage));
+  const firstPagesTypeRule = TYPE_RULES.find(([, rule]) =>
+    rule.test([...pages.slice(1), ...imprintPages].map((page) => page.text).join("\n")));
+  const typeDecision = filenameTypeRule
+    ? { value: filenameTypeRule[0], confidence: filenameTypeRule[2], source: "filename" as const }
+    : metadataTypeRule
+      ? { value: metadataTypeRule[0], confidence: metadataTypeRule[2], source: "pdf-metadata" as const }
+      : titlePageTypeRule
+        ? { value: titlePageTypeRule[0], confidence: titlePageTypeRule[2], source: "title-page" as const }
+        : firstPagesTypeRule
+          ? { value: firstPagesTypeRule[0], confidence: firstPagesTypeRule[2], source: "first-pages" as const }
+          : null;
   const metadataTitle = usableTitle(input.pdfMetadata?.title ?? "");
   const filenameTitle = /magazin/i.test(input.filename)
     ? usableTitle(input.filename.replace(/\.pdf$/i, "").replace(/[-_]+/g, " "))
@@ -206,22 +218,42 @@ export function deriveDocumentClassification(input: {
   const dateYear = periodEvidence.match(/\b\d{1,2}\.\s*-\s*\d{1,2}\.\s+\p{L}+\s+(20\d{2})\b/u);
   const yearMatch = editionWithYear ? editionWithYear : contextualYear ?? dateYear ?? periodEvidence.match(/\b(20\d{2})\b/);
   const issueMatch = editionMatch && Number(editionMatch[1]) < 1000 ? editionMatch : null;
+  const metadataPeriodEvidence = metadataText;
+  const titlePagePeriodEvidence = firstPage;
+  const firstPagesPeriodEvidence = [...pages.slice(1), ...imprintPages].map((page) => page.text).join("\n");
+  const hasPeriodCandidate = (value: string) =>
+    /\b20\d{2}\b/.test(value)
+    || /\b(?:ausgabe|edition)\s*(?:Nr\.?\s*)?\d/i.test(value)
+    || /\bjahrgang\s*(?:Nr\.?\s*)?20\d{2}\b/i.test(value)
+    || /\b\d{1,2}\.\s*-\s*\d{1,2}\.\s+\p{L}+\s+20\d{2}\b/u.test(value);
+  const periodSource = metadataPeriodEvidence && hasPeriodCandidate(metadataPeriodEvidence)
+    ? "pdf-metadata" as const
+    : titlePagePeriodEvidence && /(?:20\d{2}|ausgabe|edition|jahrgang)/i.test(titlePagePeriodEvidence)
+      ? "title-page" as const
+      : firstPagesPeriodEvidence && /(?:20\d{2}|ausgabe|edition|jahrgang)/i.test(firstPagesPeriodEvidence)
+        ? "first-pages" as const
+        : input.filename.match(/20\d{2}/)
+          ? "filename" as const
+          : null;
+  const editionSource = (editionWithYear || periodMatch || editionMatch)
+    ? periodSource
+    : null;
   const region = deriveRegion(evidence);
   return {
-    type: typeRule?.[0] ?? null,
-    typeConfidence: typeRule?.[2] ?? null,
-    typeSource: filenameTypeRule ? "filename" : metadataText ? "pdf-metadata" : "title-page",
+    type: typeDecision?.value ?? null,
+    typeConfidence: typeDecision?.confidence ?? null,
+    typeSource: typeDecision?.source ?? null,
     publicationName: titleDecision.value,
     publicationNameConfidence: titleDecision.confidence,
     publicationNameSource: titleDecision.source,
     editionLabel: editionWithYear ? `Ausgabe ${editionWithYear[1]}/${editionWithYear[2]}` : periodMatch?.[0] ?? (editionMatch ? `Ausgabe ${editionMatch[1]}` : null),
     editionConfidence: editionWithYear || periodMatch ? 0.86 : editionMatch ? 0.7 : null,
-    editionSource: metadataText ? "pdf-metadata" : "first-pages",
+    editionSource,
     periodStartYear: periodMatch ? Number(periodMatch[1]) : editionWithYear ? Number(editionWithYear[2]) : yearMatch ? Number(yearMatch[1]) : null,
     periodEndYear: periodMatch ? Number(periodMatch[2]) : editionWithYear ? Number(editionWithYear[2]) : yearMatch ? Number(yearMatch[1]) : null,
     periodIssue: editionWithYear ? Number(editionWithYear[1]) : issueMatch ? Number(issueMatch[1]) : null,
     periodConfidence: periodMatch || editionWithYear ? 0.86 : contextualYear || dateYear ? 0.75 : yearMatch ? 0.45 : null,
-    periodSource: metadataText && yearMatch && !firstPages.includes(yearMatch[0]) ? "pdf-metadata" : "first-pages",
+    periodSource: yearMatch ? periodSource : null,
     regionPlace: region.place,
     regionDistrict: region.district,
     regionState: region.state,

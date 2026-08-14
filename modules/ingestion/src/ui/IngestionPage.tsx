@@ -118,6 +118,10 @@ export function IngestionPage({ api }: ModulePageProps) {
     for (const name of ["periodStartYear", "periodEndYear", "periodIssue"]) {
       if (touched.has(name)) {
         const raw = String(data.get(name) ?? "");
+        if (raw && !/^\d+$/.test(raw)) {
+          setMessage(`${name === "periodIssue" ? "Ausgabennummer" : name === "periodStartYear" ? "Startjahr" : "Endjahr"} muss eine Zahl sein.`);
+          return;
+        }
         values[name] = raw ? Number(raw) : null;
       }
     }
@@ -144,7 +148,9 @@ export function IngestionPage({ api }: ModulePageProps) {
   };
 
   const sourceLabel = (source: Classification["typeSource"], confidence: number | null) =>
-    source === "manual"
+    !source
+      ? "Quelle: nicht erkannt"
+      : source === "manual"
       ? "manuell"
       : `Quelle: ${source}${confidence == null ? "" : ` · ${Math.round(confidence * 100)} %`}`;
 

@@ -105,7 +105,9 @@ describe("Ingestion-Bestand", () => {
       pages: [{ pageNumber: 1, text: "Messezeiten und Gottesdienste\nStand: 2019" }],
     });
     expect(result.type).toBeNull();
+    expect(result.typeSource).toBeNull();
     expect(result.periodStartYear).toBeNull();
+    expect(result.periodSource).toBeNull();
     expect(result.periodConfidence).toBeNull();
   });
 
@@ -136,6 +138,20 @@ describe("Ingestion-Bestand", () => {
       ] }],
     });
     expect(typography.publicationName).toBe("18. Kulturbörse für Straßenkunst");
+  });
+
+  it("ordnet Herkunft trotz vorhandener Metadaten dem tatsächlichen Seitentreffer zu", () => {
+    const result = deriveDocumentClassification({
+      filename: "unbekannt.pdf",
+      pdfMetadata: { title: "Dokument", subject: "Allgemeine Veröffentlichung" },
+      pages: [{ pageNumber: 1, text: "Messekatalog Ausgabe 3/2024" }],
+    });
+    expect(result.type).toBe("messekatalog");
+    expect(result.typeSource).toBe("title-page");
+    expect(result.editionLabel).toBe("Ausgabe 3/2024");
+    expect(result.editionSource).toBe("title-page");
+    expect(result.periodStartYear).toBe(2024);
+    expect(result.periodSource).toBe("title-page");
   });
 
   it("verwirft Fließtext als Ortsnamen", () => {
@@ -255,6 +271,8 @@ describe("Ingestion-Bestand", () => {
       .toThrow("Das Endjahr darf nicht vor dem Startjahr liegen.");
     expect(classificationCorrectionSchema.parse({ id: 1, periodStartYear: 2020, periodEndYear: 2021 }))
       .toMatchObject({ periodStartYear: 2020, periodEndYear: 2021 });
+    expect(() => classificationCorrectionSchema.parse({ id: 1, periodStartYear: "20xx" }))
+      .toThrow();
     expect(() => classificationCorrectionSchema.parse({ id: 1, publicationName: "x".repeat(256) }))
       .toThrow("Der Publikationsname darf höchstens 255 Zeichen lang sein.");
   });
