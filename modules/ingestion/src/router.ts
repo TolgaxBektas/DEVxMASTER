@@ -133,6 +133,17 @@ export function createIngestionRouter(
         .mutation(async ({ ctx, input }) => {
           if (!audit) throw new Error("Audit ist nicht konfiguriert");
           const { id, ...rawValue } = input;
+          try {
+            await repository.getDocument(ctx.auth.tenantId, id);
+          } catch (error) {
+            if (String(error).includes("Dokument nicht gefunden")) {
+              throw new TRPCError({
+                code: "NOT_FOUND",
+                message: "Dokument nicht gefunden.",
+              });
+            }
+            throw error;
+          }
           const value = Object.fromEntries(
             Object.entries(rawValue).filter(([, item]) => item !== undefined),
           );

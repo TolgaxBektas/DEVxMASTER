@@ -135,11 +135,22 @@ function deriveRegion(text: string) {
     && (!district || strongestPlace[1] >= 2 || districtMentions <= strongestPlace[1] * 4)
     ? strongestPlace[0]
     : null;
+  const placeConfidence = strongestPlace?.[1] && strongestPlace[1] > 1 ? 0.78 : 0.52;
   return {
     place,
     district,
     state,
-    confidence: state && (district || place) ? 0.9 : state ? 0.96 : district ? 0.72 : place ? (strongestPlace?.[1] && strongestPlace[1] > 1 ? 0.78 : 0.52) : null,
+    confidence: state && district
+      ? 0.9
+      : state && place
+        ? (placeConfidence > 0.7 ? 0.82 : 0.65)
+        : state
+          ? 0.96
+          : district
+            ? 0.72
+            : place
+              ? placeConfidence
+              : null,
   };
 }
 

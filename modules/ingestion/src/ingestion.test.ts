@@ -164,6 +164,24 @@ describe("Ingestion-Bestand", () => {
     expect(result.regionPlace).toBeNull();
   });
 
+  it("stuft die Regionszuversicht nach der Stärke des Ortsbezugs ab", () => {
+    const weak = deriveDocumentClassification({
+      filename: "Gemeindemagazin Bayern.pdf",
+      pages: [{ pageNumber: 1, text: "Gemeinde Gilching. Bayern" }],
+    });
+    const repeated = deriveDocumentClassification({
+      filename: "Gemeindemagazin Bayern.pdf",
+      pages: [{
+        pageNumber: 1,
+        text: "Gemeinde Gilching. Gemeinde Gilching. Bayern",
+      }],
+    });
+    expect(weak.regionPlace).toBe("Gilching");
+    expect(weak.regionConfidence).toBe(0.65);
+    expect(repeated.regionPlace).toBe("Gilching");
+    expect(repeated.regionConfidence).toBe(0.82);
+  });
+
   it("bewahrt manuelle Korrekturen bei einer erneuten Ableitung", async () => {
     const repository = new MemoryIngestionRepository();
     const document = await repository.createUploadedDocument("1", {
@@ -325,6 +343,45 @@ describe("Ingestion-Bestand", () => {
       .createCaller({ auth });
     await expect(caller.documents.correct({ id: document.document.id }))
       .rejects.toThrow("Keine Änderung vorgenommen.");
+    expect(audit.entries).toHaveLength(0);
+  });
+
+  it("behandelt ein Dokument eines fremden Mandanten als nicht vorhanden", async () => {
+    const repository = new MemoryIngestionRepository();
+    const document = await repository.createUploadedDocument("1", {
+      filename: "tenant.pdf",
+      sha256: "b".repeat(64),
+      storageKey: "tenants/1/originals/b/tenant.pdf",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "upload",
+    });
+    await repository.upsertDerivedClassification("1", document.document.id, {
+      type: null, typeSource: "first-pages", typeConfidence: null,
+      publicationName: "Titel", publicationNameSource: "first-pages", publicationNameConfidence: 0.5,
+      editionLabel: null, editionSource: "first-pages", editionConfidence: null,
+      periodStartYear: null, periodEndYear: null, periodIssue: null,
+      periodSource: "first-pages", periodConfidence: null,
+      regionPlace: null, regionDistrict: null, regionState: null,
+      regionSource: "first-pages", regionConfidence: null,
+    });
+    const audit = new MemoryAuditRepository();
+    const caller = createIngestionRouter(repository, async () => undefined, undefined, undefined, audit)
+      .createCaller({
+        auth: {
+          tenantId: "2",
+          user: { id: "user-2", email: null, displayName: "Mandant 2" },
+          permissions: new Set(["ingestion.document.classify"]),
+          provider: "local",
+        },
+      });
+    await expect(caller.documents.correct({
+      id: document.document.id,
+      publicationName: "Fremder Zugriff",
+    })).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: "Dokument nicht gefunden.",
+    });
     expect(audit.entries).toHaveLength(0);
   });
 
