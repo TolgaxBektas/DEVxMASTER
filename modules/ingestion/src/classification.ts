@@ -101,9 +101,13 @@ function usableTitle(value: string): string | null {
 
 function plausibleRegionName(value: string, maximumLength: number): boolean {
   const candidate = clean(value);
+  const words = candidate.split(/\s+/);
+  const firstWord = words[0]?.replace(/-/g, "") ?? "";
+  const lastWord = words.at(-1)?.replace(/-/g, "") ?? "";
   return candidate.length >= 3
     && candidate.length <= maximumLength
-    && candidate.split(/\s+/).every((part) => part.replace(/-/g, "").length >= 3)
+    && firstWord.length >= 3
+    && lastWord.length >= 3
     && /[A-Za-zÄÖÜäöüß]{3}/.test(candidate);
 }
 
@@ -198,9 +202,9 @@ function deriveRegion(text: string) {
   const normalized = clean(text);
   const state = STATES.find((item) => new RegExp(`\\b${item.replace(/-/g, "[- ]")}\\b`, "i").test(normalized)) ?? null;
   const districtMatch =
-    normalized.match(/\bStädteRegion\s+([A-ZÄÖÜ][\wÄÖÜäöüß-]*(?:\s+[A-ZÄÖÜ][\wÄÖÜäöüß-]*){0,3})/)
+    normalized.match(/\bStädteRegion\s+([A-ZÄÖÜ][\wÄÖÜäöüß-]*(?:\s+(?:[A-ZÄÖÜ][\wÄÖÜäöüß-]*|[a-zäöüß]{2,3})){0,3})/)
     ?? normalized.match(/\b([A-ZÄÖÜ][\wÄÖÜäöüß-]*(?:-[A-ZÄÖÜ][\wÄÖÜäöüß-]*)*-Kreis)\b/i)
-    ?? normalized.match(/\b(?:Landkreis|Kreis)\s+([A-ZÄÖÜ][\wÄÖÜäöüß-]*(?:\s+[A-ZÄÖÜ][\wÄÖÜäöüß-]*){0,3})/);
+    ?? normalized.match(/\b(?:Landkreis|Kreis)\s+([A-ZÄÖÜ][\wÄÖÜäöüß-]*(?:\s+(?:[A-ZÄÖÜ][\wÄÖÜäöüß-]*|[a-zäöüß]{2,3})){0,3})/);
   const districtCandidate = districtMatch?.[1] ? clean(districtMatch[1]) : null;
   const districtPrefix = districtMatch?.[0]?.match(/^(StädteRegion|Landkreis|Kreis)\b/i)?.[1] ?? null;
   const district = districtCandidate && plausibleRegionName(districtCandidate, 100)

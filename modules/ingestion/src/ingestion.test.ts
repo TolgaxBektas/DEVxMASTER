@@ -180,6 +180,14 @@ describe("Ingestion-Bestand", () => {
       filename: "amtsblatt.pdf",
       pages: [{ pageNumber: 1, text: "Landkreis A informiert" }],
     }).regionDistrict).toBeNull();
+    expect(deriveDocumentClassification({
+      filename: "stadtmagazin.pdf",
+      pages: [{ pageNumber: 1, text: "Stadt Frankfurt am Main" }],
+    }).regionPlace).toBe("Frankfurt Am Main");
+    expect(deriveDocumentClassification({
+      filename: "amtsblatt.pdf",
+      pages: [{ pageNumber: 1, text: "Landkreis Rothenburg ob der Tauber" }],
+    }).regionDistrict).toBe("Landkreis Rothenburg Ob Der Tauber");
   });
 
   it("gewichtet Ortsbezüge nach Häufigkeit gegenüber einem einzelnen beiläufigen Treffer", () => {
