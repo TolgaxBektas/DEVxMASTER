@@ -29,6 +29,18 @@ function formatValidationMessage(message: string): string | null {
   }
 }
 
+function validationIssues(cause: unknown): Array<{ path: readonly unknown[]; message: string }> {
+  if (cause instanceof ZodError) return cause.issues;
+  if (!cause || typeof cause !== "object" || !Array.isArray((cause as { issues?: unknown }).issues)) return [];
+  return (cause as { issues: unknown[] }).issues.flatMap((issue) => {
+    if (!issue || typeof issue !== "object") return [];
+    const value = issue as { path?: unknown; message?: unknown };
+    return typeof value.message === "string" && Array.isArray(value.path)
+      ? [{ path: value.path, message: value.message }]
+      : [];
+  });
+}
+
 const fieldLabels: Record<string, string> = {
   type: "Art",
   publicationName: "Publikationsname",
@@ -51,8 +63,9 @@ export function formatValidationPath(path: readonly unknown[]): string {
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
   errorFormatter({ shape, error }) {
-    const validationMessage = error.cause instanceof ZodError
-      ? error.cause.issues.map((issue) => {
+    const issues = validationIssues(error.cause);
+    const validationMessage = issues.length
+      ? issues.map((issue) => {
           const path = formatValidationPath(issue.path);
           return path ? `${path}: ${issue.message}` : issue.message;
         }).join(" ")

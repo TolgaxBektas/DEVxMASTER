@@ -163,6 +163,19 @@ describe("RBAC und Modulregister", () => {
       error: new TRPCError({ code: "BAD_REQUEST", message: "invalid" }),
     });
     expect(validation.message).toBe("Startjahr: Das Jahr muss mindestens 1000 sein.");
+    const effectiveYear = formatter({
+      shape: { message: "Das Endjahr darf nicht vor dem Startjahr liegen.", data: {} },
+      error: {
+        code: "BAD_REQUEST",
+        cause: {
+          issues: [{
+            path: ["periodEndYear"],
+            message: "Das Endjahr darf nicht vor dem Startjahr liegen.",
+          }],
+        },
+      },
+    });
+    expect(effectiveYear.message).toBe("Endjahr: Das Endjahr darf nicht vor dem Startjahr liegen.");
   });
 
   it("prüft Rechte und Mandantengrenzen", () => {
