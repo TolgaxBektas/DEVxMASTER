@@ -199,6 +199,7 @@ def test_directory_with_multiple_providers_is_not_an_ad():
             block(100, 120, 900, 180, "Pflegedienst Alpha Straße 1 44801 Bochum Tel. 0234 111111", (10,)),
             block(100, 200, 900, 260, "Pflegedienst Beta Straße 2 44802 Bochum Tel. 0234 222222", (10,)),
             block(100, 280, 900, 340, "Pflegedienst Gamma Straße 3 44803 Bochum Tel. 0234 333333", (10,)),
+            block(100, 360, 900, 420, "Pflegedienst Delta Straße 4 44804 Bochum Tel. 0234 444444", (10,)),
         ], [
             drawing(60, 80, 940, 380),
             logo_drawing(150, 90, 240, 130),
@@ -245,6 +246,60 @@ def test_brand_name_alone_does_not_guess_public_origin():
         layout([
             block(180, 180, 820, 260, "VBW KundenCenter Bochum Telefon 0234 310-310", (18, 28), ("Display", "Bold")),
         ], [drawing(120, 120, 880, 320), logo_drawing(220, 190, 320, 240)]),
+    )
+    assert len(result) == 1
+
+
+def test_shared_domain_and_headline_keep_multi_location_ad():
+    result = heuristic_ad_regions(
+        b"",
+        "",
+        layout([
+            block(100, 80, 900, 150, "SICHER, GEBORGEN UND ZU HAUSE.", (23,), ("Display",)),
+            block(100, 180, 900, 240, "Rosalie-Adler-Seniorenzentrum Dr.-C.-Otto-Straße 168 44879 Bochum Fon 0234 941870 awo-ww.de", (9,)),
+            block(100, 250, 900, 310, "Frieda-Nickel-Seniorenzentrum Luchsweg 33 44892 Bochum Fon 0234 92160 awo-ww.de", (9,)),
+            block(100, 320, 900, 380, "Seniorenzentrum Bochum-Werne Auf der Kiekbast 12 44894 Bochum Fon 0234 2670 awo-ww.de", (9,)),
+            block(100, 390, 900, 450, "Heinrich-König-Seniorenzentrum Wabenweg 14 44795 Bochum Fon 0234 946890 awo-ww.de", (9,)),
+        ], [
+            drawing(60, 60, 940, 500),
+            logo_drawing(180, 90, 300, 140),
+        ]),
+    )
+    assert len(result) == 1
+    assert "provenance-uncertain" in result[0]["evidence"]
+
+
+def test_company_group_marker_keeps_multi_location_ad_with_multiple_domains():
+    result = heuristic_ad_regions(
+        b"",
+        "",
+        layout([
+            block(100, 80, 900, 150, "Beschwingt und aufrecht durch den Tag", (16,), ("Display",)),
+            block(100, 180, 900, 240, "Sanitätshaus Kraft Zentrale Klönnestraße 86 44143 Dortmund Fon 0231 577970 info@san-kraft.de", (12,)),
+            block(100, 250, 900, 310, "Service Zentrum Kraft Westerbleichstr. 58 44147 Dortmund Fon 0231 982032 reha@san-kraft.de", (12,)),
+            block(100, 320, 900, 380, "Orthomed Rehazentrum Strobelallee 58 44139 Dortmund Fon 0231 912330 info@orthomed-rehazentrum.de", (12,)),
+            block(100, 390, 900, 450, "Der starke Unternehmensverbund Tel. 0234 961910", (16,)),
+        ], [
+            drawing(60, 60, 940, 500),
+            logo_drawing(180, 90, 300, 140),
+        ]),
+    )
+    assert len(result) == 1
+
+
+def test_public_terms_in_body_text_do_not_exclude_sender():
+    result = heuristic_ad_regions(
+        b"",
+        "",
+        layout([
+            block(100, 80, 900, 140, "VBW", (20,), ("Display",)),
+            block(100, 180, 900, 280, "Seniorenwohnungen mit günstigen Mieten im Bochumer Stadtgebiet und öffentlich geförderten Wohnungen.", (11,)),
+            block(100, 300, 900, 360, "KundenCenter Nord Lahnstraße 1 44807 Bochum Telefon +49 234 310-310", (9,)),
+            block(100, 380, 900, 440, "KundenCenter Süd Wittener Straße 102 44789 Bochum Telefon +49 234 310-310", (9,)),
+        ], [
+            drawing(60, 60, 940, 500),
+            logo_drawing(180, 90, 300, 140),
+        ]),
     )
     assert len(result) == 1
 

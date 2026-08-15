@@ -1,4 +1,5 @@
 import io, math, re
+from collections import Counter
 import fitz
 from PIL import Image
 import pytesseract
@@ -219,10 +220,21 @@ def _provenance_warnings(text):
 
 
 def _has_strong_public_origin(text):
-    return bool(PUBLIC_ORIGIN_SIGNALS.search(text))
+    return bool(re.search(r'\bgefördert\s+(?:von|durch)\b', text, re.I))
 
 
-def _looks_directory_or_overview(text, blocks, page_dominant=False):
+def _sender_has_strong_public_origin(text, blocks):
+    if _has_strong_public_origin(text):
+        return True
+    prominent = " ".join(
+        block.get("text", "")
+        for block in blocks
+        if max(block.get("font_sizes", [0])) >= 14
+    )
+    return bool(PUBLIC_ORIGIN_SIGNALS.search(prominent))
+
+
+def _looks_directory_or_overview(text, blocks, page_dominant=False, logo=False):
     numbers = re.findall(r'(?<!\w)\d{1,2}(?!\w)', text)
     provider_blocks = sum(
         bool(PHONE_SIGNALS.search(block.get("text", "")))
@@ -236,6 +248,22 @@ def _looks_directory_or_overview(text, blocks, page_dominant=False):
         )
         for block in blocks
     )
+    domains = [
+        domain.casefold().removeprefix("www.")
+        for domain in re.findall(
+            r'(?:https?://)?(?:www\.)?([\w.-]+\.[a-z]{2,})',
+            text,
+            re.I,
+        )
+    ]
+    repeated_domains = {domain for domain, count in Counter(domains).items() if count >= 2}
+    grouped_advertiser = (
+        logo
+        and (
+            len(repeated_domains) == 1
+            or bool(re.search(r'\b(?:unternehmensverbund|verbund)\b', text, re.I))
+        )
+    )
     numbered_overview = (
         len(numbers) >= 8
         and bool(DIRECTORY_SIGNALS.search(text))
@@ -245,7 +273,7 @@ def _looks_directory_or_overview(text, blocks, page_dominant=False):
             or re.search(r'\b(?:karte|stadtplan|legende)\b', text, re.I)
         )
     )
-    provider_list = provider_blocks >= 3
+    provider_list = provider_blocks >= 4 and not grouped_advertiser
     return numbered_overview or provider_list
 
 
@@ -342,8 +370,8 @@ def _candidate_is_ad(
     )
     accepted = (
         standard_evidence
-        and not _has_strong_public_origin(text)
-        and not _looks_directory_or_overview(text, blocks, page_dominant)
+        and not _sender_has_strong_public_origin(text, blocks)
+        and not _looks_directory_or_overview(text, blocks, page_dominant, logo)
         and not _looks_editorial(text, blocks, page_dominant)
     )
     return accepted, advertiser, contact
