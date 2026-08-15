@@ -161,6 +161,15 @@ def _line_boxes(block):
     return [line["bbox"] for line in block.get("lines", [])] or [block["bbox"]]
 
 
+def _is_publisher_marking(text):
+    return str(text).strip().casefold() in {
+        "anzeige",
+        "anzeigen",
+        "werbeanzeige",
+        "werbeanzeigen",
+    }
+
+
 def _contains_complete_lines(box, blocks):
     return all(
         line[0] >= box[0] - 1 and line[1] >= box[1] - 1
@@ -189,6 +198,13 @@ def _advertiser_and_contact(text, blocks):
             ):
                 advertiser = True
                 break
+    if not advertiser and contact:
+        title_words = [
+            word.strip(".,:;·|()[]{}")
+            for word in text.split()
+            if word.strip(".,:;·|()[]{}")[:1].isupper()
+        ]
+        advertiser = len(title_words) >= 2 and len(text.split()) <= 24
     return bool(advertiser), bool(contact)
 
 
@@ -265,24 +281,46 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
         return []
     width, height = layout["page_width"], layout["page_height"]
     blocks = layout["blocks"]
+    marking_blocks = [block for block in blocks if _is_publisher_marking(block["text"])]
+
+    def marked_box(box):
+        for marker in marking_blocks:
+            marker_box = marker["bbox"]
+            if _intersection(box, marker_box) > 0:
+                return True
+            left_gap = box[0] - marker_box[2]
+            if 0 <= left_gap <= 16 and marker_box[1] < box[3] and marker_box[3] > box[1]:
+                return True
+        return False
+
     candidates = []
     material = _material_geometry(layout, width, height)
-    if _material_coverage(material, width, height) >= 0.75:
+    coverage = _material_coverage(material, width, height)
+    dominant_material = any(
+        (box[2] - box[0]) * (box[3] - box[1]) >= width * height * 0.75
+        for box, _kind in material
+    )
+    if coverage >= 0.65 and (dominant_material or (marking_blocks and len(blocks) <= 12)):
         box = _union([item[0] for item in material])
         box = (max(0, box[0]), max(0, box[1]), min(width, box[2]), min(height, box[3]))
         contained = list(blocks)
         candidate_text = " ".join(block["text"] for block in contained)
+        if len(candidate_text.split()) < 10 and len((text or "").split()) > len(candidate_text.split()):
+            candidate_text = text
         advertiser, contact = _advertiser_and_contact(candidate_text, contained)
-        if (
+        marked = bool(marking_blocks)
+        if (marked or (
             advertiser and contact and _has_commercial_identity(candidate_text)
             and (ADVERTISER_SIGNALS.search(candidate_text) or _has_direct_contact(candidate_text))
-            and len(candidate_text.split()) <= 120
-        ):
+            and len(candidate_text.split()) <= 180
+        )) and (marked or advertiser) and (marked or not _looks_editorial(candidate_text, contained, True)):
             candidates.append({
                 "bbox": box,
                 "geometry": "page",
                 "blocks": contained,
                 "page_dominant": True,
+                "marked": marked,
+                "text": candidate_text,
             })
     for box, geometry_kind in material:
         if not _plausible(box, width, height):
@@ -292,37 +330,48 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
         )]
         candidate_text = " ".join(block["text"] for block in contained)
         advertiser, contact = _advertiser_and_contact(candidate_text, contained)
+        marked = marked_box(box)
         page_dominant = geometry_kind == "image" and (
             (box[2] - box[0]) * (box[3] - box[1]) >= width * height * 0.75
         )
-        if (
+        material_area = (box[2] - box[0]) * (box[3] - box[1])
+        marked_only = marked and material_area >= width * height * 0.03
+        if not marked_only and (
             not advertiser or not contact or not _has_commercial_identity(candidate_text)
             or (not ADVERTISER_SIGNALS.search(candidate_text) and not _has_direct_contact(candidate_text))
         ):
             continue
         if not _contains_complete_lines(box, contained):
             continue
-        if _looks_editorial(candidate_text, contained, page_dominant):
+        if not marked_only and _looks_editorial(candidate_text, contained, page_dominant):
             continue
         candidates.append({
             "bbox": box,
             "geometry": geometry_kind,
             "blocks": contained,
             "page_dominant": page_dominant,
+            "marked": marked,
+            "text": candidate_text,
         })
     results = []
     for candidate in candidates:
         box = candidate["bbox"]
         if not _plausible(box, width, height):
             continue
-        text_value = " ".join(block["text"] for block in candidate["blocks"])
+        text_value = candidate["text"]
         advertiser, contact = _advertiser_and_contact(text_value, candidate["blocks"])
-        if (
+        if not candidate["marked"] and (
             not advertiser or not contact or not _has_commercial_identity(text_value)
             or (not ADVERTISER_SIGNALS.search(text_value) and not _has_direct_contact(text_value))
         ):
             continue
-        evidence = ["geometry", "advertiser", "contact"]
+        evidence = ["geometry"]
+        if advertiser:
+            evidence.append("advertiser")
+        if contact:
+            evidence.append("contact")
+        if candidate["marked"]:
+            evidence.append("publisher-marking")
         if candidate["page_dominant"]:
             evidence.append("page-dominant")
         sizes = [size for block in candidate["blocks"] for size in block["font_sizes"] if size > 0]
@@ -345,7 +394,7 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
         duplicate = next((other for other in results if _intersection(box, other["_box"]) / max(1, min(
             (box[2] - box[0]) * (box[3] - box[1]),
             (other["_box"][2] - other["_box"][0]) * (other["_box"][3] - other["_box"][1]),
-        )) > 0.85), None)
+        )) > 0.75), None)
         if duplicate is None:
             normalized["_box"] = box
             results.append(normalized)

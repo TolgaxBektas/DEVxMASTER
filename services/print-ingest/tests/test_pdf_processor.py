@@ -109,6 +109,54 @@ def test_contact_signal_without_material_geometry_is_not_a_candidate():
     assert result == []
 
 
+def test_publisher_marking_is_independent_evidence():
+    result = heuristic_ad_regions(
+        b"",
+        "",
+        layout([
+            block(100, 100, 900, 300, "Erlebe die Oberlausitz www.oberlausitz.com", (18, 28), ("Display", "Bold")),
+            block(40, 40, 55, 50, "Anzeige", (6,)),
+        ], [drawing(60, 60, 940, 940)]),
+    )
+    assert len(result) == 1
+    assert "publisher-marking" in result[0]["evidence"]
+
+
+def test_marked_brand_ad_can_use_web_or_qr_without_direct_contact():
+    result = heuristic_ad_regions(
+        b"",
+        "",
+        layout([
+            block(100, 100, 900, 220, "UTOPIA", (32,), ("Display",)),
+            block(100, 700, 900, 760, "Anzeige", (6,)),
+        ], [drawing(0, 0, 1000, 1000)]),
+    )
+    assert len(result) == 1
+
+
+def test_marked_full_page_ad_is_detected_as_one_candidate():
+    result = heuristic_ad_regions(
+        b"",
+        "",
+        layout([
+            block(10, 10, 40, 20, "Anzeige", (6,)),
+        ], [drawing(0, 0, 1000, 1000)]),
+    )
+    assert len(result) == 1
+    assert result[0]["width"] == 1
+
+
+def test_tour_anzeigen_in_editorial_text_is_not_publisher_marking():
+    result = heuristic_ad_regions(
+        b"",
+        "",
+        layout([
+            block(100, 100, 900, 300, "Tour anzeigen und weitere Informationen", (10,)),
+        ]),
+    )
+    assert result == []
+
+
 def test_editorial_impressum_and_table_are_not_ads():
     editorial = heuristic_ad_regions(
         b"",
