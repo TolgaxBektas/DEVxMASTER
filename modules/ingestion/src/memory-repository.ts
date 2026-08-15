@@ -5,9 +5,13 @@ import type {
   IngestionSource,
   OccurrenceReviewResult,
 } from "./repository.js";
-import { occurrenceFingerprint } from "./repository.js";
 import type { DerivedClassification, DocumentClassification } from "./classification.js";
-import { IngestionSourceNotFoundError, periodIncludesYear, type DocumentListFilters } from "./repository.js";
+import {
+  IngestionSourceNotFoundError,
+  occurrenceFingerprint,
+  periodIncludesYear,
+  type DocumentListFilters,
+} from "./repository.js";
 
 export class MemoryIngestionRepository implements IngestionRepository {
   sources: IngestionSource[] = [];

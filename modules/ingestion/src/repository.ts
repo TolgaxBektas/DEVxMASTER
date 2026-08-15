@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { DerivedClassification, DocumentClassification } from "./classification.js";
 
 export class IngestionSourceNotFoundError extends Error {
@@ -19,8 +20,6 @@ export type IngestionSource = {
   lastFetchedAt: Date | null;
   lastError: string | null;
 };
-
-import { createHash } from "node:crypto";
 
 function normalizeOccurrenceText(value: string): string {
   return value.normalize("NFKC").toLocaleLowerCase("de-DE").trim().replace(/\s+/g, " ");
