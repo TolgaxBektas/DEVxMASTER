@@ -3,7 +3,7 @@ import json
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from pydantic import BaseModel, Field, PositiveInt, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, PositiveInt, ValidationError
 from sqlalchemy import select
 
 from app.api.auth import require_auth
@@ -16,6 +16,8 @@ from app.services.storage import sha256
 
 
 class PrintBatchSource(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     publication: str | None = None
     issue: str | None = None
     page: PositiveInt
@@ -127,6 +129,7 @@ def import_print_batch(
         occurrence = session.scalar(
             select(AdOccurrence).where(AdOccurrence.page_id == page.id)
         )
+    session.flush()
 
     company = session.scalar(
         select(Company).where(

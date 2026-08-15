@@ -46,7 +46,7 @@ def _metadata():
 def _client(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'import.db'}")
     Base.metadata.create_all(engine)
-    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     storage = LocalStorage(tmp_path / "storage")
 
     def session_override():
@@ -148,6 +148,54 @@ def test_print_batch_import_uses_canonical_company_normalization(tmp_path):
             assert len({row[0] for row in companies}) == 1
             company = session.scalar(select(Company))
             assert company.normalized_name == "import test gmbh"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_print_batch_import_reuses_review_by_occurrence_with_autoflush_disabled(
+    tmp_path,
+):
+    client, factory, _ = _client(tmp_path)
+    try:
+        first = _metadata()
+        first["company_name"] = "Import-Test GmbH"
+        second = _metadata()
+        second["company_name"] = "Import Test GmbH"
+        second["source"]["page"] = 5
+
+        first_response = client.post("/imports/print-batch", files=_files(first))
+        second_response = client.post("/imports/print-batch", files=_files(second))
+        repeated_response = client.post("/imports/print-batch", files=_files(second))
+
+        assert first_response.status_code == 200
+        assert second_response.status_code == 200
+        assert repeated_response.status_code == 200
+        assert repeated_response.json()["ad_id"] == second_response.json()["ad_id"]
+        with factory() as session:
+            reviews = session.scalars(select(ReviewItem)).all()
+            assert len(reviews) == 2
+            assert {review.ad_id for review in reviews} == {
+                first_response.json()["ad_id"],
+                second_response.json()["ad_id"],
+            }
+            assert all(review.ad_id is not None for review in reviews)
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_print_batch_import_rejects_unknown_source_metadata(tmp_path):
+    client, factory, _ = _client(tmp_path)
+    try:
+        metadata = _metadata()
+        metadata["source"]["supplement"] = "extra source detail"
+        response = client.post("/imports/print-batch", files=_files(metadata))
+        assert response.status_code == 422
+        with factory() as session:
+            assert session.scalars(select(Document)).all() == []
+            assert session.scalars(select(Page)).all() == []
+            assert session.scalars(select(AdOccurrence)).all() == []
+            assert session.scalars(select(Company)).all() == []
+            assert session.scalars(select(ReviewItem)).all() == []
     finally:
         app.dependency_overrides.clear()
 
