@@ -13,6 +13,7 @@ import {
   ingestionPages,
   IngestionPage,
   OccurrencesPage,
+  ReviewPage,
   SourcesPage,
 } from "@xmaster-center/module-ingestion/ui";
 import { assistantPages, AssistantPage } from "@xmaster-center/module-assistant/ui";
@@ -63,7 +64,9 @@ const pages: Page[] = [
     component:
       path === "/ingestion/occurrences"
         ? OccurrencesPage
-        : path === "/ingestion/sources"
+        : path === "/ingestion/review"
+          ? ReviewPage
+          : path === "/ingestion/sources"
           ? SourcesPage
           : IngestionPage,
   })),

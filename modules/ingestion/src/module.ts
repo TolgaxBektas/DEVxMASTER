@@ -13,9 +13,10 @@ import { createIngestionRouter } from "./router.js";
 import { MemoryIngestionRepository } from "./memory-repository.js";
 import { createDrizzleIngestionRepository } from "./drizzle-repository.js";
 import type { IngestionRepository } from "./repository.js";
-import { registerUploadRoute } from "./rest.js";
+import { registerReviewImageRoutes, registerUploadRoute } from "./rest.js";
 import { persistDocumentBytes } from "./rest.js";
-import { ingestionPages, IngestionPage, OccurrencesPage } from "./ui/index.js";
+import { ingestionPages, IngestionPage, OccurrencesPage, ReviewPage } from "./ui/index.js";
+import type { PifReviewClient } from "./review-client.js";
 
 export type ProcessedPage = {
   pageNumber: number;
@@ -110,6 +111,8 @@ export function createIngestionModule(deps: {
   discoverProposals?: (input: { seedPages: string[]; searchTerms: string[]; maxResults: number }) => Promise<Array<{
     url: string; score: number; metadata: Record<string, unknown>;
   }>>;
+  reviewClient?: PifReviewClient;
+  reviewTenantId?: string;
 }): ModuleDefinition {
   const repository = deps.repository ?? (deps.db
     ? createDrizzleIngestionRepository(deps.db)
@@ -120,10 +123,18 @@ export function createIngestionModule(deps: {
     icon: "file",
     version: "0.1.0",
     schema: ingestionSchema,
-    router: createIngestionRouter(repository, deps.publish, deps.enqueue, deps.discoverProposals),
+    router: createIngestionRouter(
+      repository,
+      deps.publish,
+      deps.enqueue,
+      deps.discoverProposals,
+      deps.reviewClient,
+      deps.reviewTenantId,
+      deps.audit,
+    ),
     ...(deps.db && deps.storage && deps.audit && deps.transaction && deps.enqueue
       ? {
-          rest: (app: Parameters<typeof registerUploadRoute>[0]) =>
+          rest: (app: Parameters<typeof registerUploadRoute>[0]) => {
             registerUploadRoute(app, {
               db: deps.db!,
               repository,
@@ -137,20 +148,35 @@ export function createIngestionModule(deps: {
               publish: deps.publish,
               enqueue: (input) => deps.enqueue!(input),
               maxUploadBytes: deps.maxUploadBytes ?? 25 * 1024 * 1024,
-            }),
+            });
+            if (deps.reviewClient) {
+              registerReviewImageRoutes(app, {
+                reviewClient: deps.reviewClient!,
+                ...(deps.reviewTenantId ? { reviewTenantId: deps.reviewTenantId } : {}),
+              });
+            }
+          },
         }
       : {}),
     nav: [
       { id: "ingestion.sources", label: "Quellen", href: "/ingestion/sources", permission: "ingestion.source.read", order: 5 },
       { id: "ingestion.documents", label: "Dokumente", href: "/ingestion", permission: "ingestion.document.read", order: 10 },
       { id: "ingestion.occurrences", label: "Fundstellen", href: "/ingestion/occurrences", permission: "ingestion.occurrence.read", order: 20 },
+      ...(deps.reviewTenantId
+        ? [{ id: "ingestion.review", label: "Prüfung", href: "/ingestion/review", permission: "ingestion.review.read", order: 15 as const }]
+        : []),
     ],
     pages: ingestionPages.map(([id, title, path, permission]) => ({
       id,
       title,
       path,
       permission,
-      component: path === "/ingestion/occurrences" ? OccurrencesPage : IngestionPage,
+      component:
+        path === "/ingestion/occurrences"
+          ? OccurrencesPage
+          : path === "/ingestion/review"
+            ? ReviewPage
+            : IngestionPage,
     })),
     permissions: [
       { permission: "ingestion.source.read", title: "Quellen lesen" },
@@ -161,6 +187,8 @@ export function createIngestionModule(deps: {
       { permission: "ingestion.document.write", title: "Dokumente aufnehmen" },
       { permission: "ingestion.document.upload", title: "Dokumente hochladen" },
       { permission: "ingestion.occurrence.read", title: "Fundstellen lesen" },
+      { permission: "ingestion.review.read", title: "Prüffälle lesen" },
+      { permission: "ingestion.review.decide", title: "Prüffälle entscheiden" },
     ],
     jobs: [
       {

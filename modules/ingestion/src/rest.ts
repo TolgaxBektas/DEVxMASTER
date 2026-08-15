@@ -11,6 +11,7 @@ import {
   type EventExecutor,
 } from "@xmaster-center/kernel";
 import type { IngestionRepository } from "./repository.js";
+import type { PifReviewClient } from "./review-client.js";
 
 type AuthenticatedRequest = Request & {
   auth?: { tenantId: string; userId: string; displayName: string; permissions: ReadonlySet<string> } | null;
@@ -38,6 +39,47 @@ export type UploadDependencies = {
   enqueue(input: { name: string; tenantId: string; payload: unknown }): Promise<unknown>;
   maxUploadBytes: number;
 };
+
+export function registerReviewImageRoutes(
+  app: Express,
+  deps: { reviewClient: PifReviewClient; reviewTenantId?: string },
+) {
+  app.get("/api/ingestion/reviews/:id/:kind", (request, response) => {
+    void (async () => {
+      const auth = (request as AuthenticatedRequest).auth;
+      if (!auth) {
+        response.status(401).json({ code: "UNAUTHORIZED", message: "Anmeldung erforderlich" });
+        return;
+      }
+      if (!auth.permissions.has("ingestion.review.read")) {
+        response.status(403).json({ code: "FORBIDDEN", message: "Berechtigung zum Lesen der Prüfung erforderlich" });
+        return;
+      }
+      if (!deps.reviewTenantId) {
+        response.status(404).json({ code: "NOT_FOUND", message: "Die Prüfung ist nicht konfiguriert" });
+        return;
+      }
+      if (auth.tenantId !== deps.reviewTenantId) {
+        response.status(403).json({ code: "FORBIDDEN", message: "Prüffall gehört zu einem anderen Mandanten" });
+        return;
+      }
+      const id = Number(request.params.id);
+      const kind = request.params.kind;
+      if (!Number.isInteger(id) || id <= 0 || (kind !== "original" && kind !== "restored")) {
+        response.status(404).json({ code: "NOT_FOUND", message: "Bild nicht gefunden" });
+        return;
+      }
+      try {
+        const bytes = await deps.reviewClient.image(id, kind);
+        response.type("png").send(bytes);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Bild konnte nicht geladen werden";
+        response.status(message === "Prüffall wurde nicht gefunden" ? 404 : 502)
+          .json({ code: "PIF_UNAVAILABLE", message });
+      }
+    })();
+  });
+}
 
 export async function persistDocumentBytes(
   deps: UploadDependencies,

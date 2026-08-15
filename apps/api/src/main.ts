@@ -18,7 +18,7 @@ import { LeaseQueue, DrizzleQueueRepository } from "@xmaster-center/jobs";
 import { createCrmModule } from "@xmaster-center/module-crm";
 import { createSystemModule } from "@xmaster-center/module-system";
 import { createBillingModule } from "@xmaster-center/module-billing";
-import { createIngestionModule } from "@xmaster-center/module-ingestion";
+import { createIngestionModule, createPifReviewClient } from "@xmaster-center/module-ingestion";
 import { createDrizzleIngestionRepository } from "@xmaster-center/module-ingestion";
 import { createAssistantModule } from "@xmaster-center/module-assistant";
 import { appendAudit } from "@xmaster-center/kernel";
@@ -76,6 +76,17 @@ const ingestion = createIngestionModule({
   audit,
   storage,
   maxUploadBytes: env.INGESTION_MAX_UPLOAD_BYTES,
+  ...(env.PIF_SERVICE_TOKEN
+    ? {
+        reviewClient: createPifReviewClient({
+          baseUrl: env.PIF_BASE_URL,
+          serviceToken: env.PIF_SERVICE_TOKEN,
+        }),
+      }
+    : {}),
+  ...(env.PIF_REVIEW_TENANT_ID
+    ? { reviewTenantId: env.PIF_REVIEW_TENANT_ID }
+    : {}),
   transaction: (callback) => db.transaction(callback),
   repositoryForTransaction: (transactionDb) => createDrizzleIngestionRepository(transactionDb),
   enqueue: (input) => queue.enqueue({
