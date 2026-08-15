@@ -24,9 +24,7 @@ PUBLIC_ORIGIN_SIGNALS = re.compile(
     re.I,
 )
 DIRECTORY_SIGNALS = re.compile(
-    r'\b(?:übersicht|verzeichnis|legende|stadtplan|karte|karte\s+der|'
-    r'fachbereich|einrichtungen|stationäre\s+pflegeeinrichtungen|'
-    r'offene\s+seniorenarbeit|ambulante\s+pflege)\b',
+    r'\b(?:übersicht|verzeichnis|legende|stadtplan|karte|karte\s+der)\b',
     re.I,
 )
 MAX_ADS_PER_PAGE = 24
@@ -235,7 +233,14 @@ def _sender_has_strong_public_origin(text, blocks):
 
 
 def _looks_directory_or_overview(text, blocks, page_dominant=False, logo=False):
-    numbers = re.findall(r'(?<!\w)\d{1,2}(?!\w)', text)
+    marker_blocks = []
+    for block in blocks:
+        block_text = " ".join(str(block.get("text", "")).split())
+        if not re.fullmatch(r"\d{1,3}(?:\s+\d{1,3})*", block_text):
+            continue
+        if _has_phone(block_text) or any(len(value) >= 4 for value in re.findall(r"\d+", block_text)):
+            continue
+        marker_blocks.append(block)
     provider_blocks = sum(
         bool(PHONE_SIGNALS.search(block.get("text", "")))
         and bool(
@@ -265,12 +270,10 @@ def _looks_directory_or_overview(text, blocks, page_dominant=False, logo=False):
         )
     )
     numbered_overview = (
-        len(numbers) >= 8
-        and bool(DIRECTORY_SIGNALS.search(text))
+        len(marker_blocks) >= 6
         and (
-            page_dominant
-            or len(blocks) >= 4
-            or re.search(r'\b(?:karte|stadtplan|legende)\b', text, re.I)
+            len(marker_blocks) >= 8
+            or bool(DIRECTORY_SIGNALS.search(text))
         )
     )
     provider_list = provider_blocks >= 4 and not grouped_advertiser

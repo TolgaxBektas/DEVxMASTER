@@ -213,13 +213,44 @@ def test_numbered_map_overview_is_not_an_ad():
         b"",
         "",
         layout([
-            block(100, 100, 900, 180, "Fachbereich Altenhilfe Karte 1 2 3 4 5 6 7 8 9 10 Telefon 0234 91461021", (10,)),
+            block(100, 100, 900, 140, "Fachbereich Altenhilfe Karte Telefon 0234 91461021", (10,)),
+            block(120, 160, 140, 180, "1", (10,)),
+            block(180, 200, 200, 220, "2", (10,)),
+            block(240, 240, 260, 260, "3", (10,)),
+            block(300, 280, 320, 300, "4", (10,)),
+            block(360, 320, 380, 340, "5", (10,)),
+            block(420, 360, 440, 380, "6", (10,)),
+            block(480, 400, 500, 420, "7", (10,)),
+            block(540, 440, 560, 460, "8", (10,)),
         ], [
             drawing(60, 60, 940, 940),
             logo_drawing(200, 300, 300, 380),
         ]),
     )
     assert result == []
+
+
+def test_phone_heavy_ambulante_pflege_ad_is_not_numbered_overview():
+    result = heuristic_ad_regions(
+        b"",
+        "",
+        layout([
+            block(180, 100, 820, 170, "Ambulante Pflege", (22,), ("Display", "Bold")),
+            block(
+                180,
+                220,
+                820,
+                300,
+                "Parkstraße 93 44866 Bochum Tel. 0234 - 54 45 51 54 Fax: 0234 - 54 45 51 55",
+                (10,),
+            ),
+            block(180, 320, 820, 380, "www.pflegebeispiel.de", (10,)),
+        ], [
+            drawing(120, 80, 880, 420),
+            logo_drawing(220, 110, 320, 160),
+        ]),
+    )
+    assert len(result) == 1
 
 
 def test_strong_public_origin_is_excluded():
