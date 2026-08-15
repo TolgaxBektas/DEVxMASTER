@@ -234,7 +234,7 @@ export function ReviewPage({ api }: ModulePageProps) {
                   <div className="image-unavailable">Bearbeitung nicht verfügbar</div>
                 )}
               </figure>
-              </div>
+            </div>
           </Card>
           <Card>
             <h2>Extrahierte Daten</h2>
@@ -243,12 +243,12 @@ export function ReviewPage({ api }: ModulePageProps) {
               evidence={review.company.evidence}
             />
             <dl className="detail-list">
-              <dt>Seite</dt><dd>{review.page ?? "—"}</dd>
-              <dt>Bounding-Box</dt><dd>{Array.isArray(review.bbox) ? review.bbox.join(" × ") : displayValue(review.bbox)}</dd>
-              <dt>Review-Status</dt><dd>{review.restoration.review_status ?? "—"}</dd>
-              <dt>Geometrie</dt><dd>{review.restoration.geometry_quality_status ?? "—"}</dd>
-              <dt>Modell</dt><dd>{review.restoration.model_name ?? "—"}</dd>
-              <dt>Plan-Digest</dt><dd>{review.restoration.plan_digest ?? "—"}</dd>
+              <div><dt>Seite</dt><dd>{review.page ?? "—"}</dd></div>
+              <div><dt>Bounding-Box</dt><dd>{Array.isArray(review.bbox) ? review.bbox.join(" × ") : displayValue(review.bbox)}</dd></div>
+              <div><dt>Review-Status</dt><dd>{review.restoration.review_status ?? "—"}</dd></div>
+              <div><dt>Geometrie</dt><dd>{review.restoration.geometry_quality_status ?? "—"}</dd></div>
+              <div><dt>Modell</dt><dd>{review.restoration.model_name ?? "—"}</dd></div>
+              <div><dt>Plan-Digest</dt><dd>{review.restoration.plan_digest ?? "—"}</dd></div>
             </dl>
             <label htmlFor="review-note">Notiz</label>
             <Input id="review-note" value={note} onChange={(event) => setNote(event.target.value)} placeholder="Optionale Notiz" />
