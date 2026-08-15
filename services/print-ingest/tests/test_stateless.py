@@ -27,6 +27,12 @@ def test_process_returns_pages_without_document_rows(monkeypatch):
     monkeypatch.setattr(stateless, "storage", storage)
     monkeypatch.setattr(
         stateless,
+        "heuristic_ad_regions",
+        lambda *_args: [{"x": 0.1, "y": 0.1, "width": 0.8, "height": 0.8, "confidence": 0.8, "evidence": ["phone"]}],
+    )
+    monkeypatch.setattr(stateless, "render_ad_crop", lambda *_args: b"crop-png")
+    monkeypatch.setattr(
+        stateless,
         "render_and_extract",
         lambda _data: [
             {
