@@ -5,18 +5,14 @@ import pytesseract
 
 AD_SIGNALS = re.compile(r'(www\.|https?://|@|telefon|tel\.?|fax|€|eur|angebot|rabatt|aktion|gmbh|kg\b|e\.v\.|\.de\b)', re.I)
 CONTACT_SIGNALS = re.compile(r'(?:\+?\d[\d\s()./-]{6,}\d|www\.|https?://|[\w.+-]+@[\w.-]+\.[a-z]{2,}|telefon|tel\.?|fax)', re.I)
+PHONE_SIGNALS = re.compile(
+    r'(?:\b(?:tel(?:efon)?|fon|ruf)\b\s*[:.]?\s*(?:\+49|0)?[\d\s()./-]{6,}\d'
+    r'|(?<!\d)(?:\+49|0)\s*(?:\(?\d{2,5}\)?[\s./-]*)\d(?:[\d\s./-]{3,}\d)(?!\d))',
+    re.I,
+)
 ADVERTISER_SIGNALS = re.compile(r'\b[\wÄÖÜäöüß&.-]+\s+(?:GmbH|AG|KG|e\.V\.)\b', re.I)
 EDITORIAL_SIGNALS = re.compile(
     r'\b(?:impressum|herausgeber|verantwortlich|redaktion|bekanntmachung|anlage|amtliche\s+mitteilung)\b',
-    re.I,
-)
-COMMERCIAL_SIGNALS = re.compile(
-    r'\b(?:hotel|shop|taxi|ticket|verleih|mieten|übernacht\w*|ferien\w*|restaurant|'
-    r'öffnungszeiten|onlineshop|online-shop|buchung|reserv\w*)\b',
-    re.I,
-)
-DIRECT_CONTACT_SIGNALS = re.compile(
-    r'(?:\+?\d[\d\s()./-]{6,}\d|[\w.+-]+@[\w.-]+\.[a-z]{2,}|\b\d{5}\b|\b(?:straße|str\.|weg|platz)\b)',
     re.I,
 )
 MAX_ADS_PER_PAGE = 24
@@ -192,12 +188,21 @@ def _advertiser_and_contact(text, blocks):
     return bool(advertiser), bool(contact)
 
 
-def _has_commercial_identity(text):
-    return bool(ADVERTISER_SIGNALS.search(text) or COMMERCIAL_SIGNALS.search(text))
+def _has_phone(text):
+    return bool(PHONE_SIGNALS.search(text))
 
 
-def _has_direct_contact(text):
-    return bool(DIRECT_CONTACT_SIGNALS.search(text))
+def _provenance_warnings(text):
+    warnings = []
+    if re.search(
+        r'\b(?:stadt|gemeinde|landkreis|kreisverwaltung|tourismus|tourist(?:ik)?|'
+        r'bürgermeister|gemeinnützig\w*|gGmbH|e\.V\.|verein|stiftung|'
+        r'rotes\s+kreuz|caritas|diakonie|awo)\b',
+        text,
+        re.I,
+    ):
+        warnings.append("provenance-uncertain")
+    return warnings
 
 
 def _looks_editorial(text, blocks, page_dominant=False):
@@ -227,6 +232,28 @@ def _material_geometry(layout, width, height):
         if area >= page_area * 0.02:
             items.append((box, "image"))
     return items
+
+
+def _has_logo_evidence(layout, box):
+    area = max(1, (box[2] - box[0]) * (box[3] - box[1]))
+    for image in layout.get("images", []):
+        image_box = image["bbox"]
+        overlap = _intersection(box, image_box)
+        image_area = max(1, (image_box[2] - image_box[0]) * (image_box[3] - image_box[1]))
+        if overlap / image_area >= 0.8 and 0.005 <= image_area / area < 0.85:
+            return True
+    for drawing in layout.get("drawings", []):
+        drawing_box = drawing["bbox"]
+        if all(abs(drawing_box[index] - box[index]) <= 1 for index in range(4)):
+            continue
+        overlap = _intersection(box, drawing_box)
+        drawing_area = max(
+            1,
+            (drawing_box[2] - drawing_box[0]) * (drawing_box[3] - drawing_box[1]),
+        )
+        if overlap / drawing_area >= 0.8 and 0.002 <= drawing_area / area < 0.85:
+            return True
+    return False
 
 
 def _material_coverage(items, width, height):
@@ -260,25 +287,18 @@ def _candidate_is_ad(
     blocks,
     marked,
     page_dominant,
-    page_area,
-    material_area=None,
     max_words=None,
+    logo=False,
 ):
     advertiser, contact = _advertiser_and_contact(text, blocks)
-    marked_only = marked and (
-        material_area is None or material_area >= page_area * 0.03
-    )
     standard_evidence = (
-        advertiser
-        and contact
-        and _has_commercial_identity(text)
-        and (ADVERTISER_SIGNALS.search(text) or _has_direct_contact(text))
+        logo
+        and _has_phone(text)
         and (max_words is None or len(text.split()) <= max_words)
     )
     accepted = (
-        (marked_only or standard_evidence)
-        and (marked or advertiser)
-        and (marked or not _looks_editorial(text, blocks, page_dominant))
+        standard_evidence
+        and not _looks_editorial(text, blocks, page_dominant)
     )
     return accepted, advertiser, contact
 
@@ -348,8 +368,8 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
             contained,
             marked,
             True,
-            width * height,
             max_words=180,
+            logo=_has_logo_evidence(layout, box),
         )
         if accepted:
             if marked:
@@ -380,8 +400,7 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
             contained,
             marked,
             page_dominant,
-            width * height,
-            material_area=material_area,
+            logo=_has_logo_evidence(layout, box),
         )
         if not accepted:
             continue
@@ -408,8 +427,7 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
             candidate["blocks"],
             candidate["marked"],
             candidate["page_dominant"],
-            width * height,
-            material_area=(box[2] - box[0]) * (box[3] - box[1]),
+            logo=_has_logo_evidence(layout, box),
         )
         if not accepted:
             continue
@@ -418,6 +436,8 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
             evidence.append("advertiser")
         if contact:
             evidence.append("contact")
+        if _has_logo_evidence(layout, box):
+            evidence.append("logo")
         if candidate["marked"]:
             evidence.append("publisher-marking")
         if candidate["page_dominant"]:
@@ -429,6 +449,7 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
         whitespace = box[0] > 5 and box[1] > 5 and box[2] < width - 5 and box[3] < height - 5
         if whitespace:
             evidence.append("whitespace")
+        evidence.extend(_provenance_warnings(text_value))
         confidence = min(0.98, 0.45 + len(evidence) * 0.1)
         normalized = {
             "x": box[0] / width,
