@@ -394,7 +394,6 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
         page_dominant = geometry_kind == "image" and (
             (box[2] - box[0]) * (box[3] - box[1]) >= width * height * 0.75
         )
-        material_area = (box[2] - box[0]) * (box[3] - box[1])
         accepted, _advertiser, _contact = _candidate_is_ad(
             candidate_text,
             contained,
