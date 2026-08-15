@@ -3,6 +3,7 @@ import type {
   IngestionOccurrence,
   IngestionRepository,
   IngestionSource,
+  OccurrenceReviewResult,
 } from "./repository.js";
 import type { DerivedClassification, DocumentClassification } from "./classification.js";
 import { IngestionSourceNotFoundError, periodIncludesYear, type DocumentListFilters } from "./repository.js";
@@ -122,6 +123,21 @@ export class MemoryIngestionRepository implements IngestionRepository {
     const documents = new Set((await this.listDocuments(tenantId)).map((document) => document.id));
     return this.occurrences.filter((occurrence) => documents.has(occurrence.documentId));
   }
+  async getOccurrence(tenantId: string, occurrenceId: number) {
+    const occurrence = this.occurrences.find((item) =>
+      item.id === occurrenceId
+      && this.documents.some((document) =>
+        document.id === item.documentId && document.tenantId === tenantId,
+      ));
+    if (!occurrence) throw new Error("Fundstelle nicht gefunden");
+    return occurrence;
+  }
+  async reviewOccurrence(tenantId: string, occurrenceId: number, status: "approved" | "rejected"): Promise<OccurrenceReviewResult> {
+    const occurrence = await this.getOccurrence(tenantId, occurrenceId);
+    if (occurrence.status === status) return { occurrence, changed: false };
+    occurrence.status = status;
+    return { occurrence, changed: true };
+  }
   async createUploadedDocument(tenantId: string, input: {
     filename: string;
     sourceId?: number | null;
@@ -174,20 +190,32 @@ export class MemoryIngestionRepository implements IngestionRepository {
       bbox: Record<string, number>;
       imageKey: string;
       confidence: number;
+      evidence: string[];
       company: string;
       preview: string;
     }>;
   }>) {
     const document = await this.getDocument(tenantId, documentId);
+    const previous = this.occurrences.filter((item) => item.documentId === document.id);
     this.occurrences = this.occurrences.filter((item) => item.documentId !== document.id);
-    const created = processedPages.flatMap((page) => page.occurrences.map((item) => ({
+    const created = processedPages.flatMap((page) => page.occurrences.map((item) => {
+      const fingerprint = `${page.pageNumber}:${item.bbox.x}:${item.bbox.y}:${item.bbox.width}:${item.bbox.height}:${item.company}:${item.preview}`;
+      const old = previous.find((candidate) =>
+        `${candidate.pageNumber ?? ""}:${candidate.bbox?.x}:${candidate.bbox?.y}:${candidate.bbox?.width}:${candidate.bbox?.height}:${candidate.company}:${candidate.preview}` === fingerprint,
+      );
+      return {
       id: ++this.occurrenceId,
       documentId: document.id,
       pageNumber: page.pageNumber,
       company: item.company,
       preview: item.preview,
-      status: "detected",
-    })));
+      status: old?.status ?? "detected",
+      bbox: item.bbox,
+      imageKey: item.imageKey,
+      confidence: item.confidence,
+      evidence: item.evidence ?? [],
+    };
+    }));
     this.occurrences.push(...created);
     document.state = "processed";
     document.error = null;

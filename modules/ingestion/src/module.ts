@@ -187,6 +187,7 @@ export function createIngestionModule(deps: {
       { permission: "ingestion.document.upload", title: "Dokumente hochladen" },
       { permission: "ingestion.document.classify", title: "Dokumente einordnen" },
       { permission: "ingestion.occurrence.read", title: "Fundstellen lesen" },
+      { permission: "ingestion.occurrence.review", title: "Fundstellen entscheiden" },
     ],
     jobs: [
       {

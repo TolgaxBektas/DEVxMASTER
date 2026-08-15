@@ -60,6 +60,11 @@ export type IngestionOccurrence = {
   imageKey?: string | null;
   confidence?: number | null;
   bbox?: Record<string, number> | null;
+  evidence?: string[] | null;
+};
+export type OccurrenceReviewResult = {
+  occurrence: IngestionOccurrence;
+  changed: boolean;
 };
 export type IngestionRepository = {
   listSources(tenantId: string): Promise<IngestionSource[]>;
@@ -85,6 +90,12 @@ export type IngestionRepository = {
     actor: string,
   ): Promise<DocumentClassification>;
   listOccurrences(tenantId: string): Promise<IngestionOccurrence[]>;
+  getOccurrence(tenantId: string, occurrenceId: number): Promise<IngestionOccurrence>;
+  reviewOccurrence(
+    tenantId: string,
+    occurrenceId: number,
+    status: "approved" | "rejected",
+  ): Promise<OccurrenceReviewResult>;
   createUploadedDocument(
     tenantId: string,
     input: {
@@ -112,6 +123,7 @@ export type IngestionRepository = {
         bbox: Record<string, number>;
         imageKey: string;
         confidence: number;
+        evidence?: string[];
         company: string;
         preview: string;
       }>;

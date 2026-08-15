@@ -39,6 +39,11 @@ export type UploadDependencies = {
   maxUploadBytes: number;
 };
 
+export type OccurrenceImageDependencies = {
+  repository: IngestionRepository;
+  storage: Storage;
+};
+
 export async function persistDocumentBytes(
   deps: UploadDependencies,
   input: {
@@ -103,6 +108,64 @@ export function registerUploadRoute(app: Express, deps: UploadDependencies) {
   app.post("/api/ingestion/documents/upload", (request, response) => {
     void handleUpload(request as AuthenticatedRequest, response, deps);
   });
+  registerOccurrenceImageRoute(app, {
+    repository: deps.repository,
+    storage: deps.storage,
+  });
+}
+
+export function registerOccurrenceImageRoute(
+  app: Express,
+  deps: OccurrenceImageDependencies,
+) {
+  app.get("/api/ingestion/occurrences/:id/image", (request, response) => {
+    void handleOccurrenceImage(
+      request as AuthenticatedRequest,
+      response,
+      deps,
+    );
+  });
+}
+
+async function handleOccurrenceImage(
+  request: AuthenticatedRequest,
+  response: Response,
+  deps: OccurrenceImageDependencies,
+) {
+  const auth = request.auth;
+  if (!auth) {
+    response.status(401).json({ code: "UNAUTHORIZED", message: "Anmeldung erforderlich" });
+    return;
+  }
+  if (!auth.permissions.has("ingestion.occurrence.read")) {
+    response.status(403).json({ code: "FORBIDDEN", message: "Berechtigung zum Lesen der Fundstelle erforderlich" });
+    return;
+  }
+  const occurrenceId = Number(request.params.id);
+  if (!Number.isInteger(occurrenceId) || occurrenceId <= 0) {
+    response.status(400).json({ code: "BAD_REQUEST", message: "Ungültige Fundstellenkennung" });
+    return;
+  }
+  try {
+    const occurrence = await deps.repository.getOccurrence(auth.tenantId, occurrenceId);
+    if (!occurrence.imageKey) {
+      response.status(404).json({ code: "NOT_FOUND", message: "Für diese Fundstelle ist kein Ausschnitt vorhanden." });
+      return;
+    }
+    const bytes = await deps.storage.get(occurrence.imageKey);
+    if (!bytes) {
+      response.status(404).json({ code: "NOT_FOUND", message: "Der Ausschnitt ist nicht mehr verfügbar." });
+      return;
+    }
+    response.type("png").send(Buffer.from(bytes));
+  } catch (error) {
+    if (String(error).includes("Fundstelle nicht gefunden")) {
+      response.status(404).json({ code: "NOT_FOUND", message: "Fundstelle nicht gefunden." });
+      return;
+    }
+    console.error("[ingestion] occurrence image failed", error);
+    response.status(500).json({ code: "INTERNAL_ERROR", message: "Ausschnitt konnte nicht geladen werden" });
+  }
 }
 
 async function handleUpload(

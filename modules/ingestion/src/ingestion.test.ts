@@ -684,6 +684,107 @@ describe("Ingestion-Bestand", () => {
     expect(publishedKeys[0]).toBe(publishedKeys[1]);
   });
 
+  it("speichert Evidenz, erhält Entscheidungen bei der erneuten Verarbeitung und auditert keine Wiederholung", async () => {
+    const repository = new MemoryIngestionRepository();
+    const audit = new MemoryAuditRepository();
+    const document = await repository.createUploadedDocument("1", {
+      filename: "review.pdf",
+      sha256: "r".repeat(64),
+      storageKey: "tenants/1/originals/r/review.pdf",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "upload",
+    });
+    await repository.replaceProcessedDocument("1", document.document.id, [{
+      pageNumber: 1,
+      text: "Anzeige",
+      imageKey: "page.png",
+      classification: "MIXED_CONTENT",
+      adProbability: 0.9,
+      occurrences: [{
+        bbox: { x: 0, y: 0, width: 1, height: 1, confidence: 0.9 },
+        imageKey: "ad.png",
+        confidence: 0.9,
+        evidence: ["geometry", "logo", "contact"],
+        company: "Muster",
+        preview: "Muster Telefon",
+      }],
+    }]);
+    const auth: AuthContext = {
+      tenantId: "1",
+      user: { id: "reviewer", email: null, displayName: "Prüfer" },
+      permissions: new Set(["ingestion.occurrence.read", "ingestion.occurrence.review"]),
+      provider: "local",
+    };
+    const caller = createIngestionRouter(repository, async () => undefined, undefined, undefined, audit)
+      .createCaller({ auth });
+    const before = (await caller.occurrences.list())[0];
+    if (!before) throw new Error("Fundstelle fehlt");
+    expect(before.evidence).toEqual(["geometry", "logo", "contact"]);
+    await caller.occurrences.review({ id: before.id, decision: "approved" });
+    await caller.occurrences.review({ id: before.id, decision: "approved" });
+    expect(audit.entries).toHaveLength(1);
+    await repository.replaceProcessedDocument("1", document.document.id, [{
+      pageNumber: 1,
+      text: "Anzeige",
+      imageKey: "page.png",
+      classification: "MIXED_CONTENT",
+      adProbability: 0.9,
+      occurrences: [{
+        bbox: { x: 0, y: 0, width: 1, height: 1, confidence: 0.9 },
+        imageKey: "new-ad.png",
+        confidence: 0.8,
+        evidence: ["geometry"],
+        company: "Muster",
+        preview: "Muster Telefon",
+      }],
+    }]);
+    const after = (await repository.listOccurrences("1"))[0];
+    if (!after) throw new Error("Fundstelle fehlt");
+    expect(after.status).toBe("approved");
+    expect(after.evidence).toEqual(["geometry"]);
+  });
+
+  it("trennt Fundstellenentscheidungen nach Mandant und Berechtigung", async () => {
+    const repository = new MemoryIngestionRepository();
+    const audit = new MemoryAuditRepository();
+    const document = await repository.createUploadedDocument("2", {
+      filename: "tenant-2.pdf",
+      sha256: "t".repeat(64),
+      storageKey: "tenants/2/originals/t/tenant-2.pdf",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "upload",
+    });
+    await repository.replaceProcessedDocument("2", document.document.id, [{
+      pageNumber: 1,
+      text: "Anzeige",
+      imageKey: "page.png",
+      classification: "MIXED_CONTENT",
+      adProbability: 0.9,
+      occurrences: [{
+        bbox: { x: 0, y: 0, width: 1, height: 1, confidence: 0.9 },
+        imageKey: "ad.png",
+        confidence: 0.9,
+        evidence: [],
+        company: "Mandant 2",
+        preview: "Telefon",
+      }],
+    }]);
+    const auth: AuthContext = {
+      tenantId: "1",
+      user: { id: "viewer", email: null, displayName: "Viewer" },
+      permissions: new Set(["ingestion.occurrence.read"]),
+      provider: "local",
+    };
+    const caller = createIngestionRouter(repository, async () => undefined, undefined, undefined, audit)
+      .createCaller({ auth });
+    expect(await caller.occurrences.list()).toHaveLength(0);
+    await expect(caller.occurrences.review({ id: 1, decision: "approved" })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+  });
+
   it("bildet Fundstellen ohne Laufzeit-ID stabil und unterscheidet gleiche Firmen auf einer Seite", () => {
     const first = advertisementEventIdempotencyKey("1", "hash", {
       pageNumber: 4,
