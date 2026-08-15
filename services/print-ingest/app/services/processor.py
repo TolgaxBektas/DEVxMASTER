@@ -15,6 +15,19 @@ EDITORIAL_SIGNALS = re.compile(
     r'\b(?:impressum|herausgeber|verantwortlich|redaktion|bekanntmachung|anlage|amtliche\s+mitteilung)\b',
     re.I,
 )
+PUBLIC_ORIGIN_SIGNALS = re.compile(
+    r'(?:\b(?:stadt|gemeinde|landkreis|kreisverwaltung|kommunal\w*|'
+    r'ministerium|landesregierung)\b|'
+    r'\bgefördert\s+(?:von|durch)\b|'
+    r'\blandes(?:mittel|verband|wappen)\b)',
+    re.I,
+)
+DIRECTORY_SIGNALS = re.compile(
+    r'\b(?:übersicht|verzeichnis|legende|stadtplan|karte|karte\s+der|'
+    r'fachbereich|einrichtungen|stationäre\s+pflegeeinrichtungen|'
+    r'offene\s+seniorenarbeit|ambulante\s+pflege)\b',
+    re.I,
+)
 MAX_ADS_PER_PAGE = 24
 MAX_CROP_PIXELS = 18_000_000
 
@@ -205,6 +218,37 @@ def _provenance_warnings(text):
     return warnings
 
 
+def _has_strong_public_origin(text):
+    return bool(PUBLIC_ORIGIN_SIGNALS.search(text))
+
+
+def _looks_directory_or_overview(text, blocks, page_dominant=False):
+    numbers = re.findall(r'(?<!\w)\d{1,2}(?!\w)', text)
+    provider_blocks = sum(
+        bool(PHONE_SIGNALS.search(block.get("text", "")))
+        and bool(
+            re.search(
+                r'\b\d{5}\s+[A-ZÄÖÜ][\wÄÖÜäöüß.-]+|'
+                r'\b(?:straße|str\.|weg|platz)\b',
+                block.get("text", ""),
+                re.I,
+            )
+        )
+        for block in blocks
+    )
+    numbered_overview = (
+        len(numbers) >= 8
+        and bool(DIRECTORY_SIGNALS.search(text))
+        and (
+            page_dominant
+            or len(blocks) >= 4
+            or re.search(r'\b(?:karte|stadtplan|legende)\b', text, re.I)
+        )
+    )
+    provider_list = provider_blocks >= 3
+    return numbered_overview or provider_list
+
+
 def _looks_editorial(text, blocks, page_dominant=False):
     if EDITORIAL_SIGNALS.search(text):
         return True
@@ -298,6 +342,8 @@ def _candidate_is_ad(
     )
     accepted = (
         standard_evidence
+        and not _has_strong_public_origin(text)
+        and not _looks_directory_or_overview(text, blocks, page_dominant)
         and not _looks_editorial(text, blocks, page_dominant)
     )
     return accepted, advertiser, contact

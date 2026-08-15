@@ -191,6 +191,64 @@ def test_phone_labels_and_provenance_warning_are_preserved():
     assert "provenance-uncertain" in result[0]["evidence"]
 
 
+def test_directory_with_multiple_providers_is_not_an_ad():
+    result = heuristic_ad_regions(
+        b"",
+        "",
+        layout([
+            block(100, 120, 900, 180, "Pflegedienst Alpha Straße 1 44801 Bochum Tel. 0234 111111", (10,)),
+            block(100, 200, 900, 260, "Pflegedienst Beta Straße 2 44802 Bochum Tel. 0234 222222", (10,)),
+            block(100, 280, 900, 340, "Pflegedienst Gamma Straße 3 44803 Bochum Tel. 0234 333333", (10,)),
+        ], [
+            drawing(60, 80, 940, 380),
+            logo_drawing(150, 90, 240, 130),
+        ]),
+    )
+    assert result == []
+
+
+def test_numbered_map_overview_is_not_an_ad():
+    result = heuristic_ad_regions(
+        b"",
+        "",
+        layout([
+            block(100, 100, 900, 180, "Fachbereich Altenhilfe Karte 1 2 3 4 5 6 7 8 9 10 Telefon 0234 91461021", (10,)),
+        ], [
+            drawing(60, 60, 940, 940),
+            logo_drawing(200, 300, 300, 380),
+        ]),
+    )
+    assert result == []
+
+
+def test_strong_public_origin_is_excluded():
+    for text in (
+        "Gefördert von: Kontaktbüro Pflegehilfe Telefon 0234 3253523",
+        "Ministerium für Gesundheit Telefon 0234 3253523",
+        "Stadt Bochum Seniorenberatung Telefon 0234 3253523",
+        "Kommunale Wohnungsgesellschaft Telefon 0234 3253523",
+    ):
+        result = heuristic_ad_regions(
+            b"",
+            "",
+            layout([
+                block(180, 180, 820, 260, text, (18, 28), ("Display", "Bold")),
+            ], [drawing(120, 120, 880, 320), logo_drawing(220, 190, 320, 240)]),
+        )
+        assert result == []
+
+
+def test_brand_name_alone_does_not_guess_public_origin():
+    result = heuristic_ad_regions(
+        b"",
+        "",
+        layout([
+            block(180, 180, 820, 260, "VBW KundenCenter Bochum Telefon 0234 310-310", (18, 28), ("Display", "Bold")),
+        ], [drawing(120, 120, 880, 320), logo_drawing(220, 190, 320, 240)]),
+    )
+    assert len(result) == 1
+
+
 def test_publisher_marking_is_independent_evidence():
     result = heuristic_ad_regions(
         b"",
@@ -311,9 +369,9 @@ def test_full_page_material_with_brand_and_contact_is_one_ad():
         b"",
         "",
         layout([
-            block(100, 100, 900, 180, "Görlitz Information", (24,), ("Display",)),
+            block(100, 100, 900, 180, "Private Information", (24,), ("Display",)),
             block(200, 300, 800, 420, "Souvenirs und Geschenkartikel im Onlineshop", (12,), ("Text",)),
-            block(100, 700, 900, 820, "Görlitz-Information GmbH Telefon +49 3581 4757-0 www.goerlitz.de", (10,), ("Text",)),
+            block(100, 700, 900, 820, "Private Information GmbH Telefon +49 3581 4757-0 www.example.de", (10,), ("Text",)),
         ], [drawing(200, 300, 300, 380)],
         images=[{"bbox": (0, 0, 1000, 1000)}]),
     )
