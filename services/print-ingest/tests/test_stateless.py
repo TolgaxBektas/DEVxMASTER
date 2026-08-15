@@ -27,6 +27,20 @@ def test_process_returns_pages_without_document_rows(monkeypatch):
     monkeypatch.setattr(stateless, "storage", storage)
     monkeypatch.setattr(
         stateless,
+        "heuristic_ad_regions",
+        lambda *_args: [{
+            "x": 0.1,
+            "y": 0.1,
+            "width": 0.8,
+            "height": 0.8,
+            "confidence": 0.8,
+            "evidence": ["phone"],
+            "preview": "Muster GmbH Telefon 01234 567890 www.muster.de",
+        }],
+    )
+    monkeypatch.setattr(stateless, "render_ad_crop", lambda *_args: b"crop-png")
+    monkeypatch.setattr(
+        stateless,
         "render_and_extract",
         lambda _data: [
             {
@@ -47,6 +61,73 @@ def test_process_returns_pages_without_document_rows(monkeypatch):
     assert response.status_code == 200
     assert response.json()["pages"][0]["occurrences"][0]["company"] == "Muster GmbH"
     assert "tenants/1/processed/hash/page-0001.png" in storage.objects
+
+
+def test_process_keeps_distinct_ad_keys_and_region_text(monkeypatch):
+    storage = FakeStorage()
+    monkeypatch.setattr(stateless, "storage", storage)
+    monkeypatch.setattr(
+        stateless,
+        "heuristic_ad_regions",
+        lambda *_args: [
+            {
+                "x": 0.0,
+                "y": 0.0,
+                "width": 0.4,
+                "height": 1.0,
+                "confidence": 0.8,
+                "evidence": ["geometry"],
+                "preview": "Alpha GmbH Telefon 01234 567890",
+            },
+            {
+                "x": 0.6,
+                "y": 0.0,
+                "width": 0.4,
+                "height": 1.0,
+                "confidence": 0.9,
+                "evidence": ["geometry"],
+                "preview": "Beta AG www.beta.example",
+            },
+        ],
+    )
+    monkeypatch.setattr(stateless, "render_ad_crop", lambda *_args: b"crop-png")
+    monkeypatch.setattr(
+        stateless,
+        "render_and_extract",
+        lambda _data: [
+            {
+                "page_number": 1,
+                "text": "Redaktioneller Text ohne Werbetreibenden",
+                "image_bytes": b"png",
+                "classification": "MIXED_CONTENT",
+                "ad_probability": 0.48,
+            }
+        ],
+    )
+    response = TestClient(app).post(
+        "/api/v1/process",
+        headers={"x-service-token": settings.service_token},
+        files={"file": ("document.pdf", b"%PDF-1.7", "application/pdf")},
+        data={"output_prefix": "tenants/1/processed/hash"},
+    )
+
+    assert response.status_code == 200
+    occurrences = response.json()["pages"][0]["occurrences"]
+    assert [item["image_key"] for item in occurrences] == [
+        "tenants/1/processed/hash/ad-0001-01.png",
+        "tenants/1/processed/hash/ad-0001-02.png",
+    ]
+    assert [item["company"] for item in occurrences] == ["Alpha GmbH", "Beta AG"]
+    assert [item["preview"] for item in occurrences] == [
+        "Alpha GmbH Telefon 01234 567890",
+        "Beta AG www.beta.example",
+    ]
+    assert [item["bbox"] for item in occurrences] == [
+        {"x": 0.0, "y": 0.0, "width": 0.4, "height": 1.0, "confidence": 0.8},
+        {"x": 0.6, "y": 0.0, "width": 0.4, "height": 1.0, "confidence": 0.9},
+    ]
+    assert [item["evidence"] for item in occurrences] == [["geometry"], ["geometry"]]
+    assert all(set(item["bbox"]) == {"x", "y", "width", "height", "confidence"} for item in occurrences)
 
 
 def test_process_rejects_non_pdf(monkeypatch):

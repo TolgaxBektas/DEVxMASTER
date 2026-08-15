@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 
 from app.core.config import settings
-from app.services.processor import extract_pdf_metadata, heuristic_ad_regions, render_and_extract
+from app.services.processor import extract_pdf_metadata, heuristic_ad_regions, render_ad_crop, render_and_extract
 from app.services.storage import storage
 from app.services.downloader import download_pdf, DownloadError
 from app.api.routes import require_service_token
@@ -54,16 +54,24 @@ async def process_upload(
         storage.put_bytes(image_key, page["image_bytes"], "image/png")
         text = page["text"]
         candidates = []
-        for region in heuristic_ad_regions(page["image_bytes"], text):
-            ad_key = f"{output_prefix}/ad-{number:04d}.png"
-            storage.put_bytes(ad_key, page["image_bytes"], "image/png")
+        for index, region in enumerate(
+            heuristic_ad_regions(page["image_bytes"], text, page.get("layout")),
+            start=1,
+        ):
+            ad_key = f"{output_prefix}/ad-{number:04d}-{index:02d}.png"
+            storage.put_bytes(ad_key, render_ad_crop(data, number, region), "image/png")
+            ad_text = " ".join(str(region.get("preview", "")).split())
             candidates.append(
                 {
-                    "bbox": region,
+                    "bbox": {
+                        key: region[key]
+                        for key in ("x", "y", "width", "height", "confidence")
+                    },
                     "image_key": ad_key,
                     "confidence": region["confidence"],
-                    "company": _company_from_text(text),
-                    "preview": " ".join(text.split())[:1000],
+                    "evidence": region.get("evidence", []),
+                    "company": _company_from_text(ad_text),
+                    "preview": ad_text[:1000],
                 }
             )
         result.append(
