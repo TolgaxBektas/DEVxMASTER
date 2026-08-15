@@ -5,6 +5,7 @@ import type {
   IngestionSource,
   OccurrenceReviewResult,
 } from "./repository.js";
+import { occurrenceFingerprint } from "./repository.js";
 import type { DerivedClassification, DocumentClassification } from "./classification.js";
 import { IngestionSourceNotFoundError, periodIncludesYear, type DocumentListFilters } from "./repository.js";
 
@@ -199,9 +200,14 @@ export class MemoryIngestionRepository implements IngestionRepository {
     const previous = this.occurrences.filter((item) => item.documentId === document.id);
     this.occurrences = this.occurrences.filter((item) => item.documentId !== document.id);
     const created = processedPages.flatMap((page) => page.occurrences.map((item) => {
-      const fingerprint = `${page.pageNumber}:${item.bbox.x}:${item.bbox.y}:${item.bbox.width}:${item.bbox.height}:${item.company}:${item.preview}`;
+      const fingerprint = occurrenceFingerprint({
+        pageNumber: page.pageNumber,
+        company: item.company,
+        preview: item.preview,
+        bbox: item.bbox,
+      });
       const old = previous.find((candidate) =>
-        `${candidate.pageNumber ?? ""}:${candidate.bbox?.x}:${candidate.bbox?.y}:${candidate.bbox?.width}:${candidate.bbox?.height}:${candidate.company}:${candidate.preview}` === fingerprint,
+        occurrenceFingerprint(candidate) === fingerprint,
       );
       return {
       id: ++this.occurrenceId,

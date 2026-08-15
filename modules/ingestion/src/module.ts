@@ -6,13 +6,12 @@ import {
   type EventExecutor,
   type ModuleDefinition,
 } from "@xmaster-center/kernel";
-import { createHash } from "node:crypto";
 import type { Storage } from "@xmaster-center/integrations";
 import { ingestionSchema } from "./schema.js";
 import { createIngestionRouter } from "./router.js";
 import { MemoryIngestionRepository } from "./memory-repository.js";
 import { createDrizzleIngestionRepository } from "./drizzle-repository.js";
-import type { IngestionRepository } from "./repository.js";
+import { occurrenceFingerprint, type IngestionRepository } from "./repository.js";
 import { registerUploadRoute } from "./rest.js";
 import { persistDocumentBytes } from "./rest.js";
 import { deriveDocumentClassification } from "./classification.js";
@@ -44,35 +43,6 @@ export type ProcessedPage = {
 };
 
 type JobContext = { job: { tenantId: string | null } };
-
-function normalizeOccurrenceText(value: string): string {
-  return value.normalize("NFKC").toLocaleLowerCase("de-DE").trim().replace(/\s+/g, " ");
-}
-
-function occurrenceFingerprint(occurrence: {
-  pageNumber?: number;
-  company: string;
-  preview: string;
-  bbox?: Record<string, number> | null;
-}): string {
-  const bbox = ["x", "y", "width", "height", "confidence"]
-    .map((key) => {
-      const value = occurrence.bbox?.[key];
-      return `${key}=${typeof value === "number" && Number.isFinite(value)
-        ? Math.round(value * 1000) / 1000
-        : ""}`;
-    })
-    .join(",");
-  return createHash("sha256")
-    .update([
-      occurrence.pageNumber ?? "",
-      normalizeOccurrenceText(occurrence.company),
-      normalizeOccurrenceText(occurrence.preview),
-      bbox,
-    ].join("\u001f"))
-    .digest("hex")
-    .slice(0, 24);
-}
 
 export function advertisementEventIdempotencyKey(
   tenantId: string,

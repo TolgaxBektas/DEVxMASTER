@@ -2,7 +2,14 @@ import type { MySql2Database } from "drizzle-orm/mysql2";
 import { and, desc, eq, gte, lte, ne } from "drizzle-orm";
 import { classifications, documents, occurrences, pages, sources, ingestionSchema } from "./schema.js";
 import type { DerivedClassification, DocumentClassification } from "./classification.js";
-import { IngestionSourceNotFoundError, type DocumentListFilters, type IngestionDocument, type IngestionOccurrence, type IngestionRepository } from "./repository.js";
+import {
+  IngestionSourceNotFoundError,
+  occurrenceFingerprint,
+  type DocumentListFilters,
+  type IngestionDocument,
+  type IngestionOccurrence,
+  type IngestionRepository,
+} from "./repository.js";
 
 type IngestionDb = MySql2Database<typeof ingestionSchema>;
 
@@ -335,15 +342,22 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
       ));
       const previousPages = await database.select().from(pages).where(eq(pages.documentId, documentId));
       const pageNumbers = new Map(previousPages.map((page) => [page.id, page.pageNumber]));
-      const previousByIdentity = new Map(previous.map((item) => [
-        JSON.stringify({
-          pageNumber: pageNumbers.get(item.pageId),
-          company: item.company,
-          preview: item.preview,
-          bbox: item.bbox,
-        }),
-        item.status,
-      ]));
+      const previousByIdentity = new Map(previous.map((item) => {
+        const pageNumber = pageNumbers.get(item.pageId);
+        const identity = pageNumber === undefined
+          ? {
+            company: item.company,
+            preview: item.preview,
+            bbox: readBbox(item.bbox),
+          }
+          : {
+            pageNumber,
+            company: item.company,
+            preview: item.preview,
+            bbox: readBbox(item.bbox),
+          };
+        return [occurrenceFingerprint(identity), item.status] as const;
+      }));
       await database.delete(occurrences).where(and(
         eq(occurrences.documentId, documentId),
         eq(occurrences.tenantId, Number(tenantId)),
@@ -367,7 +381,7 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
             pageId,
             company: occurrence.company,
             preview: occurrence.preview,
-            status: previousByIdentity.get(JSON.stringify({
+            status: previousByIdentity.get(occurrenceFingerprint({
               pageNumber: processed.pageNumber,
               company: occurrence.company,
               preview: occurrence.preview,

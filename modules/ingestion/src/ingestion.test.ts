@@ -724,6 +724,15 @@ describe("Ingestion-Bestand", () => {
     await caller.occurrences.review({ id: before.id, decision: "approved" });
     await caller.occurrences.review({ id: before.id, decision: "approved" });
     expect(audit.entries).toHaveLength(1);
+    const stored = repository.occurrences[0];
+    if (!stored) throw new Error("Fundstelle fehlt");
+    stored.bbox = {
+      confidence: 0.9000004,
+      height: 1.0000004,
+      width: 1.0000004,
+      y: 0.0000004,
+      x: 0.0000004,
+    };
     await repository.replaceProcessedDocument("1", document.document.id, [{
       pageNumber: 1,
       text: "Anzeige",
@@ -731,7 +740,7 @@ describe("Ingestion-Bestand", () => {
       classification: "MIXED_CONTENT",
       adProbability: 0.9,
       occurrences: [{
-        bbox: { x: 0, y: 0, width: 1, height: 1, confidence: 0.9 },
+        bbox: { x: 0.0000003, y: 0, width: 1, height: 1, confidence: 0.9 },
         imageKey: "new-ad.png",
         confidence: 0.8,
         evidence: ["geometry"],

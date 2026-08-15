@@ -20,6 +20,37 @@ export type IngestionSource = {
   lastError: string | null;
 };
 
+import { createHash } from "node:crypto";
+
+function normalizeOccurrenceText(value: string): string {
+  return value.normalize("NFKC").toLocaleLowerCase("de-DE").trim().replace(/\s+/g, " ");
+}
+
+export function occurrenceFingerprint(occurrence: {
+  pageNumber?: number;
+  company: string;
+  preview: string;
+  bbox?: Record<string, number> | null;
+}): string {
+  const bbox = ["x", "y", "width", "height", "confidence"]
+    .map((key) => {
+      const value = occurrence.bbox?.[key];
+      return `${key}=${typeof value === "number" && Number.isFinite(value)
+        ? Math.round(value * 1000) / 1000
+        : ""}`;
+    })
+    .join(",");
+  return createHash("sha256")
+    .update([
+      occurrence.pageNumber ?? "",
+      normalizeOccurrenceText(occurrence.company),
+      normalizeOccurrenceText(occurrence.preview),
+      bbox,
+    ].join("\u001f"))
+    .digest("hex")
+    .slice(0, 24);
+}
+
 export type IngestionDocument = {
   id: number;
   tenantId: string;
