@@ -38,7 +38,13 @@ from app.services.text_layer import (
     page_text_in_box,
     remove_substring_bleed,
 )
-from app.services.vision.image_edit import ImageEditProvider, image_sha256
+from app.services.vision.image_edit import (
+    ImageEditProvider,
+    image_sha256,
+    prepare_image_edit_input,
+    restore_image_edit_output,
+    select_image_edit_size,
+)
 from app.services.vision.image_edit_prompt import (
     IMAGE_EDIT_PROMPT,
     IMAGE_EDIT_PROMPT_SHA256,
@@ -723,6 +729,23 @@ class Pipeline:
         original_crop = artwork.crop(
             (boundary.left, boundary.top, boundary.right, boundary.bottom)
         )
+        requested_format, requested_size = select_image_edit_size(original_crop.size)
+        prepared_crop, fitted_region = prepare_image_edit_input(
+            original_crop, requested_size
+        )
+        normalization = {
+            "requested_format": requested_format,
+            "requested_size": list(requested_size),
+            "fitted_region": list(fitted_region),
+            "source_size": list(original_crop.size),
+            "normalized_size": list(original_crop.size),
+            "resampling": "LANCZOS",
+            "output_lower_resolution": (
+                (fitted_region[2] - fitted_region[0])
+                * (fitted_region[3] - fitted_region[1])
+                < original_crop.width * original_crop.height
+            ),
+        }
         original_ocr_text = ""
         for attempt in range(self.image_edit_max_attempts):
             if (
@@ -740,7 +763,10 @@ class Pipeline:
             self._restoration_cost_used += self.image_edit_max_cost_cents
             try:
                 edited = self.image_edit_provider.edit(
-                    original_crop, IMAGE_EDIT_PROMPT, previous_reasons
+                    prepared_crop,
+                    IMAGE_EDIT_PROMPT,
+                    previous_reasons,
+                    requested_format,
                 )
                 reported = edited.reported_cost
                 reported_cents = (
@@ -751,6 +777,8 @@ class Pipeline:
                     else 0
                 )
                 charged = max(self.image_edit_max_cost_cents, reported_cents)
+                provider_image = edited.image
+                provider_size = provider_image.size
             except (
                 OSError,
                 ValueError,
@@ -771,11 +799,46 @@ class Pipeline:
             self._restoration_cost_used += max(
                 0, charged - self.image_edit_max_cost_cents
             )
+            if provider_size != requested_size:
+                verification = {
+                    "status": "failed",
+                    "checks": [
+                        {
+                            "name": "dimensions",
+                            "status": "failed",
+                            "reason": "provider result dimensions differ from requested format",
+                            "requested_size": list(requested_size),
+                            "provided_size": list(provider_size),
+                        }
+                    ],
+                }
+                manifest["generative"] = {
+                    "status": "failed",
+                    "provider": type(self.image_edit_provider).__name__,
+                    "model": edited.model,
+                    "prompt_version": IMAGE_EDIT_PROMPT_VERSION,
+                    "prompt_sha256": IMAGE_EDIT_PROMPT_SHA256,
+                    "input_sha256": image_sha256(original_crop),
+                    "output_sha256": image_sha256(provider_image),
+                    "attempt": attempt + 1,
+                    "cost": charged,
+                    "document_cost_cents": self._restoration_cost_used,
+                    "verification": verification,
+                    "pixel_stage_reason": pixel_result.review_reason,
+                    "review_required": True,
+                    "normalization": normalization,
+                }
+                manifest["verification"] = verification
+                previous_reasons = [verification["checks"][0]["reason"]]
+                continue
+            normalized_image = restore_image_edit_output(
+                provider_image, fitted_region, original_crop.size
+            )
             with tempfile.NamedTemporaryFile(suffix=".png") as original_file, tempfile.NamedTemporaryFile(
                 suffix=".png"
             ) as result_file:
                 original_crop.save(original_file.name, format="PNG", optimize=False)
-                edited.image.save(result_file.name, format="PNG", optimize=False)
+                normalized_image.save(result_file.name, format="PNG", optimize=False)
                 original_ocr_result = None
                 if self.ocr_provider is not None:
                     original_ocr_result = self.ocr_provider.extract_fields(
@@ -796,8 +859,9 @@ class Pipeline:
                 else:
                     result_ocr_text = ""
             composed = artwork.copy()
-            if edited.image.size == original_crop.size:
-                composed.paste(edited.image.convert("RGB"), (boundary.left, boundary.top))
+            composed.paste(
+                normalized_image.convert("RGB"), (boundary.left, boundary.top)
+            )
             verification = verify_generative_proposal(
                 artwork,
                 composed,
@@ -806,7 +870,7 @@ class Pipeline:
                 original_ocr_text,
                 result_ocr_text,
                 self.image_edit_color_tolerance,
-                edited.image.size,
+                normalized_image.size,
             )
             manifest["generative"] = {
                 "status": verification["status"],
@@ -815,13 +879,14 @@ class Pipeline:
                 "prompt_version": IMAGE_EDIT_PROMPT_VERSION,
                 "prompt_sha256": IMAGE_EDIT_PROMPT_SHA256,
                 "input_sha256": image_sha256(original_crop),
-                "output_sha256": image_sha256(edited.image),
+                "output_sha256": image_sha256(normalized_image),
                 "attempt": attempt + 1,
                 "cost": charged,
                 "document_cost_cents": self._restoration_cost_used,
                 "verification": verification,
                 "pixel_stage_reason": pixel_result.review_reason,
                 "review_required": True,
+                "normalization": normalization,
             }
             manifest["verification"] = verification
             if verification["status"] == "passed":
