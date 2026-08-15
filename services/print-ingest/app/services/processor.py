@@ -314,6 +314,8 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
             and (ADVERTISER_SIGNALS.search(candidate_text) or _has_direct_contact(candidate_text))
             and len(candidate_text.split()) <= 180
         )) and (marked or advertiser) and (marked or not _looks_editorial(candidate_text, contained, True)):
+            if marked:
+                box = (0, 0, width, height)
             candidates.append({
                 "bbox": box,
                 "geometry": "page",
@@ -356,6 +358,8 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
     results = []
     for candidate in candidates:
         box = candidate["bbox"]
+        if not _contains_complete_lines(box, blocks):
+            continue
         if not _plausible(box, width, height):
             continue
         text_value = candidate["text"]

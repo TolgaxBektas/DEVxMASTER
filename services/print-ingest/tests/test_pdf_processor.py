@@ -146,6 +146,22 @@ def test_marked_full_page_ad_is_detected_as_one_candidate():
     assert result[0]["width"] == 1
 
 
+def test_marked_image_ad_grows_to_include_header_and_contact_lines():
+    result = heuristic_ad_regions(
+        b"",
+        "",
+        layout([
+            block(80, 20, 920, 60, "BRAUEREIFÜHRUNG", (28,), ("Display",)),
+            block(80, 70, 920, 100, "Tägliche Führungen! Telefon 03581 4650", (12,), ("Arial",)),
+            block(80, 110, 920, 140, "www.landskron.de/besuch", (12,), ("Arial",)),
+            block(10, 10, 30, 20, "Anzeige", (6,)),
+        ], images=[{"bbox": (0, 150, 1000, 1000)}]),
+    )
+    assert len(result) == 1
+    assert result[0]["y"] == 0
+    assert result[0]["height"] == 1
+
+
 def test_tour_anzeigen_in_editorial_text_is_not_publisher_marking():
     result = heuristic_ad_regions(
         b"",
