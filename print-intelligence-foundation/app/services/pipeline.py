@@ -738,7 +738,10 @@ class Pipeline:
             "requested_size": list(requested_size),
             "fitted_region": list(fitted_region),
             "source_size": list(original_crop.size),
-            "normalized_size": list(original_crop.size),
+            "normalized_size": [
+                fitted_region[2] - fitted_region[0],
+                fitted_region[3] - fitted_region[1],
+            ],
             "resampling": "LANCZOS",
             "output_lower_resolution": (
                 (fitted_region[2] - fitted_region[0])

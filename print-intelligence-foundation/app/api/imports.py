@@ -3,18 +3,28 @@ import json
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, PositiveInt, ValidationError
 from sqlalchemy import select
 
 from app.api.auth import require_auth
 from app.api.dependencies import session_dependency, storage_dependency
+from app.core.config import get_settings
 from app.models import AdOccurrence, Company, Document, Page, ReviewItem
+from app.services.dedupe import normalize_name
+from app.services.ingest import UploadTooLargeError, read_limited
 from app.services.storage import sha256
+
+
+class PrintBatchSource(BaseModel):
+    publication: str | None = None
+    issue: str | None = None
+    page: PositiveInt
+    url: str | None = None
 
 
 class PrintBatchMetadata(BaseModel):
     company_name: str = Field(min_length=1)
-    source: dict[str, Any]
+    source: PrintBatchSource
     bbox: list[float] = Field(min_length=4, max_length=4)
     crop_size: list[int] = Field(min_length=2, max_length=2)
     evidence: dict[str, Any]
@@ -35,16 +45,12 @@ router = APIRouter(
 def _stable_key(metadata: PrintBatchMetadata) -> str:
     identity = {
         "company_name": metadata.company_name,
-        "source": metadata.source,
+        "source": metadata.source.model_dump(),
         "bbox": metadata.bbox,
     }
     return hashlib.sha256(
         json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
-
-
-def _normalise_name(value: str) -> str:
-    return " ".join(value.casefold().split())
 
 
 def _manifest(metadata: PrintBatchMetadata) -> dict[str, Any]:
@@ -75,8 +81,12 @@ def import_print_batch(
     except (ValidationError, ValueError) as exc:
         raise HTTPException(422, "invalid print-batch metadata") from exc
 
-    original_bytes = original.file.read()
-    restored_bytes = restored.file.read()
+    max_bytes = get_settings().max_download_bytes
+    try:
+        original_bytes = read_limited(original.file, max_bytes)
+        restored_bytes = read_limited(restored.file, max_bytes)
+    except UploadTooLargeError as exc:
+        raise HTTPException(413, str(exc)) from exc
     if not original_bytes or not restored_bytes:
         raise HTTPException(422, "original and restored images are required")
 
@@ -92,14 +102,14 @@ def import_print_batch(
     if document is None:
         document = Document(
             content_sha256=document_digest,
-            source_url=str(payload.source.get("url") or payload.source.get("publication") or ""),
+            source_url=str(payload.source.url or payload.source.publication or ""),
             filename=f"print-batch-{identity}.json",
         )
         session.add(document)
         session.flush()
         page = Page(
             document_id=document.id,
-            page_number=int(payload.source.get("page", 1)),
+            page_number=payload.source.page,
             image_path=None,
             classification="advertisement",
         )
@@ -120,14 +130,14 @@ def import_print_batch(
 
     company = session.scalar(
         select(Company).where(
-            Company.normalized_name == _normalise_name(payload.company_name),
+            Company.normalized_name == normalize_name(payload.company_name),
             Company.contact_key == "",
         )
     )
     if company is None:
         company = Company(
             name=payload.company_name,
-            normalized_name=_normalise_name(payload.company_name),
+            normalized_name=normalize_name(payload.company_name),
             contact_key="",
         )
         session.add(company)
@@ -139,7 +149,7 @@ def import_print_batch(
     occurrence.artwork_metadata_json = json.dumps(
         {
             "company_name": payload.company_name,
-            "source": payload.source,
+            "source": payload.source.model_dump(),
             "crop_size": payload.crop_size,
             "evidence": payload.evidence,
             "plan_digest": payload.plan_digest,
