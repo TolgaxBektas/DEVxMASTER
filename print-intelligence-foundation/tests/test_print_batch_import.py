@@ -1,13 +1,16 @@
 import json
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.api.dependencies import session_dependency, storage_dependency
+from app.api import imports as imports_api
 from app.db.base import Base
+from app.core.config import Settings
 from app.main import app
-from app.models import AdOccurrence, Document, ReviewItem
+from app.models import AdOccurrence, Company, Document, Page, ReviewItem
 from app.services.storage import LocalStorage
 
 
@@ -43,7 +46,7 @@ def _metadata():
 def _client(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'import.db'}")
     Base.metadata.create_all(engine)
-    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     storage = LocalStorage(tmp_path / "storage")
 
     def session_override():
@@ -104,7 +107,113 @@ def test_print_batch_import_rejects_incomplete_case_without_record(tmp_path):
         assert response.status_code == 422
         with factory() as session:
             assert session.scalars(select(Document)).all() == []
+            assert session.scalars(select(Page)).all() == []
             assert session.scalars(select(AdOccurrence)).all() == []
+            assert session.scalars(select(Company)).all() == []
+            assert session.scalars(select(ReviewItem)).all() == []
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_print_batch_import_rejects_upload_over_limit(tmp_path, monkeypatch):
+    client, factory, _ = _client(tmp_path)
+    monkeypatch.setattr(
+        imports_api, "get_settings", lambda: Settings(max_download_bytes=3)
+    )
+    try:
+        response = client.post("/imports/print-batch", files=_files())
+        assert response.status_code == 413
+        with factory() as session:
+            assert session.scalars(select(Document)).all() == []
+            assert session.scalars(select(AdOccurrence)).all() == []
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_print_batch_import_uses_canonical_company_normalization(tmp_path):
+    client, factory, _ = _client(tmp_path)
+    try:
+        first = _metadata()
+        first["company_name"] = "Import-Test GmbH"
+        second = _metadata()
+        second["company_name"] = "Import Test GmbH"
+        second["source"]["page"] = 5
+        assert client.post("/imports/print-batch", files=_files(first)).status_code == 200
+        assert client.post("/imports/print-batch", files=_files(second)).status_code == 200
+        with factory() as session:
+            companies = session.execute(
+                select(AdOccurrence.company_id)
+            ).all()
+            assert len(companies) == 2
+            assert len({row[0] for row in companies}) == 1
+            company = session.scalar(select(Company))
+            assert company.normalized_name == "import test gmbh"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_print_batch_import_reuses_review_by_occurrence_with_autoflush_disabled(
+    tmp_path,
+):
+    client, factory, _ = _client(tmp_path)
+    try:
+        first = _metadata()
+        first["company_name"] = "Import-Test GmbH"
+        second = _metadata()
+        second["company_name"] = "Import Test GmbH"
+        second["source"]["page"] = 5
+
+        first_response = client.post("/imports/print-batch", files=_files(first))
+        second_response = client.post("/imports/print-batch", files=_files(second))
+        repeated_response = client.post("/imports/print-batch", files=_files(second))
+
+        assert first_response.status_code == 200
+        assert second_response.status_code == 200
+        assert repeated_response.status_code == 200
+        assert repeated_response.json()["ad_id"] == second_response.json()["ad_id"]
+        with factory() as session:
+            reviews = session.scalars(select(ReviewItem)).all()
+            assert len(reviews) == 2
+            assert {review.ad_id for review in reviews} == {
+                first_response.json()["ad_id"],
+                second_response.json()["ad_id"],
+            }
+            assert all(review.ad_id is not None for review in reviews)
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_print_batch_import_rejects_unknown_source_metadata(tmp_path):
+    client, factory, _ = _client(tmp_path)
+    try:
+        metadata = _metadata()
+        metadata["source"]["supplement"] = "extra source detail"
+        response = client.post("/imports/print-batch", files=_files(metadata))
+        assert response.status_code == 422
+        with factory() as session:
+            assert session.scalars(select(Document)).all() == []
+            assert session.scalars(select(Page)).all() == []
+            assert session.scalars(select(AdOccurrence)).all() == []
+            assert session.scalars(select(Company)).all() == []
+            assert session.scalars(select(ReviewItem)).all() == []
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize("page", [None, "vier"])
+def test_print_batch_import_rejects_invalid_source_page(tmp_path, page):
+    client, factory, _ = _client(tmp_path)
+    try:
+        metadata = _metadata()
+        metadata["source"]["page"] = page
+        response = client.post("/imports/print-batch", files=_files(metadata))
+        assert response.status_code == 422
+        with factory() as session:
+            assert session.scalars(select(Document)).all() == []
+            assert session.scalars(select(Page)).all() == []
+            assert session.scalars(select(AdOccurrence)).all() == []
+            assert session.scalars(select(Company)).all() == []
+            assert session.scalars(select(ReviewItem)).all() == []
     finally:
         app.dependency_overrides.clear()
 

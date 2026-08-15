@@ -579,6 +579,10 @@ def test_generative_fallback_composites_crop_and_records_pending_review(
         }
         assert manifest["generative"]["normalization"]["source_size"]
         assert manifest["generative"]["normalization"]["normalized_size"]
+        assert (
+            manifest["generative"]["normalization"]["normalized_size"]
+            != manifest["generative"]["normalization"]["source_size"]
+        )
         assert manifest["generative"]["normalization"]["resampling"] == "LANCZOS"
         assert manifest["verification"]["status"] == "passed"
         assert manifest["review_status"] == "pending"

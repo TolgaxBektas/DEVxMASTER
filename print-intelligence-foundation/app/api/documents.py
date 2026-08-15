@@ -11,7 +11,7 @@ from app.core.config import get_settings
 from app.models import Document, Page
 from app.models import AdOccurrence
 from app.services.downloader import download
-from app.services.ingest import validate_pdf
+from app.services.ingest import UploadTooLargeError, read_limited, validate_pdf
 from app.services.storage import sha256
 
 router = APIRouter(
@@ -22,11 +22,10 @@ router = APIRouter(
 @router.post("/upload")
 def upload(file: UploadFile = File(...), session=Depends(session_dependency)):
     settings = get_settings()
-    data = bytearray()
-    while chunk := file.file.read(1024 * 1024):
-        data.extend(chunk)
-        if len(data) > settings.max_download_bytes:
-            raise HTTPException(413, "file too large")
+    try:
+        data = read_limited(file.file, settings.max_download_bytes)
+    except UploadTooLargeError as exc:
+        raise HTTPException(413, str(exc)) from exc
     try:
         validate_pdf(bytes(data))
     except ValueError as exc:
