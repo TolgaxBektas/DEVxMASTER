@@ -54,17 +54,21 @@ async def process_upload(
         storage.put_bytes(image_key, page["image_bytes"], "image/png")
         text = page["text"]
         candidates = []
-        for region in heuristic_ad_regions(page["image_bytes"], text, page.get("layout")):
-            ad_key = f"{output_prefix}/ad-{number:04d}.png"
+        for index, region in enumerate(
+            heuristic_ad_regions(page["image_bytes"], text, page.get("layout")),
+            start=1,
+        ):
+            ad_key = f"{output_prefix}/ad-{number:04d}-{index:02d}.png"
             storage.put_bytes(ad_key, render_ad_crop(data, number, region), "image/png")
+            ad_text = " ".join(str(region.get("preview", "")).split())
             candidates.append(
                 {
                     "bbox": region,
                     "image_key": ad_key,
                     "confidence": region["confidence"],
                     "evidence": region.get("evidence", []),
-                    "company": _company_from_text(text),
-                    "preview": " ".join(text.split())[:1000],
+                    "company": _company_from_text(ad_text),
+                    "preview": ad_text[:1000],
                 }
             )
         result.append(

@@ -21,7 +21,6 @@ DIRECT_CONTACT_SIGNALS = re.compile(
 )
 MAX_ADS_PER_PAGE = 24
 MAX_CROP_PIXELS = 18_000_000
-CONNECTOR_GAP = 72
 
 
 def _layout_for_page(page):
@@ -40,8 +39,6 @@ def _layout_for_page(page):
                     "font_sizes": [float(span.get("size", 0)) for span in spans],
                     "font_names": [str(span.get("font", "")) for span in spans],
                 })
-        spans = [span for line in lines for span in line.get("spans", [])]
-        text = " ".join(str(span.get("text", "")).strip() for span in spans).strip()
         if lines:
             blocks.append({
                 "bbox": tuple(float(value) for value in block["bbox"]),
@@ -142,19 +139,6 @@ def _union(boxes):
         max(box[2] for box in boxes),
         max(box[3] for box in boxes),
     )
-
-
-def _expand(box, amount, width, height):
-    return (
-        max(0, box[0] - amount),
-        max(0, box[1] - amount),
-        min(width, box[2] + amount),
-        min(height, box[3] + amount),
-    )
-
-
-def _signals(text):
-    return sorted(set(match.group(0).lower() for match in AD_SIGNALS.finditer(text or "")))
 
 
 def _line_boxes(block):
@@ -271,6 +255,34 @@ def _plausible(box, width, height):
     return area >= page_area * 0.003 and area <= page_area and 0.08 <= ratio <= 12
 
 
+def _candidate_is_ad(
+    text,
+    blocks,
+    marked,
+    page_dominant,
+    page_area,
+    material_area=None,
+    max_words=None,
+):
+    advertiser, contact = _advertiser_and_contact(text, blocks)
+    marked_only = marked and (
+        material_area is None or material_area >= page_area * 0.03
+    )
+    standard_evidence = (
+        advertiser
+        and contact
+        and _has_commercial_identity(text)
+        and (ADVERTISER_SIGNALS.search(text) or _has_direct_contact(text))
+        and (max_words is None or len(text.split()) <= max_words)
+    )
+    accepted = (
+        (marked_only or standard_evidence)
+        and (marked or advertiser)
+        and (marked or not _looks_editorial(text, blocks, page_dominant))
+    )
+    return accepted, advertiser, contact
+
+
 def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = None):
     """Find bounded advertisement candidates from PDF geometry and text evidence.
 
@@ -307,13 +319,16 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
         candidate_text = " ".join(block["text"] for block in contained)
         if len(candidate_text.split()) < 10 and len((text or "").split()) > len(candidate_text.split()):
             candidate_text = text
-        advertiser, contact = _advertiser_and_contact(candidate_text, contained)
         marked = bool(marking_blocks)
-        if (marked or (
-            advertiser and contact and _has_commercial_identity(candidate_text)
-            and (ADVERTISER_SIGNALS.search(candidate_text) or _has_direct_contact(candidate_text))
-            and len(candidate_text.split()) <= 180
-        )) and (marked or advertiser) and (marked or not _looks_editorial(candidate_text, contained, True)):
+        accepted, _advertiser, _contact = _candidate_is_ad(
+            candidate_text,
+            contained,
+            marked,
+            True,
+            width * height,
+            max_words=180,
+        )
+        if accepted:
             if marked:
                 box = (0, 0, width, height)
             candidates.append({
@@ -337,15 +352,17 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
             (box[2] - box[0]) * (box[3] - box[1]) >= width * height * 0.75
         )
         material_area = (box[2] - box[0]) * (box[3] - box[1])
-        marked_only = marked and material_area >= width * height * 0.03
-        if not marked_only and (
-            not advertiser or not contact or not _has_commercial_identity(candidate_text)
-            or (not ADVERTISER_SIGNALS.search(candidate_text) and not _has_direct_contact(candidate_text))
-        ):
+        accepted, _advertiser, _contact = _candidate_is_ad(
+            candidate_text,
+            contained,
+            marked,
+            page_dominant,
+            width * height,
+            material_area=material_area,
+        )
+        if not accepted:
             continue
         if not _contains_complete_lines(box, contained):
-            continue
-        if not marked_only and _looks_editorial(candidate_text, contained, page_dominant):
             continue
         candidates.append({
             "bbox": box,
@@ -363,11 +380,15 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
         if not _plausible(box, width, height):
             continue
         text_value = candidate["text"]
-        advertiser, contact = _advertiser_and_contact(text_value, candidate["blocks"])
-        if not candidate["marked"] and (
-            not advertiser or not contact or not _has_commercial_identity(text_value)
-            or (not ADVERTISER_SIGNALS.search(text_value) and not _has_direct_contact(text_value))
-        ):
+        accepted, advertiser, contact = _candidate_is_ad(
+            text_value,
+            candidate["blocks"],
+            candidate["marked"],
+            candidate["page_dominant"],
+            width * height,
+            material_area=(box[2] - box[0]) * (box[3] - box[1]),
+        )
+        if not accepted:
             continue
         evidence = ["geometry"]
         if advertiser:
