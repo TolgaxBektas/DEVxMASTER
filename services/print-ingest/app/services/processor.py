@@ -283,6 +283,29 @@ def _candidate_is_ad(
     return accepted, advertiser, contact
 
 
+def _add_candidate_without_nested_duplicates(results, normalized, box):
+    overlapping = [
+        other
+        for other in results
+        if _intersection(box, other["_box"]) / max(1, min(
+            (box[2] - box[0]) * (box[3] - box[1]),
+            (other["_box"][2] - other["_box"][0]) * (other["_box"][3] - other["_box"][1]),
+        )) > 0.75
+    ]
+    if not overlapping:
+        normalized["_box"] = box
+        results.append(normalized)
+        return
+    new_area = (box[2] - box[0]) * (box[3] - box[1])
+    if all(
+        new_area > (other["_box"][2] - other["_box"][0]) * (other["_box"][3] - other["_box"][1])
+        for other in overlapping
+    ):
+        results[:] = [other for other in results if other not in overlapping]
+        normalized["_box"] = box
+        results.append(normalized)
+
+
 def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = None):
     """Find bounded advertisement candidates from PDF geometry and text evidence.
 
@@ -416,19 +439,7 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
             "evidence": evidence,
             "preview": " ".join(text_value.split())[:240],
         }
-        duplicate = next((other for other in results if _intersection(box, other["_box"]) / max(1, min(
-            (box[2] - box[0]) * (box[3] - box[1]),
-            (other["_box"][2] - other["_box"][0]) * (other["_box"][3] - other["_box"][1]),
-        )) > 0.75), None)
-        if duplicate is None:
-            normalized["_box"] = box
-            results.append(normalized)
-        elif (box[2] - box[0]) * (box[3] - box[1]) > (
-            duplicate["_box"][2] - duplicate["_box"][0]
-        ) * (duplicate["_box"][3] - duplicate["_box"][1]):
-            results.remove(duplicate)
-            normalized["_box"] = box
-            results.append(normalized)
+        _add_candidate_without_nested_duplicates(results, normalized, box)
     results.sort(key=lambda item: item["confidence"], reverse=True)
     for item in results:
         item.pop("_box", None)

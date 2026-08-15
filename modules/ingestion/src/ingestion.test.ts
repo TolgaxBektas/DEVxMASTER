@@ -654,9 +654,10 @@ describe("Ingestion-Bestand", () => {
           classification: "MIXED_CONTENT",
           adProbability: 0.5,
           occurrences: [{
-            bbox: { x: 0, y: 0, width: 1, height: 1 },
+            bbox: { x: 0, y: 0, width: 1, height: 1, confidence: 0.8 },
             imageKey: "ad.png",
             confidence: 0.8,
+            evidence: ["geometry"],
             company: "Muster GmbH",
             preview: "Muster GmbH Werbung Telefon",
           }],
@@ -688,22 +689,38 @@ describe("Ingestion-Bestand", () => {
       pageNumber: 4,
       company: "  Muster   GmbH ",
       preview: "Muster GmbH   Telefon",
-      bbox: { x: 1.1111, y: 2, width: 3, height: 4 },
+      bbox: { x: 1.1111, y: 2, width: 3, height: 4, confidence: 0.8 },
     });
     const retry = advertisementEventIdempotencyKey("1", "hash", {
       pageNumber: 4,
       company: "muster gmbh",
       preview: "Muster GmbH Telefon",
-      bbox: { height: 4, width: 3, y: 2, x: 1.1112 },
+      bbox: { height: 4, width: 3, y: 2, x: 1.1112, confidence: 0.8 },
     });
     const secondPlacement = advertisementEventIdempotencyKey("1", "hash", {
       pageNumber: 4,
       company: "Muster GmbH",
       preview: "Muster GmbH Telefon",
-      bbox: { x: 20, y: 2, width: 3, height: 4 },
+      bbox: { x: 20, y: 2, width: 3, height: 4, confidence: 0.8 },
+    });
+    const bboxWithMetadata = {
+      x: 1.1111,
+      y: 2,
+      width: 3,
+      height: 4,
+      confidence: 0.8,
+      evidence: ["geometry"],
+      preview: "Muster GmbH Telefon",
+    } as unknown as { x: number; y: number; width: number; height: number };
+    const metadataBbox = advertisementEventIdempotencyKey("1", "hash", {
+      pageNumber: 4,
+      company: "Muster GmbH",
+      preview: "Muster GmbH Telefon",
+      bbox: bboxWithMetadata,
     });
     expect(first).toBe(retry);
     expect(secondPlacement).not.toBe(first);
+    expect(metadataBbox).toBe(first);
   });
 
   it("setzt ein Dokument bei nicht erreichbarer Verarbeitung auf Fehler", async () => {

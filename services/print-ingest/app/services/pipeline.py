@@ -19,11 +19,17 @@ def process_document(db: Session, document: Document):
                 storage.put_bytes(ad_key, render_ad_crop(pdf, p["page_number"], reg), 'image/png')
                 db.add(AdOccurrence(
                     page_id=page.id,
-                    bbox=reg,
+                    bbox={
+                        key: reg[key]
+                        for key in ("x", "y", "width", "height", "confidence")
+                    },
                     image_key=ad_key,
                     confidence=reg['confidence'],
                     validation_status='REVIEW_REQUIRED',
-                    extracted_json={"evidence": reg.get("evidence", [])},
+                    extracted_json={
+                        "evidence": reg.get("evidence", []),
+                        "preview": reg.get("preview", ""),
+                    },
                 ))
         document.state='REVIEW_REQUIRED'; document.error=None; db.commit()
         return {'document_id':document.id,'pages':len(pages),'state':document.state}

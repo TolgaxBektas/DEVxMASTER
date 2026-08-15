@@ -3,6 +3,7 @@ import io
 import fitz
 from PIL import Image
 from app.services.processor import (
+    _add_candidate_without_nested_duplicates,
     extract_pdf_metadata,
     heuristic_ad_regions,
     render_ad_crop,
@@ -89,6 +90,31 @@ def test_detects_ad_spanning_two_columns_as_one_candidate():
     )
     assert len(result) == 1
     assert result[0]["width"] > 0.75
+
+
+def test_nested_overlaps_replace_all_only_when_new_box_is_larger_than_each():
+    results = [
+        {"_box": (0, 0, 100, 100)},
+        {"_box": (10, 10, 210, 210)},
+    ]
+    _add_candidate_without_nested_duplicates(
+        results,
+        {"confidence": 0.9},
+        (0, 0, 150, 150),
+    )
+    assert len(results) == 2
+    assert {item["_box"] for item in results} == {
+        (0, 0, 100, 100),
+        (10, 10, 210, 210),
+    }
+
+    _add_candidate_without_nested_duplicates(
+        results,
+        {"confidence": 0.95},
+        (0, 0, 300, 300),
+    )
+    assert len(results) == 1
+    assert results[0]["_box"] == (0, 0, 300, 300)
 
 
 def test_plain_editorial_page_has_no_ad_candidates():

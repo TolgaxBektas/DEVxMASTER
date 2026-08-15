@@ -42,9 +42,16 @@ export function createPifProcessor(input: {
         classification: string;
         ad_probability: number;
         occurrences: Array<{
-          bbox: Record<string, number>;
+          bbox: {
+            x: number;
+            y: number;
+            width: number;
+            height: number;
+            confidence: number;
+          };
           image_key: string;
           confidence: number;
+          evidence?: string[];
           company: string;
           preview: string;
         }>;
@@ -62,6 +69,7 @@ export function createPifProcessor(input: {
         bbox: occurrence.bbox,
         imageKey: occurrence.image_key,
         confidence: occurrence.confidence,
+        evidence: occurrence.evidence ?? [],
         company: occurrence.company,
         preview: occurrence.preview,
       })),

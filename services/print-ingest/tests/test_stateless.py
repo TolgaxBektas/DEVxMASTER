@@ -122,6 +122,12 @@ def test_process_keeps_distinct_ad_keys_and_region_text(monkeypatch):
         "Alpha GmbH Telefon 01234 567890",
         "Beta AG www.beta.example",
     ]
+    assert [item["bbox"] for item in occurrences] == [
+        {"x": 0.0, "y": 0.0, "width": 0.4, "height": 1.0, "confidence": 0.8},
+        {"x": 0.6, "y": 0.0, "width": 0.4, "height": 1.0, "confidence": 0.9},
+    ]
+    assert [item["evidence"] for item in occurrences] == [["geometry"], ["geometry"]]
+    assert all(set(item["bbox"]) == {"x", "y", "width", "height", "confidence"} for item in occurrences)
 
 
 def test_process_rejects_non_pdf(monkeypatch):

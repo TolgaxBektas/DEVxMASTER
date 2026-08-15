@@ -63,7 +63,10 @@ async def process_upload(
             ad_text = " ".join(str(region.get("preview", "")).split())
             candidates.append(
                 {
-                    "bbox": region,
+                    "bbox": {
+                        key: region[key]
+                        for key in ("x", "y", "width", "height", "confidence")
+                    },
                     "image_key": ad_key,
                     "confidence": region["confidence"],
                     "evidence": region.get("evidence", []),

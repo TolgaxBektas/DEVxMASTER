@@ -18,6 +18,14 @@ import { persistDocumentBytes } from "./rest.js";
 import { deriveDocumentClassification } from "./classification.js";
 import { ingestionPages, IngestionPage, OccurrencesPage } from "./ui/index.js";
 
+export type AdBoundingBox = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  confidence: number;
+};
+
 export type ProcessedPage = {
   pageNumber: number;
   text: string;
@@ -26,9 +34,10 @@ export type ProcessedPage = {
   adProbability: number;
   titleCandidates?: Array<{ text: string; size: number }>;
   occurrences: Array<{
-    bbox: Record<string, number>;
+    bbox: AdBoundingBox;
     imageKey: string;
     confidence: number;
+    evidence: string[];
     company: string;
     preview: string;
   }>;
@@ -46,9 +55,13 @@ function occurrenceFingerprint(occurrence: {
   preview: string;
   bbox?: Record<string, number> | null;
 }): string {
-  const bbox = Object.entries(occurrence.bbox ?? {})
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([key, value]) => `${key}=${Math.round(value * 1000) / 1000}`)
+  const bbox = ["x", "y", "width", "height", "confidence"]
+    .map((key) => {
+      const value = occurrence.bbox?.[key];
+      return `${key}=${typeof value === "number" && Number.isFinite(value)
+        ? Math.round(value * 1000) / 1000
+        : ""}`;
+    })
     .join(",");
   return createHash("sha256")
     .update([
