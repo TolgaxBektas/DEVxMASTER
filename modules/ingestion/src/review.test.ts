@@ -13,7 +13,13 @@ const review = {
   document_id: 2,
   ad_id: 3,
   page: 4,
-  company: { id: 1, name: "Test GmbH", extracted_values: {}, evidence: {} },
+  company: {
+    id: 1,
+    name: "Test GmbH",
+    extracted_values: {},
+    evidence: {},
+    verification: {},
+  },
   bbox: [1, 2, 3, 4],
   restoration: {
     review_status: "pending",

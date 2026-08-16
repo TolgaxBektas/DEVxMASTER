@@ -5,7 +5,7 @@ import { MemoryAuditRepository } from "@xmaster-center/kernel";
 import { NoopStorage } from "@xmaster-center/integrations";
 import type { AuditRepository } from "@xmaster-center/kernel";
 import { MemoryIngestionRepository } from "./memory-repository.js";
-import { registerUploadRoute } from "./rest.js";
+import { registerReviewImageRoutes, registerUploadRoute } from "./rest.js";
 
 const servers: ReturnType<typeof createServer>[] = [];
 
@@ -127,5 +127,42 @@ describe("Ingestion-Upload", () => {
     expect(response.status).toBe(201);
     expect(calls).toBe(2);
     expect(server.repository.documents).toHaveLength(1);
+  });
+});
+
+describe("Ingestion-Prüfbilder", () => {
+  it("liefert die Bytes des Prüfdienstes unverändert aus", async () => {
+    const app = express();
+    app.use((request, _response, next) => {
+      (request as typeof request & { auth?: unknown }).auth = {
+        tenantId: "1",
+        userId: "1",
+        displayName: "Test",
+        permissions: new Set(["ingestion.review.read"]),
+      };
+      next();
+    });
+    const expected = new Uint8Array([137, 80, 78, 71, 0, 255]);
+    registerReviewImageRoutes(app, {
+      reviewTenantId: "1",
+      reviewClient: {
+        listOpen: async () => [],
+        get: async () => {
+          throw new Error("not used");
+        },
+        decide: async () => {
+          throw new Error("not used");
+        },
+        image: async () => expected,
+      },
+    });
+    const server = createServer(app);
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Server konnte nicht gestartet werden");
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/ingestion/reviews/7/original`);
+    expect(response.status).toBe(200);
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(expected);
   });
 });

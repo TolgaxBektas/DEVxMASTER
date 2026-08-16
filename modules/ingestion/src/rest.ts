@@ -71,7 +71,7 @@ export function registerReviewImageRoutes(
       }
       try {
         const bytes = await deps.reviewClient.image(id, kind);
-        response.type("png").send(bytes);
+        response.type("png").send(Buffer.from(bytes));
       } catch (error) {
         const message = error instanceof Error ? error.message : "Bild konnte nicht geladen werden";
         response.status(message === "Prüffall wurde nicht gefunden" ? 404 : 502)

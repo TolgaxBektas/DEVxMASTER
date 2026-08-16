@@ -86,6 +86,7 @@ def test_open_review_list_contains_metadata_and_image_availability(tmp_path, mon
         assert item["reason"] == "generativ erzeugt, menschliche Freigabe erforderlich"
         assert item["page"] == 4
         assert item["company"]["name"] == "Review Test GmbH"
+        assert item["company"]["verification"] == {"verified": True}
         assert item["restoration"]["review_status"] == "pending"
         assert item["restoration"]["geometry_quality_status"] == (
             "external_generated_not_geometrically_measured"
@@ -94,6 +95,61 @@ def test_open_review_list_contains_metadata_and_image_availability(tmp_path, mon
             "original_available": True,
             "restored_available": True,
         }
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_imported_contact_values_and_verification_are_normalized(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    try:
+        verified_metadata = _metadata("Altenzentrum Wetzlar", 8)
+        verified_metadata["evidence"] = {
+            "verified": True,
+            "reason": "Website belegt.",
+            "website_domain": {
+                "value": "www.altenzentrum-wetzlar.de",
+                "source_url": "https://example.test/contact",
+                "retrieved_at": "2026-08-15T05:17:45+00:00",
+            },
+            "emails": [],
+            "phones": [
+                {
+                    "value": "06441 / 9954 00",
+                    "source_url": "https://example.test/contact",
+                    "retrieved_at": "2026-08-15T05:17:45+00:00",
+                }
+            ],
+            "sources": ["https://example.test/contact"],
+        }
+        unverified_metadata = _metadata("Ungeprüfte Firma", 9)
+        unverified_metadata["evidence"] = {
+            "verified": False,
+            "reason": "Kein belastbarer Beleg.",
+            "sources": [],
+        }
+        assert _import(client, verified_metadata).status_code == 200
+        assert _import(client, unverified_metadata).status_code == 200
+        items = client.get(
+            "/api/v1/reviews/open",
+            headers={"x-service-token": "review-token"},
+        ).json()
+        verified = next(item for item in items if item["company"]["name"] == "Altenzentrum Wetzlar")
+        assert verified["company"]["extracted_values"] == {
+            "company": "Altenzentrum Wetzlar",
+            "website": "www.altenzentrum-wetzlar.de",
+            "phones": ["06441 / 9954 00"],
+        }
+        assert verified["company"]["evidence"]["website"] == {
+            "source_url": "https://example.test/contact",
+            "retrieved_at": "2026-08-15T05:17:45+00:00",
+        }
+        assert verified["company"]["verification"] == {
+            "verified": True,
+            "reason": "Website belegt.",
+            "sources": ["https://example.test/contact"],
+        }
+        unverified = next(item for item in items if item["company"]["name"] == "Ungeprüfte Firma")
+        assert unverified["company"]["verification"]["verified"] is False
     finally:
         app.dependency_overrides.clear()
 

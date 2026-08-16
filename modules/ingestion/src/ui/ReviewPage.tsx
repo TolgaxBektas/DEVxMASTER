@@ -17,6 +17,11 @@ type Review = {
     name: string | null;
     extracted_values: Record<string, unknown>;
     evidence: unknown;
+    verification: {
+      verified?: boolean;
+      reason?: string;
+      sources?: string[];
+    };
   };
   bbox: unknown;
   restoration: {
@@ -43,6 +48,10 @@ const FIELD_LABELS: Record<string, string> = {
   email: "E-Mail",
   website: "Domain",
   domain: "Domain",
+  emails: "E-Mail",
+  phones: "Telefon",
+  faxes: "Fax",
+  social_profiles: "Social-Kanäle",
   address: "Adresse",
   street: "Straße",
   postal_code: "PLZ",
@@ -62,6 +71,10 @@ function displayValue(value: unknown): string {
 }
 
 function evidenceDetails(value: unknown): string | null {
+  if (Array.isArray(value)) {
+    const details = value.map(evidenceDetails).filter((part): part is string => Boolean(part));
+    return details.length ? details.join(" · ") : null;
+  }
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const data = value as Record<string, unknown>;
   const parts = [
@@ -102,6 +115,27 @@ function ContactDetails({
         </div>
       ))}
     </dl>
+  );
+}
+
+function VerificationDetails({
+  verification,
+}: {
+  verification: { verified?: boolean; reason?: string; sources?: string[] };
+}) {
+  const status = verification.verified === true
+    ? "belegt"
+    : verification.verified === false
+      ? "nicht belegt"
+      : "nicht angegeben";
+  return (
+    <div className="verification-row">
+      <strong>Belegstatus: {status}</strong>
+      {verification.reason && <span>{verification.reason}</span>}
+      {verification.sources?.length ? (
+        <span>Quellen: {verification.sources.join(" · ")}</span>
+      ) : null}
+    </div>
   );
 }
 
@@ -182,8 +216,8 @@ export function ReviewPage({ api }: ModulePageProps) {
   if (!queue.data.items.length) {
     return <EmptyState title="Keine offenen Prüffälle" description={queue.data.message ?? "Alle Fälle wurden bearbeitet."} />;
   }
-  if (selected.isLoading || !selected.data) return <Skeleton />;
   if (selected.error) return <EmptyState title="Prüffall konnte nicht geladen werden" />;
+  if (selected.isLoading || !selected.data) return <Skeleton />;
 
   const review = selected.data;
   return (
@@ -242,6 +276,7 @@ export function ReviewPage({ api }: ModulePageProps) {
               values={review.company.extracted_values}
               evidence={review.company.evidence}
             />
+            <VerificationDetails verification={review.company.verification} />
             <dl className="detail-list">
               <div><dt>Seite</dt><dd>{review.page ?? "—"}</dd></div>
               <div><dt>Bounding-Box</dt><dd>{Array.isArray(review.bbox) ? review.bbox.join(" × ") : displayValue(review.bbox)}</dd></div>

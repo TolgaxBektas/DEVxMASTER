@@ -47,16 +47,106 @@ def _manifest(occurrence: AdOccurrence | None) -> dict[str, Any]:
         return {}
 
 
-def _contact_data(occurrence: AdOccurrence | None) -> tuple[dict[str, Any], Any]:
+def _evidence_entry(value: Any) -> dict[str, str] | None:
+    if isinstance(value, str) and value:
+        return {"source_url": value}
+    if not isinstance(value, dict):
+        return None
+    source_url = value.get("source_url") or value.get("source")
+    entry = {
+        "source_url": source_url,
+        "retrieved_at": value.get("retrieved_at"),
+    }
+    entry = {
+        key: item for key, item in entry.items() if isinstance(item, str) and item
+    }
+    return entry or None
+
+
+def _evidence_value(values: list[Any]) -> Any:
+    entries = [entry for value in values if (entry := _evidence_entry(value))]
+    if not entries:
+        return None
+    if all(entry == entries[0] for entry in entries[1:]):
+        return entries[0]
+    return entries
+
+
+def _import_contact_data(data: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    raw = data.get("evidence")
+    if not isinstance(raw, dict):
+        return {}, {}, {}
+    extracted: dict[str, Any] = {}
+    evidence: dict[str, Any] = {}
+    mapping = {
+        "website_domain": "website",
+        "emails": "emails",
+        "phones": "phones",
+        "faxes": "faxes",
+        "social_profiles": "social_profiles",
+        "street": "street",
+        "postal_code": "postal_code",
+        "city": "city",
+    }
+    company = data.get("company")
+    if company:
+        extracted["company"] = company
+    for source_key, target_key in mapping.items():
+        raw_value = raw.get(source_key)
+        if raw_value is None or raw_value == []:
+            continue
+        values = raw_value if isinstance(raw_value, list) else [raw_value]
+        clean_values = []
+        evidence_values = []
+        for value in values:
+            if isinstance(value, dict):
+                normalized = value.get("value")
+                if normalized in (None, ""):
+                    continue
+                clean_values.append(normalized)
+                evidence_values.append(value)
+            elif value not in (None, ""):
+                clean_values.append(value)
+        if not clean_values:
+            continue
+        extracted[target_key] = (
+            clean_values if isinstance(raw_value, list) else clean_values[0]
+        )
+        if evidence_value := _evidence_value(evidence_values):
+            evidence[target_key] = evidence_value
+    verification = {
+        key: raw[key]
+        for key in ("verified", "reason", "sources")
+        if key in raw
+    }
+    return extracted, evidence, verification
+
+
+def _contact_data(
+    occurrence: AdOccurrence | None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     if occurrence is None:
-        return {}, {}
+        return {}, {}, {}
     try:
         data = json.loads(occurrence.fields_json or "{}")
     except (TypeError, json.JSONDecodeError):
-        return {}, {}
+        return {}, {}, {}
     if not isinstance(data, dict):
-        return {}, {}
-    return data.get("fields") or {}, data.get("evidence") or data.get("provenance") or {}
+        return {}, {}, {}
+    if isinstance(data.get("fields"), dict):
+        fields = {
+            key: value
+            for key, value in data["fields"].items()
+            if value not in (None, "", [])
+        }
+        provenance = data.get("provenance")
+        field_evidence = {}
+        if isinstance(provenance, dict):
+            for key, value in provenance.items():
+                if key in fields and (entry := _evidence_entry(value)):
+                    field_evidence[key] = entry
+        return fields, field_evidence, {}
+    return _import_contact_data(data)
 
 
 def _artwork_metadata(occurrence: AdOccurrence | None) -> dict[str, Any]:
@@ -84,7 +174,7 @@ def _image_available(storage, path: str | None) -> bool:
 def _payload(item, occurrence, page, document, company, storage) -> dict[str, Any]:
     manifest = _manifest(occurrence)
     artwork_metadata = _artwork_metadata(occurrence)
-    extracted_values, evidence = _contact_data(occurrence)
+    extracted_values, evidence, verification = _contact_data(occurrence)
     return {
         "id": item.id,
         "reason": item.reason,
@@ -98,6 +188,7 @@ def _payload(item, occurrence, page, document, company, storage) -> dict[str, An
             "name": company.name if company else None,
             "extracted_values": extracted_values,
             "evidence": evidence,
+            "verification": verification,
         },
         "bbox": _bbox(occurrence.bbox) if occurrence else None,
         "restoration": {

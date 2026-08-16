@@ -11,6 +11,11 @@ export type PifReview = {
     name: string | null;
     extracted_values: Record<string, unknown>;
     evidence: unknown;
+    verification: {
+      verified?: boolean;
+      reason?: string;
+      sources?: string[];
+    };
   };
   bbox: unknown;
   restoration: {
