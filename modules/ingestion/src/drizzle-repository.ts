@@ -398,7 +398,12 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
             pageNumber: processed.pageNumber,
             company: occurrence.company,
             preview: occurrence.preview,
-            status: "detected",
+            status: previousByIdentity.get(occurrenceFingerprint({
+              pageNumber: processed.pageNumber,
+              company: occurrence.company,
+              preview: occurrence.preview,
+              bbox: occurrence.bbox,
+            })) ?? "detected",
             bbox: occurrence.bbox,
             imageKey: occurrence.imageKey,
             confidence: occurrence.confidence,

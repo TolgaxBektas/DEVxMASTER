@@ -20,6 +20,8 @@ type Occurrence = {
   evidence?: string[] | null;
 };
 
+type ImageState = "loading" | "loaded" | "missing";
+
 const evidenceLabels: Record<string, string> = {
   geometry: "Materielle Fläche",
   logo: "Logo/Signet",
@@ -28,7 +30,15 @@ const evidenceLabels: Record<string, string> = {
   "publisher-marking": "Verlagsvermerk „Anzeige“",
   "provenance-uncertain": "Herkunft unklar",
   advertiser: "Werbetreibender",
+  typography: "Typografische Gestaltung",
+  whitespace: "Freiraum um die Anzeige",
 };
+export function evidenceLabel(value: string): string {
+  return evidenceLabels[value] ?? "Zusätzlicher Prüfbeleg";
+}
+export function occurrenceImageFallbackVisible(state: ImageState): boolean {
+  return state === "missing";
+}
 const statusLabels: Record<string, string> = {
   detected: "Offen",
   approved: "Freigegeben",
@@ -86,20 +96,42 @@ export function OccurrencesPage({ api }: ModulePageProps) {
       {!rows.length && <EmptyState title="Keine Fundstellen für diesen Status." />}
       <div className="stack">
         {rows.map((occurrence) => (
-          <Card key={occurrence.id}>
+          <OccurrenceCard key={occurrence.id} occurrence={occurrence} canReview={Boolean(capabilities.data?.review)} review={review} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function OccurrenceCard({
+  occurrence,
+  canReview,
+  review,
+}: {
+  occurrence: Occurrence;
+  canReview: boolean;
+  review: (id: number, decision: "approved" | "rejected") => Promise<void>;
+}) {
+  const [imageState, setImageState] = useState<ImageState>("loading");
+  return (
+          <Card>
             <div style={{ display: "grid", gap: "1.25rem", gridTemplateColumns: "minmax(280px, 1fr) minmax(280px, 1.2fr)" }}>
               <div>
                 <img
                   src={`/api/ingestion/occurrences/${occurrence.id}/image`}
                   alt={`Ausschnitt ${occurrence.company ?? "Fundstelle"}`}
-                  style={{ width: "100%", maxHeight: "520px", objectFit: "contain", background: "#f4f5f7", borderRadius: "8px" }}
-                  onError={(event) => {
-                    event.currentTarget.style.display = "none";
-                    const fallback = event.currentTarget.nextElementSibling;
-                    if (fallback instanceof HTMLElement) fallback.hidden = false;
+                  onLoad={() => setImageState("loaded")}
+                  onError={() => setImageState("missing")}
+                  style={{
+                    width: "100%",
+                    maxHeight: "520px",
+                    objectFit: "contain",
+                    background: "#f4f5f7",
+                    borderRadius: "8px",
+                    display: imageState === "missing" ? "none" : "block",
                   }}
                 />
-                <div hidden className="ui-empty">Ausschnitt nicht verfügbar.</div>
+                {occurrenceImageFallbackVisible(imageState) && <div className="ui-empty">Ausschnitt nicht verfügbar.</div>}
               </div>
               <div className="stack">
                 <div className="proposal-meta">
@@ -115,7 +147,7 @@ export function OccurrencesPage({ api }: ModulePageProps) {
                     {(occurrence.evidence ?? []).length
                       ? occurrence.evidence?.map((item) => (
                         <Badge key={item} tone={item === "provenance-uncertain" ? "danger" : "neutral"}>
-                          {evidenceLabels[item] ?? item}
+                          {evidenceLabel(item)}
                         </Badge>
                       ))
                       : <span>Keine Belege gespeichert.</span>}
@@ -124,17 +156,14 @@ export function OccurrencesPage({ api }: ModulePageProps) {
                 {occurrence.evidence?.includes("provenance-uncertain") && (
                   <p><strong>Hinweis:</strong> Die Herkunft ist unklar. Bitte prüfen, ob der Werbetreibende zum gewünschten Bestand gehört.</p>
                 )}
-                {capabilities.data?.review && occurrence.status !== "approved" && (
+                {canReview && occurrence.status !== "approved" && (
                   <Button onClick={() => void review(occurrence.id, "approved")}>Freigeben</Button>
                 )}
-                {capabilities.data?.review && occurrence.status !== "rejected" && (
+                {canReview && occurrence.status !== "rejected" && (
                   <Button variant="danger" onClick={() => void review(occurrence.id, "rejected")}>Ablehnen</Button>
                 )}
               </div>
             </div>
           </Card>
-        ))}
-      </div>
-    </div>
   );
 }
