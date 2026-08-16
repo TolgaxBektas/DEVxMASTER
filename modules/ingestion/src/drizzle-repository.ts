@@ -1,10 +1,25 @@
 import type { MySql2Database } from "drizzle-orm/mysql2";
-import { and, desc, eq, gte, lte } from "drizzle-orm";
+import { and, desc, eq, gte, lte, ne } from "drizzle-orm";
 import { classifications, documents, occurrences, pages, sources, ingestionSchema } from "./schema.js";
 import type { DerivedClassification, DocumentClassification } from "./classification.js";
-import { IngestionSourceNotFoundError, type DocumentListFilters, type IngestionDocument, type IngestionOccurrence, type IngestionRepository } from "./repository.js";
+import {
+  IngestionSourceNotFoundError,
+  occurrenceFingerprint,
+  type DocumentListFilters,
+  type IngestionDocument,
+  type IngestionOccurrence,
+  type IngestionRepository,
+} from "./repository.js";
 
 type IngestionDb = MySql2Database<typeof ingestionSchema>;
+
+function readBbox(value: unknown): Record<string, number> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const keys = ["x", "y", "width", "height", "confidence"];
+  if (!keys.every((key) => typeof record[key] === "number")) return null;
+  return Object.fromEntries(keys.map((key) => [key, record[key] as number])) as Record<string, number>;
+}
 
 export function createDrizzleIngestionRepository(db: unknown): IngestionRepository {
   const database = db as IngestionDb;
@@ -233,9 +248,41 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
       return result;
     },
     async listOccurrences(tenantId) {
-      return database.select().from(occurrences)
+      const rows = await database.select({
+        occurrence: occurrences,
+        pageNumber: pages.pageNumber,
+      }).from(occurrences)
+        .leftJoin(pages, eq(pages.id, occurrences.pageId))
         .where(eq(occurrences.tenantId, Number(tenantId)))
-        .orderBy(desc(occurrences.createdAt)) as never;
+        .orderBy(desc(occurrences.createdAt));
+      return rows.map(({ occurrence, pageNumber }) => ({
+        ...occurrence,
+        ...(pageNumber == null ? {} : { pageNumber }),
+        bbox: readBbox(occurrence.bbox),
+        evidence: Array.isArray(occurrence.evidence) ? occurrence.evidence as string[] : [],
+      }));
+    },
+    async getOccurrence(tenantId, occurrenceId) {
+      const row = (await database.select().from(occurrences).where(and(
+        eq(occurrences.id, occurrenceId),
+        eq(occurrences.tenantId, Number(tenantId)),
+      )).limit(1))[0];
+      if (!row) throw new Error("Fundstelle nicht gefunden");
+      return {
+        ...row,
+        bbox: readBbox(row.bbox),
+        evidence: Array.isArray(row.evidence) ? row.evidence as string[] : [],
+      } as never;
+    },
+    async reviewOccurrence(tenantId, occurrenceId, status) {
+      const current = await this.getOccurrence(tenantId, occurrenceId);
+      if (current.status === status) return { occurrence: current, changed: false };
+      await database.update(occurrences).set({ status }).where(and(
+        eq(occurrences.id, occurrenceId),
+        eq(occurrences.tenantId, Number(tenantId)),
+        ne(occurrences.status, status),
+      ));
+      return { occurrence: await this.getOccurrence(tenantId, occurrenceId), changed: true };
     },
     async createUploadedDocument(tenantId, input) {
       const existing = await database.select().from(documents).where(
@@ -289,7 +336,32 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
     },
     async replaceProcessedDocument(tenantId, documentId, processedPages) {
       const document = await this.getDocument(tenantId, documentId);
-      await database.delete(occurrences).where(eq(occurrences.documentId, documentId));
+      const previous = await database.select().from(occurrences).where(and(
+        eq(occurrences.documentId, documentId),
+        eq(occurrences.tenantId, Number(tenantId)),
+      ));
+      const previousPages = await database.select().from(pages).where(eq(pages.documentId, documentId));
+      const pageNumbers = new Map(previousPages.map((page) => [page.id, page.pageNumber]));
+      const previousByIdentity = new Map(previous.map((item) => {
+        const pageNumber = pageNumbers.get(item.pageId);
+        const identity = pageNumber === undefined
+          ? {
+            company: item.company,
+            preview: item.preview,
+            bbox: readBbox(item.bbox),
+          }
+          : {
+            pageNumber,
+            company: item.company,
+            preview: item.preview,
+            bbox: readBbox(item.bbox),
+          };
+        return [occurrenceFingerprint(identity), item.status] as const;
+      }));
+      await database.delete(occurrences).where(and(
+        eq(occurrences.documentId, documentId),
+        eq(occurrences.tenantId, Number(tenantId)),
+      ));
       await database.delete(pages).where(eq(pages.documentId, documentId));
       const created: IngestionOccurrence[] = [];
       for (const processed of processedPages) {
@@ -309,10 +381,16 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
             pageId,
             company: occurrence.company,
             preview: occurrence.preview,
-            status: "detected",
+            status: previousByIdentity.get(occurrenceFingerprint({
+              pageNumber: processed.pageNumber,
+              company: occurrence.company,
+              preview: occurrence.preview,
+              bbox: occurrence.bbox,
+            })) ?? "detected",
             bbox: occurrence.bbox,
             imageKey: occurrence.imageKey,
             confidence: occurrence.confidence,
+            evidence: occurrence.evidence ?? [],
           });
           created.push({
             id: Number(occurrenceRow[0]?.insertId),
@@ -320,10 +398,16 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
             pageNumber: processed.pageNumber,
             company: occurrence.company,
             preview: occurrence.preview,
-            status: "detected",
+            status: previousByIdentity.get(occurrenceFingerprint({
+              pageNumber: processed.pageNumber,
+              company: occurrence.company,
+              preview: occurrence.preview,
+              bbox: occurrence.bbox,
+            })) ?? "detected",
             bbox: occurrence.bbox,
             imageKey: occurrence.imageKey,
             confidence: occurrence.confidence,
+            evidence: occurrence.evidence ?? [],
           });
         }
       }

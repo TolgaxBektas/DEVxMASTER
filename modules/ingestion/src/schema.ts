@@ -84,6 +84,7 @@ export const occurrences = mysqlTable("ingestion_occurrences", {
   bbox: json("bbox"),
   imageKey: varchar("image_key", { length: 1024 }),
   confidence: float("confidence"),
+  evidence: json("evidence"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 export const ingestionSchema = { sources, documents, classifications, pages, occurrences };

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { DerivedClassification, DocumentClassification } from "./classification.js";
 
 export class IngestionSourceNotFoundError extends Error {
@@ -19,6 +20,35 @@ export type IngestionSource = {
   lastFetchedAt: Date | null;
   lastError: string | null;
 };
+
+function normalizeOccurrenceText(value: string): string {
+  return value.normalize("NFKC").toLocaleLowerCase("de-DE").trim().replace(/\s+/g, " ");
+}
+
+export function occurrenceFingerprint(occurrence: {
+  pageNumber?: number;
+  company: string;
+  preview: string;
+  bbox?: Record<string, number> | null;
+}): string {
+  const bbox = ["x", "y", "width", "height", "confidence"]
+    .map((key) => {
+      const value = occurrence.bbox?.[key];
+      return `${key}=${typeof value === "number" && Number.isFinite(value)
+        ? Math.round(value * 1000) / 1000
+        : ""}`;
+    })
+    .join(",");
+  return createHash("sha256")
+    .update([
+      occurrence.pageNumber ?? "",
+      normalizeOccurrenceText(occurrence.company),
+      normalizeOccurrenceText(occurrence.preview),
+      bbox,
+    ].join("\u001f"))
+    .digest("hex")
+    .slice(0, 24);
+}
 
 export type IngestionDocument = {
   id: number;
@@ -60,6 +90,11 @@ export type IngestionOccurrence = {
   imageKey?: string | null;
   confidence?: number | null;
   bbox?: Record<string, number> | null;
+  evidence?: string[] | null;
+};
+export type OccurrenceReviewResult = {
+  occurrence: IngestionOccurrence;
+  changed: boolean;
 };
 export type IngestionRepository = {
   listSources(tenantId: string): Promise<IngestionSource[]>;
@@ -85,6 +120,12 @@ export type IngestionRepository = {
     actor: string,
   ): Promise<DocumentClassification>;
   listOccurrences(tenantId: string): Promise<IngestionOccurrence[]>;
+  getOccurrence(tenantId: string, occurrenceId: number): Promise<IngestionOccurrence>;
+  reviewOccurrence(
+    tenantId: string,
+    occurrenceId: number,
+    status: "approved" | "rejected",
+  ): Promise<OccurrenceReviewResult>;
   createUploadedDocument(
     tenantId: string,
     input: {
@@ -112,6 +153,7 @@ export type IngestionRepository = {
         bbox: Record<string, number>;
         imageKey: string;
         confidence: number;
+        evidence?: string[];
         company: string;
         preview: string;
       }>;

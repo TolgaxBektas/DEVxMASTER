@@ -207,9 +207,51 @@ export function createIngestionRouter(
         }),
     }),
     occurrences: router({
+      capabilities: protectedProcedure.query(({ ctx }) => ({
+        review: ctx.auth.permissions.has("ingestion.occurrence.review"),
+      })),
       list: permissionProcedure("ingestion.occurrence.read").query(({ ctx }) =>
         repository.listOccurrences(ctx.auth.tenantId),
       ),
+      review: permissionProcedure("ingestion.occurrence.review")
+        .input(z.object({
+          id: z.number().int().positive(),
+          decision: z.enum(["approved", "rejected"]),
+        }))
+        .mutation(async ({ ctx, input }) => {
+          if (!audit) throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "Audit ist nicht konfiguriert.",
+          });
+          let result;
+          try {
+            result = await repository.reviewOccurrence(
+              ctx.auth.tenantId,
+              input.id,
+              input.decision,
+            );
+          } catch (error) {
+            if (String(error).includes("Fundstelle nicht gefunden")) {
+              throw new TRPCError({
+                code: "NOT_FOUND",
+                message: "Fundstelle nicht gefunden.",
+              });
+            }
+            throw error;
+          }
+          if (result.changed) {
+            await appendAudit(audit, {
+              tenantId: ctx.auth.tenantId,
+              action: `ingestion.occurrence.${input.decision}`,
+              entityType: "ingestion_occurrence",
+              entityId: input.id,
+              actorId: ctx.auth.user.id,
+              actorName: ctx.auth.user.displayName,
+              detailsJson: JSON.stringify({ status: input.decision }),
+            });
+          }
+          return result.occurrence;
+        }),
     }),
   });
 }

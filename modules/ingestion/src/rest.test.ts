@@ -20,16 +20,17 @@ async function start(permission = true, transaction = async <T>(callback: (db: u
       tenantId: "1",
       userId: "1",
       displayName: "Test",
-      permissions: new Set(permission ? ["ingestion.document.upload"] : []),
+      permissions: new Set(permission ? ["ingestion.document.upload", "ingestion.occurrence.read"] : []),
     };
     next();
   });
   const repository = new MemoryIngestionRepository();
   const audit: AuditRepository = new MemoryAuditRepository();
+  const storage = new NoopStorage();
   registerUploadRoute(app, {
     db: {},
     repository,
-    storage: new NoopStorage(),
+    storage,
     audit,
     auditFor: () => audit,
     transaction,
@@ -42,7 +43,7 @@ async function start(permission = true, transaction = async <T>(callback: (db: u
   await new Promise<void>((resolve) => server.listen(0, resolve));
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Server konnte nicht gestartet werden");
-  return { url: `http://127.0.0.1:${address.port}`, repository };
+  return { url: `http://127.0.0.1:${address.port}`, repository, storage };
 }
 
 function form(body: BlobPart, filename = "document.pdf") {
@@ -127,5 +128,71 @@ describe("Ingestion-Upload", () => {
     expect(response.status).toBe(201);
     expect(calls).toBe(2);
     expect(server.repository.documents).toHaveLength(1);
+  });
+
+  it("liefert Ausschnitte nur über die Fundstellenkennung und den eigenen Mandanten", async () => {
+    const server = await start();
+    const document = await server.repository.createUploadedDocument("1", {
+      filename: "review.pdf",
+      sha256: "i".repeat(64),
+      storageKey: "tenants/1/originals/i/review.pdf",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "upload",
+    });
+    const occurrence = (await server.repository.replaceProcessedDocument("1", document.document.id, [{
+      pageNumber: 1,
+      text: "Anzeige",
+      imageKey: "page.png",
+      classification: "MIXED_CONTENT",
+      adProbability: 0.9,
+      occurrences: [{
+        bbox: { x: 0, y: 0, width: 1, height: 1, confidence: 0.9 },
+        imageKey: "tenants/1/processed/i/ad.png",
+        confidence: 0.9,
+        evidence: [],
+        company: "Muster",
+        preview: "Muster Telefon",
+      }],
+    }]))[0];
+    if (!occurrence) throw new Error("Fundstelle fehlt");
+    await server.storage.put("tenants/1/processed/i/ad.png", Buffer.from("image"));
+    const response = await fetch(`${server.url}/api/ingestion/occurrences/${occurrence.id}/image`);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("image");
+    const missing = await fetch(`${server.url}/api/ingestion/occurrences/999/image`);
+    expect(missing.status).toBe(404);
+  });
+
+  it("verweigert den Bildabruf einer Fundstelle eines fremden Mandanten", async () => {
+    const server = await start();
+    const document = await server.repository.createUploadedDocument("2", {
+      filename: "tenant-2.pdf",
+      sha256: "j".repeat(64),
+      storageKey: "tenants/2/originals/j/tenant-2.pdf",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "upload",
+    });
+    const occurrence = (await server.repository.replaceProcessedDocument("2", document.document.id, [{
+      pageNumber: 1,
+      text: "Anzeige",
+      imageKey: "page.png",
+      classification: "MIXED_CONTENT",
+      adProbability: 0.9,
+      occurrences: [{
+        bbox: { x: 0, y: 0, width: 1, height: 1, confidence: 0.9 },
+        imageKey: "tenants/2/processed/j/ad.png",
+        confidence: 0.9,
+        evidence: [],
+        company: "Fremd",
+        preview: "Telefon",
+      }],
+    }]))[0];
+    if (!occurrence) throw new Error("Fundstelle fehlt");
+    await server.storage.put("tenants/2/processed/j/ad.png", Buffer.from("secret"));
+    const response = await fetch(`${server.url}/api/ingestion/occurrences/${occurrence.id}/image`);
+    expect(response.status).toBe(404);
+    expect((await response.json()).message).toBe("Fundstelle nicht gefunden.");
   });
 });

@@ -5,7 +5,7 @@ import { MemoryIngestionRepository } from "./memory-repository.js";
 import { advertisementEventIdempotencyKey, createIngestionModule } from "./module.js";
 import { deriveDocumentClassification, selectRegionSource } from "./classification.js";
 import { createDrizzleIngestionRepository } from "./drizzle-repository.js";
-import { classifications, documents } from "./schema.js";
+import { classifications, documents, occurrences, pages } from "./schema.js";
 import { classificationCorrectionSchema, createIngestionRouter } from "./router.js";
 import { periodIncludesYear } from "./repository.js";
 
@@ -540,6 +540,83 @@ describe("Ingestion-Bestand", () => {
     });
   });
 
+  it("liefert den übernommenen Reviewstatus auch aus der Drizzle-Fassung zurück", async () => {
+    const documentRow = {
+      id: 1201,
+      tenantId: 1,
+      sourceId: null,
+      filename: "1201.pdf",
+      sha256: "d".repeat(64),
+      storageKey: "tenants/1/originals/d/1201.pdf",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "upload",
+      state: "processing",
+      error: null,
+    };
+    const previousOccurrence = {
+      id: 88,
+      tenantId: 1,
+      documentId: 1201,
+      pageId: 77,
+      company: "Muster",
+      preview: "Muster Telefon",
+      status: "approved",
+      bbox: { confidence: 0.9, height: 1, width: 1, y: 0, x: 0 },
+      imageKey: "old.png",
+      confidence: 0.9,
+      evidence: ["geometry"],
+      createdAt: new Date(),
+    };
+    const previousPage = {
+      id: 77,
+      documentId: 1201,
+      pageNumber: 1,
+      text: "Anzeige",
+      imageKey: "page.png",
+      classification: "MIXED_CONTENT",
+      adProbability: 0.9,
+      createdAt: new Date(),
+    };
+    const query = (value: unknown) => Object.assign(
+      Promise.resolve(value),
+      { limit: async () => value },
+    );
+    const database = {
+      select: () => ({
+        from: (table: unknown) => ({
+          where: () => query(
+            table === documents ? [documentRow]
+              : table === occurrences ? [previousOccurrence]
+                : table === pages ? [previousPage] : [],
+          ),
+        }),
+      }),
+      delete: () => ({ where: async () => undefined }),
+      insert: (table: unknown) => ({
+        values: async () => [{ insertId: table === pages ? 78 : 89 }],
+      }),
+      update: () => ({ set: () => ({ where: async () => undefined }) }),
+    };
+    const repository = createDrizzleIngestionRepository(database);
+    const [created] = await repository.replaceProcessedDocument("1", 1201, [{
+      pageNumber: 1,
+      text: "Anzeige",
+      imageKey: "new-page.png",
+      classification: "MIXED_CONTENT",
+      adProbability: 0.9,
+      occurrences: [{
+        bbox: { x: 0, y: 0, width: 1, height: 1, confidence: 0.9 },
+        imageKey: "new.png",
+        confidence: 0.9,
+        evidence: ["geometry"],
+        company: "Muster",
+        preview: "Muster Telefon",
+      }],
+    }]);
+    expect(created?.status).toBe("approved");
+  });
+
   it("behandelt ein Dokument eines fremden Mandanten als nicht vorhanden", async () => {
     const repository = new MemoryIngestionRepository();
     const document = await repository.createUploadedDocument("1", {
@@ -682,6 +759,116 @@ describe("Ingestion-Bestand", () => {
     expect(repository.occurrences).toHaveLength(1);
     expect(publishedKeys).toHaveLength(2);
     expect(publishedKeys[0]).toBe(publishedKeys[1]);
+  });
+
+  it("speichert Evidenz, erhält Entscheidungen bei der erneuten Verarbeitung und auditert keine Wiederholung", async () => {
+    const repository = new MemoryIngestionRepository();
+    const audit = new MemoryAuditRepository();
+    const document = await repository.createUploadedDocument("1", {
+      filename: "review.pdf",
+      sha256: "r".repeat(64),
+      storageKey: "tenants/1/originals/r/review.pdf",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "upload",
+    });
+    await repository.replaceProcessedDocument("1", document.document.id, [{
+      pageNumber: 1,
+      text: "Anzeige",
+      imageKey: "page.png",
+      classification: "MIXED_CONTENT",
+      adProbability: 0.9,
+      occurrences: [{
+        bbox: { x: 0, y: 0, width: 1, height: 1, confidence: 0.9 },
+        imageKey: "ad.png",
+        confidence: 0.9,
+        evidence: ["geometry", "logo", "contact"],
+        company: "Muster",
+        preview: "Muster Telefon",
+      }],
+    }]);
+    const auth: AuthContext = {
+      tenantId: "1",
+      user: { id: "reviewer", email: null, displayName: "Prüfer" },
+      permissions: new Set(["ingestion.occurrence.read", "ingestion.occurrence.review"]),
+      provider: "local",
+    };
+    const caller = createIngestionRouter(repository, async () => undefined, undefined, undefined, audit)
+      .createCaller({ auth });
+    const before = (await caller.occurrences.list())[0];
+    if (!before) throw new Error("Fundstelle fehlt");
+    expect(before.evidence).toEqual(["geometry", "logo", "contact"]);
+    await caller.occurrences.review({ id: before.id, decision: "approved" });
+    await caller.occurrences.review({ id: before.id, decision: "approved" });
+    expect(audit.entries).toHaveLength(1);
+    const stored = repository.occurrences[0];
+    if (!stored) throw new Error("Fundstelle fehlt");
+    stored.bbox = {
+      confidence: 0.9000004,
+      height: 1.0000004,
+      width: 1.0000004,
+      y: 0.0000004,
+      x: 0.0000004,
+    };
+    await repository.replaceProcessedDocument("1", document.document.id, [{
+      pageNumber: 1,
+      text: "Anzeige",
+      imageKey: "page.png",
+      classification: "MIXED_CONTENT",
+      adProbability: 0.9,
+      occurrences: [{
+        bbox: { x: 0.0000003, y: 0, width: 1, height: 1, confidence: 0.9 },
+        imageKey: "new-ad.png",
+        confidence: 0.8,
+        evidence: ["geometry"],
+        company: "Muster",
+        preview: "Muster Telefon",
+      }],
+    }]);
+    const after = (await repository.listOccurrences("1"))[0];
+    if (!after) throw new Error("Fundstelle fehlt");
+    expect(after.status).toBe("approved");
+    expect(after.evidence).toEqual(["geometry"]);
+  });
+
+  it("trennt Fundstellenentscheidungen nach Mandant und Berechtigung", async () => {
+    const repository = new MemoryIngestionRepository();
+    const audit = new MemoryAuditRepository();
+    const document = await repository.createUploadedDocument("2", {
+      filename: "tenant-2.pdf",
+      sha256: "t".repeat(64),
+      storageKey: "tenants/2/originals/t/tenant-2.pdf",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "upload",
+    });
+    await repository.replaceProcessedDocument("2", document.document.id, [{
+      pageNumber: 1,
+      text: "Anzeige",
+      imageKey: "page.png",
+      classification: "MIXED_CONTENT",
+      adProbability: 0.9,
+      occurrences: [{
+        bbox: { x: 0, y: 0, width: 1, height: 1, confidence: 0.9 },
+        imageKey: "ad.png",
+        confidence: 0.9,
+        evidence: [],
+        company: "Mandant 2",
+        preview: "Telefon",
+      }],
+    }]);
+    const auth: AuthContext = {
+      tenantId: "1",
+      user: { id: "viewer", email: null, displayName: "Viewer" },
+      permissions: new Set(["ingestion.occurrence.read"]),
+      provider: "local",
+    };
+    const caller = createIngestionRouter(repository, async () => undefined, undefined, undefined, audit)
+      .createCaller({ auth });
+    expect(await caller.occurrences.list()).toHaveLength(0);
+    await expect(caller.occurrences.review({ id: 1, decision: "approved" })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
   });
 
   it("bildet Fundstellen ohne Laufzeit-ID stabil und unterscheidet gleiche Firmen auf einer Seite", () => {
