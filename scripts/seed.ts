@@ -28,7 +28,7 @@ const permissions = [
   "billing.dunning.read", "billing.dunning.run", "billing.creditnote.write",
   "ingestion.source.read", "ingestion.document.read", "ingestion.document.write",
   "ingestion.document.upload", "ingestion.document.classify",
-  "ingestion.occurrence.read",
+  "ingestion.occurrence.read", "ingestion.occurrence.review",
   "assistant.briefing.read", "assistant.chat", "assistant.proposal.read",
   "assistant.proposal.approve", "assistant.proposal.execute",
 ];
