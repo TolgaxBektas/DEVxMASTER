@@ -372,14 +372,23 @@ def _has_logo_evidence(layout, box):
     return False
 
 
-def _candidate_has_logo(layout, box, text, blocks, geometry_kind=None, page_dominant=False):
+def _candidate_has_logo(
+    layout,
+    box,
+    text,
+    blocks,
+    geometry_kind=None,
+    page_dominant=False,
+    allow_image_inference=False,
+):
     if _has_logo_evidence(layout, box):
         return True
     advertiser, contact = _advertiser_and_contact(text, blocks)
     area = (box[2] - box[0]) * (box[3] - box[1])
     page_area = layout["page_width"] * layout["page_height"]
     return (
-        geometry_kind == "image"
+        allow_image_inference
+        and geometry_kind == "image"
         and not page_dominant
         and area < page_area * 0.75
         and advertiser
@@ -486,14 +495,14 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
         for marker in marking_blocks:
             marker_box = marker["bbox"]
             if _intersection(box, marker_box) > 0:
-                return True
+                if marker_box[0] <= box[0] + 40 and marker_box[1] <= box[1] + 40:
+                    return True
             left_gap = box[0] - marker_box[2]
             vertical_gap = max(marker_box[1] - box[3], box[1] - marker_box[3], 0)
             if (
                 0 <= left_gap <= 40
                 and vertical_gap <= 40
-                and marker_box[1] < box[3] + 40
-                and marker_box[3] > box[1] - 40
+                and marker_box[1] <= box[1] + 40
             ):
                 return True
         return False
@@ -501,10 +510,19 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
     candidates = []
     material = _material_geometry(layout, width, height)
     coverage = _material_coverage(material, width, height)
-    ocr_neighbors = bool(marking_blocks) and sum(
-        (box[2] - box[0]) * (box[3] - box[1]) >= width * height * 0.08
+    large_material = [
+        box
         for box, _kind in material
-    ) >= 3
+        if (box[2] - box[0]) * (box[3] - box[1]) >= width * height * 0.08
+    ]
+    ocr_neighbors = (
+        bool(marking_blocks)
+        and len(large_material) >= 3
+        and all(
+            box[0] > 5 and box[1] > 5 and box[2] < width - 5 and box[3] < height - 5
+            for box in large_material
+        )
+    )
     dominant_material = any(
         (box[2] - box[0]) * (box[3] - box[1]) >= width * height * 0.75
         for box, _kind in material
@@ -564,6 +582,7 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
                 contained,
                 geometry_kind,
                 page_dominant,
+                ocr_neighbors,
             ),
         )
         if not accepted:
@@ -577,6 +596,7 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
             "page_dominant": page_dominant,
             "marked": marked,
             "text": candidate_text,
+            "ocr_neighbors": ocr_neighbors,
         })
     results = []
     for candidate in candidates:
@@ -598,6 +618,7 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
                 candidate["blocks"],
                 candidate["geometry"],
                 candidate["page_dominant"],
+                candidate.get("ocr_neighbors", False),
             ),
         )
         if not accepted:
@@ -614,6 +635,7 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
             candidate["blocks"],
             candidate["geometry"],
             candidate["page_dominant"],
+            candidate.get("ocr_neighbors", False),
         ):
             evidence.append("logo")
         if candidate["marked"]:
