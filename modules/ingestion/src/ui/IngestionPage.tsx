@@ -231,10 +231,10 @@ export function IngestionPage({ api }: ModulePageProps) {
               {row.error && <span>Fehler: {row.error}</span>}
             </div>
             {value && capabilities.data?.correct && <div className="stack">
-              {row.actualityStatus === "unverified" && <div className="row-actions">
-                <Button onClick={() => void api.mutate("modules.ingestion.documents.actuality", { id: row.id, status: "current" }).then(() => api.invalidate?.("modules.ingestion.documents.list"))}>Jahr bestätigt</Button>
-                <Button variant="danger" onClick={() => void api.mutate("modules.ingestion.documents.actuality", { id: row.id, status: "outdated" }).then(() => api.invalidate?.("modules.ingestion.documents.list"))}>Als veraltet markieren</Button>
-              </div>}
+              <div className="row-actions">
+                {row.actualityStatus !== "current" && <Button onClick={() => void api.mutate("modules.ingestion.documents.actuality", { id: row.id, status: "current" }).then(() => api.invalidate?.("modules.ingestion.documents.list"))}>Als aktuell bestätigen</Button>}
+                {row.actualityStatus !== "outdated" && <Button variant="danger" onClick={() => void api.mutate("modules.ingestion.documents.actuality", { id: row.id, status: "outdated" }).then(() => api.invalidate?.("modules.ingestion.documents.list"))}>Als veraltet markieren</Button>}
+              </div>
               <label>Art
                 <select name="type" defaultValue={value.type ?? ""}>
                   <option value="">Nicht erkannt</option>

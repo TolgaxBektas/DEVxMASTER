@@ -7,9 +7,10 @@ import {
   TRPCError,
 } from "@xmaster-center/kernel";
 import { ZodError, z } from "zod";
-import { IngestionSourceNotFoundError, occurrenceFingerprint, type IngestionRepository } from "./repository.js";
+import { IngestionSourceNotFoundError, type IngestionRepository } from "./repository.js";
 import type { PifReviewClient } from "./review-client.js";
 import type { ActualityStatus } from "./actuality.js";
+import { publishCurrentActualityTransition } from "./actuality-replay.js";
 
 export const classificationCorrectionSchema = z.object({
   id: z.number().int().positive(),
@@ -183,7 +184,9 @@ export function createIngestionRouter(
               message: "Keine Änderung vorgenommen.",
             });
           }
-          const current = (await repository.getDocument(ctx.auth.tenantId, id)).classification;
+          const before = await repository.getDocument(ctx.auth.tenantId, id);
+          const previousStatus = before.actualityStatus;
+          const current = before.classification;
           const effectiveStart = value.periodStartYear !== undefined
             ? value.periodStartYear
             : current?.periodStartYear;
@@ -207,6 +210,15 @@ export function createIngestionRouter(
             value,
             ctx.auth.user.id,
           );
+          const after = await repository.getDocument(ctx.auth.tenantId, id);
+          await publishCurrentActualityTransition({
+            tenantId: ctx.auth.tenantId,
+            document: after,
+            previousStatus,
+            currentStatus: after.actualityStatus,
+            occurrences: await repository.listOccurrences(ctx.auth.tenantId),
+            publish,
+          });
           await appendAudit(effectiveAudit, {
             tenantId: ctx.auth.tenantId,
             action: "ingestion.document.classification.corrected",
@@ -229,6 +241,7 @@ export function createIngestionRouter(
             message: "Audit ist nicht konfiguriert.",
           });
           const current = await repository.getDocument(ctx.auth.tenantId, input.id);
+          const previousStatus = current.actualityStatus;
           if (current.actualityStatus === input.status) return current;
           const result = await repository.decideDocumentActuality(
             ctx.auth.tenantId,
@@ -236,26 +249,14 @@ export function createIngestionRouter(
             input.status as Exclude<ActualityStatus, "unverified">,
             ctx.auth.user.id,
           );
-          if (input.status === "current") {
-            const document = await repository.getDocument(ctx.auth.tenantId, input.id);
-            const occurrences = await repository.listOccurrences(ctx.auth.tenantId);
-            for (const occurrence of occurrences.filter((item) => item.documentId === input.id)) {
-              await publish({
-                name: "advertisement.detected",
-                tenantId: ctx.auth.tenantId,
-                aggregateType: "occurrence",
-                aggregateId: String(occurrence.id),
-                payload: {
-                  occurrenceId: occurrence.id,
-                  documentId: input.id,
-                  company: occurrence.company,
-                  preview: occurrence.preview,
-                  actualityStatus: "current",
-                },
-                idempotencyKey: `advertisement.detected:actuality:${ctx.auth.tenantId}:${document.sha256}:${occurrenceFingerprint(occurrence)}`,
-              });
-            }
-          }
+          await publishCurrentActualityTransition({
+            tenantId: ctx.auth.tenantId,
+            document: result,
+            previousStatus,
+            currentStatus: result.actualityStatus,
+            occurrences: await repository.listOccurrences(ctx.auth.tenantId),
+            publish,
+          });
           await appendAudit(effectiveAudit, {
             tenantId: ctx.auth.tenantId,
             action: "ingestion.document.actuality.decided",
