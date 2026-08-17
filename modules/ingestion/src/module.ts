@@ -16,6 +16,7 @@ import { registerReviewImageRoutes, registerUploadRoute } from "./rest.js";
 import { persistDocumentBytes } from "./rest.js";
 import { deriveDocumentClassification } from "./classification.js";
 import { documentActualityStatus } from "./actuality.js";
+import { publishCurrentActualityTransition } from "./actuality-replay.js";
 import { ingestionPages, IngestionPage, OccurrencesPage, ReviewPage } from "./ui/index.js";
 import type { PifReviewClient } from "./review-client.js";
 
@@ -265,6 +266,9 @@ export function createIngestionModule(deps: {
               await deps.transaction(async (db) => {
                 const txRepository = deps.repositoryForTransaction?.(db)
                   ?? createDrizzleIngestionRepository(db);
+              const previousOccurrences = (await txRepository.listOccurrences(tenantId))
+                .filter((item) => item.documentId === document.id);
+              const previousStatus = document.actualityStatus;
               await txRepository.upsertDerivedClassification(
                 tenantId,
                 document.id,
@@ -283,6 +287,21 @@ export function createIngestionModule(deps: {
               const executor = createDrizzleEventRepository(db);
               const actualityStatus = processedDocument.actualityStatus
                 ?? documentActualityStatus(processedDocument.classification);
+              if (
+                previousOccurrences.length > 0
+                && previousStatus !== actualityStatus
+                && actualityStatus === "current"
+              ) {
+                await publishCurrentActualityTransition({
+                  tenantId,
+                  document: processedDocument,
+                  previousStatus,
+                  currentStatus: actualityStatus,
+                  occurrences,
+                  publish: deps.publish,
+                  executor,
+                });
+              }
               for (const occurrence of occurrences) {
                 await deps.publish({
                   name: "advertisement.detected",
