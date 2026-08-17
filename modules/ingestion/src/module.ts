@@ -15,6 +15,7 @@ import { occurrenceFingerprint, type IngestionRepository } from "./repository.js
 import { registerReviewImageRoutes, registerUploadRoute } from "./rest.js";
 import { persistDocumentBytes } from "./rest.js";
 import { deriveDocumentClassification } from "./classification.js";
+import { documentActualityStatus } from "./actuality.js";
 import { ingestionPages, IngestionPage, OccurrencesPage, ReviewPage } from "./ui/index.js";
 import type { PifReviewClient } from "./review-client.js";
 
@@ -278,6 +279,9 @@ export function createIngestionModule(deps: {
                   document.id,
                   pages,
                 );
+                const processedDocument = await txRepository.getDocument(tenantId, document.id);
+                const actualityStatus = processedDocument.actualityStatus
+                  ?? documentActualityStatus(processedDocument.classification);
                 const executor = createDrizzleEventRepository(db);
                 for (const occurrence of occurrences) {
                   await deps.publish({
@@ -290,6 +294,7 @@ export function createIngestionModule(deps: {
                       documentId: document.id,
                       company: occurrence.company,
                       preview: occurrence.preview,
+                      actualityStatus,
                     },
                     idempotencyKey: advertisementEventIdempotencyKey(
                       tenantId,

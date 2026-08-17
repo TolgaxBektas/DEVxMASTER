@@ -17,8 +17,8 @@ EDITORIAL_SIGNALS = re.compile(
     re.I,
 )
 PUBLIC_ORIGIN_SIGNALS = re.compile(
-    r'(?:\b(?:stadt|gemeinde|landkreis|kreisverwaltung|kommunal\w*|'
-    r'ministerium|landesregierung)\b|'
+    r'(?:\b(?:kreisverwaltung|ministerium|landesregierung|bezirksamt|'
+    r'landesbehörde)\b|'
     r'\bgefördert\s+(?:von|durch)\b|'
     r'\blandes(?:mittel|verband|wappen)\b)',
     re.I,
@@ -29,6 +29,7 @@ DIRECTORY_SIGNALS = re.compile(
 )
 MAX_ADS_PER_PAGE = 24
 MAX_CROP_PIXELS = 18_000_000
+MAX_OCR_REGIONS_PER_PAGE = 12
 
 
 def _layout_for_page(page):
@@ -256,7 +257,13 @@ def _sender_has_strong_public_origin(text, blocks):
     )
     if not blocks:
         prominent = text
-    return bool(PUBLIC_ORIGIN_SIGNALS.search(prominent))
+    if PUBLIC_ORIGIN_SIGNALS.search(prominent):
+        return True
+    return bool(re.search(
+        r'\b(?:stadt|gemeinde)\b[^.]{0,60}\b(?:amt|verwaltung|behörde|seniorenberatung|kontaktbüro)\b',
+        prominent,
+        re.I,
+    ))
 
 
 def _looks_directory_or_overview(text, blocks, page_dominant=False, logo=False):
@@ -510,6 +517,29 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
         return False
 
     candidates = []
+    ocr_cache = {}
+    ocr_calls = 0
+
+    def enrich_with_ocr(candidate_text, box):
+        nonlocal ocr_calls
+        if not ocr_neighbors or len(candidate_text.split()) >= 4:
+            return candidate_text
+        key = tuple(round(value, 2) for value in box)
+        if key not in ocr_cache:
+            if ocr_calls >= MAX_OCR_REGIONS_PER_PAGE:
+                return candidate_text
+            ocr_calls += 1
+            try:
+                ocr_cache[key] = _ocr_region_text(page_image, box, width, height)
+            except Exception:
+                ocr_cache[key] = ""
+        ocr_text = ocr_cache[key]
+        if len(ocr_text.split()) > len(candidate_text.split()):
+            return ocr_text
+        if not _has_phone(candidate_text) and _has_phone(ocr_text):
+            return ocr_text
+        return candidate_text
+
     material = _material_geometry(layout, width, height)
     coverage = _material_coverage(material, width, height)
     large_material = [
@@ -534,8 +564,7 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
         box = (max(0, box[0]), max(0, box[1]), min(width, box[2]), min(height, box[3]))
         contained = list(blocks)
         candidate_text = " ".join(block["text"] for block in contained)
-        if ocr_neighbors and len(candidate_text.split()) < 4:
-            candidate_text = _ocr_region_text(page_image, box, width, height)
+        candidate_text = enrich_with_ocr(candidate_text, box)
         if len(candidate_text.split()) < 10 and len((text or "").split()) > len(candidate_text.split()):
             candidate_text = text
         marked = bool(marking_blocks)
@@ -565,8 +594,7 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
             (block["bbox"][2] - block["bbox"][0]) * (block["bbox"][3] - block["bbox"][1])
         )]
         candidate_text = " ".join(block["text"] for block in contained)
-        if ocr_neighbors and len(candidate_text.split()) < 4:
-            candidate_text = _ocr_region_text(page_image, box, width, height)
+        candidate_text = enrich_with_ocr(candidate_text, box)
         advertiser, contact = _advertiser_and_contact(candidate_text, contained)
         marked = marked_box(box)
         page_dominant = geometry_kind == "image" and (

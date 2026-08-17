@@ -8,6 +8,8 @@ type Row = {
   sha256?: string;
   error?: string | null;
   classification?: Classification | null;
+  actualityStatus?: "current" | "outdated" | "unverified";
+  actualitySource?: "derived" | "manual";
 };
 type Classification = {
   type: string | null;
@@ -41,13 +43,15 @@ export function IngestionPage({ api }: ModulePageProps) {
   const [type, setType] = useState("");
   const [regionState, setRegionState] = useState("");
   const [periodYear, setPeriodYear] = useState("");
-  const [appliedFilters, setAppliedFilters] = useState({ type: "", regionState: "", periodYear: "" });
+  const [actualityStatus, setActualityStatus] = useState("");
+  const [appliedFilters, setAppliedFilters] = useState({ type: "", regionState: "", periodYear: "", actualityStatus: "" });
   const [message, setMessage] = useState("");
   const [touchedFields, setTouchedFields] = useState<Record<number, string[]>>({});
   const filters = {
     ...(appliedFilters.type ? { type: appliedFilters.type } : {}),
     ...(appliedFilters.regionState ? { regionState: appliedFilters.regionState } : {}),
     ...(appliedFilters.periodYear ? { periodYear: Number(appliedFilters.periodYear) } : {}),
+    ...(appliedFilters.actualityStatus ? { actualityStatus: appliedFilters.actualityStatus } : {}),
   };
   const documents = useModuleQuery<Row[]>(api, "modules.ingestion.documents.list", filters);
   const capabilities = useModuleQuery<{ correct: boolean }>(
@@ -185,8 +189,16 @@ export function IngestionPage({ api }: ModulePageProps) {
         <label>Zeitraum enthält Jahr
           <input value={periodYear} onChange={(event) => setPeriodYear(event.target.value.replace(/\D/g, "").slice(0, 4))} inputMode="numeric" placeholder="z. B. 2020" />
         </label>
+        <label>Aktualität
+          <select value={actualityStatus} onChange={(event) => setActualityStatus(event.target.value)}>
+            <option value="">Alle Zustände</option>
+            <option value="current">Aktuell</option>
+            <option value="outdated">Veraltet</option>
+            <option value="unverified">Jahr unbelegt</option>
+          </select>
+        </label>
       </div>
-      <Button onClick={() => setAppliedFilters({ type, regionState, periodYear })}>Filtern</Button>
+      <Button onClick={() => setAppliedFilters({ type, regionState, periodYear, actualityStatus })}>Filtern</Button>
     </Card>
     <Card>
       <h2>Dokumente</h2>
@@ -211,9 +223,18 @@ export function IngestionPage({ api }: ModulePageProps) {
               <span>Publikation: {value?.publicationName ?? "nicht erkannt"} · {value ? sourceLabel(value.publicationNameSource, value.publicationNameConfidence) : "—"}</span>
               <span>Region: {[value?.regionPlace, value?.regionDistrict, value?.regionState].filter(Boolean).join(" · ") || "nicht erkannt"} · {value ? sourceLabel(value.regionSource, value.regionConfidence) : "—"}</span>
               <span>Zeitraum: {value?.editionLabel ?? (value?.periodStartYear ? `${value.periodStartYear}${value.periodEndYear !== value.periodStartYear ? `/${value.periodEndYear}` : ""}` : "nicht erkannt")} · {value ? sourceLabel(value.periodSource, value.periodConfidence) : "—"}</span>
+              <span>Aktualität: {{
+                current: "Aktuell",
+                outdated: "Veraltet",
+                unverified: "Jahr unbelegt",
+              }[row.actualityStatus ?? "unverified"]}</span>
               {row.error && <span>Fehler: {row.error}</span>}
             </div>
             {value && capabilities.data?.correct && <div className="stack">
+              {row.actualityStatus === "unverified" && <div className="row-actions">
+                <Button onClick={() => void api.mutate("modules.ingestion.documents.actuality", { id: row.id, status: "current" }).then(() => api.invalidate?.("modules.ingestion.documents.list"))}>Jahr bestätigt</Button>
+                <Button variant="danger" onClick={() => void api.mutate("modules.ingestion.documents.actuality", { id: row.id, status: "outdated" }).then(() => api.invalidate?.("modules.ingestion.documents.list"))}>Als veraltet markieren</Button>
+              </div>}
               <label>Art
                 <select name="type" defaultValue={value.type ?? ""}>
                   <option value="">Nicht erkannt</option>

@@ -118,7 +118,9 @@ def test_ocr_recovers_phone_and_text_from_image_only_neighbor_ads(monkeypatch):
     result = heuristic_ad_regions(
         b"not-an-image",
         "",
-        layout([block(10, 10, 35, 18, "Anzeigen", (8,))], [
+        layout([
+            block(10, 10, 35, 18, "Anzeigen", (8,)),
+        ], [
             drawing(100, 60, 900, 250),
             drawing(100, 330, 900, 520),
             logo_drawing(160, 370, 240, 420),
@@ -138,7 +140,9 @@ def test_ocr_excludes_communally_owned_sender(monkeypatch):
     result = heuristic_ad_regions(
         b"not-an-image",
         "",
-        layout([block(10, 10, 35, 18, "Anzeigen", (8,))], [
+        layout([
+            block(10, 10, 35, 18, "Anzeigen", (8,)),
+        ], [
             drawing(100, 60, 900, 250),
             drawing(100, 330, 900, 520),
             drawing(100, 620, 900, 760),
@@ -320,7 +324,6 @@ def test_strong_public_origin_is_excluded():
         "Gefördert von: Kontaktbüro Pflegehilfe Telefon 0234 3253523",
         "Ministerium für Gesundheit Telefon 0234 3253523",
         "Stadt Bochum Seniorenberatung Telefon 0234 3253523",
-        "Kommunale Wohnungsgesellschaft Telefon 0234 3253523",
     ):
         result = heuristic_ad_regions(
             b"",
@@ -330,6 +333,64 @@ def test_strong_public_origin_is_excluded():
             ], [drawing(120, 120, 880, 320), logo_drawing(220, 190, 320, 240)]),
         )
         assert result == []
+
+
+def test_publicly_owned_company_remains_an_ad():
+    result = heuristic_ad_regions(
+        b"",
+        "",
+        layout([
+            block(180, 180, 820, 260, "Senioreneinrichtungen der Stadt Bochum gGmbH Telefon 0234 9352900", (18, 28), ("Display", "Bold")),
+        ], [drawing(120, 120, 880, 320), logo_drawing(220, 190, 320, 240)]),
+    )
+    assert len(result) == 1
+    assert "provenance-uncertain" in result[0]["evidence"]
+
+
+def test_failed_ocr_keeps_existing_block_text(monkeypatch):
+    calls = 0
+
+    def fail(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("OCR unavailable")
+
+    monkeypatch.setattr("app.services.processor._ocr_region_text", fail)
+    result = heuristic_ad_regions(
+        b"not-an-image",
+        "",
+        layout([
+            block(10, 10, 35, 18, "Anzeigen", (8,)),
+            block(100, 100, 900, 180, "Pflege-Zentrum 0234 9352900", (10,)),
+        ], [
+            drawing(60, 80, 940, 180),
+            drawing(60, 190, 940, 290),
+            drawing(60, 300, 940, 400),
+            logo_drawing(180, 90, 300, 140),
+        ]),
+    )
+    assert result
+    assert calls <= 3
+
+
+def test_ocr_regions_are_capped_and_cached(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "app.services.processor._ocr_region_text",
+        lambda *_args: calls.append(True) or "Private Pflegehilfe Telefon 0234 9352900",
+    )
+    result = heuristic_ad_regions(
+        b"not-an-image",
+        "",
+        layout([block(10, 10, 35, 18, "Anzeigen", (8,))], [
+            drawing(100, 60, 900, 250),
+            drawing(100, 330, 900, 520),
+            drawing(100, 620, 900, 760),
+            logo_drawing(180, 90, 300, 140),
+        ]),
+    )
+    assert result
+    assert len(calls) <= 3
 
 
 def test_brand_name_alone_does_not_guess_public_origin():
