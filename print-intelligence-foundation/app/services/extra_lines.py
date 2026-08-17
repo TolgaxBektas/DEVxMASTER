@@ -639,12 +639,6 @@ def compose_extra_lines(
         content_end_value = content_end
         insertion_gap = gap
         band_end = content_end + gap
-    centred = (
-        True
-        if not band_fits
-        else abs((anchor["left"] + anchor["right"]) / 2 - source.width / 2)
-        < source.width * 0.06
-    )
     content_bounds = _content_bounds(source, _edge_colour(source)) or (
         0,
         source.width,
@@ -653,6 +647,23 @@ def compose_extra_lines(
     margin = max(int(round(source.width * 0.04)), cap_height)
     left_limit = content_left + margin
     right_limit = content_right - margin
+    anchor_text = anchor["text"].strip()
+    domain_only = bool(
+        re.fullmatch(
+            r"(?:[a-z]+://)?(?:www\.)?[^\s/]+\.[a-z]{2,}(?:/\S*)?",
+            anchor_text,
+            flags=re.I,
+        )
+    )
+    centred = (
+        abs((anchor["left"] + anchor["right"]) / 2 - source.width / 2)
+        < source.width * 0.06
+        and not (
+            not domain_only
+            and anchor["left"]
+            <= left_limit + (content_right - content_left) * 0.08
+        )
+    )
     max_available = right_limit - left_limit
     desired_left = max(left_limit, anchor["left"])
     if max_available <= 0:

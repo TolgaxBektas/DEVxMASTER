@@ -47,7 +47,7 @@ def test_appends_strip_when_no_uniform_contact_bar_exists(monkeypatch):
     result = compose_extra_lines(image, ["www.facebook.com/example"])
 
     assert result.manifest["placement"] == "appended_strip"
-    assert result.manifest["centred"] is True
+    assert result.manifest["centred"] is False
     assert result.manifest["background"] == [230, 230, 230]
     assert result.image.height > image.height
 
@@ -526,14 +526,15 @@ def test_blocks_use_inner_frame_bounds_instead_of_image_edges(monkeypatch):
 def test_appended_strip_fits_font_after_final_centering(monkeypatch):
     image = Image.new("RGB", (500, 140), "white")
     ImageDraw.Draw(image).rectangle((0, 30, 499, 60), fill=(20, 80, 140))
-    anchor = _anchor(left=440, right=490, bottom=60)
+    anchor = _anchor(left=80, right=140, bottom=60)
     monkeypatch.setattr(extra_lines, "_anchor", lambda _image: anchor)
 
     result = compose_extra_lines(image, [("website", "www.example.de")])
 
     assert result.manifest["status"] == "composed"
     assert result.manifest["placement"] == "appended_strip"
-    assert result.manifest["centred"] is True
+    assert result.manifest["centred"] is False
+    assert result.manifest["blocks"][0]["rows"][0]["position"][0] == 80
     probe = extra_lines._fit_font(
         "X", result.manifest["cap_height"], result.manifest["bold"]
     )
