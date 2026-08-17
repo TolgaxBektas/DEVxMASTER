@@ -176,7 +176,10 @@ def _decode_qr(image: Image.Image) -> tuple[list[str], str | None]:
         return [], "QR-Code-Prüfung nicht verfügbar (Decoder nicht installiert)."
     try:
         pixel_budget = 4_000_000
-        scale = min(4.0, (pixel_budget / max(1, image.width * image.height)) ** 0.5)
+        scale = max(
+            1.0,
+            min(4.0, (pixel_budget / max(1, image.width * image.height)) ** 0.5),
+        )
         enlarged_size = (
             max(1, round(image.width * scale)),
             max(1, round(image.height * scale)),
@@ -212,9 +215,12 @@ def _decode_qr(image: Image.Image) -> tuple[list[str], str | None]:
                     min(image.width, left + tile_width),
                     min(image.height, top + tile_height),
                 ))
-                tile_scale = min(
-                    4.0,
-                    (pixel_budget / max(1, tile.width * tile.height)) ** 0.5,
+                tile_scale = max(
+                    1.0,
+                    min(
+                        4.0,
+                        (pixel_budget / max(1, tile.width * tile.height)) ** 0.5,
+                    ),
                 )
                 yield tile.resize(
                     (
