@@ -47,7 +47,7 @@ def test_appends_strip_when_no_uniform_contact_bar_exists(monkeypatch):
     result = compose_extra_lines(image, ["www.facebook.com/example"])
 
     assert result.manifest["placement"] == "appended_strip"
-    assert result.manifest["centred"] is False
+    assert result.manifest["centred"] is True
     assert result.manifest["background"] == [230, 230, 230]
     assert result.image.height > image.height
 
@@ -367,6 +367,53 @@ def test_whole_image_anchor_controls_alignment_while_band_detects_duplicate(
     assert result.manifest["anchor_box"][0] == 100
     assert result.manifest["discarded"][0]["reason"] == "already_present"
     assert result.manifest["blocks"][0]["rows"][0]["position"][0] == 100
+
+
+def test_split_contact_segments_ignore_right_hand_logo_for_alignment(monkeypatch):
+    image = Image.new("RGB", (600, 180), "white")
+    ImageDraw.Draw(image).rectangle((0, 40, 599, 179), fill=(20, 80, 140))
+    lines = [
+        {
+            "text": "06441 42071 MÖBEL SCHMIDT",
+            "left": 355,
+            "top": 80,
+            "right": 560,
+            "bottom": 95,
+            "ocr_source": "whole_image",
+            "words": [
+                {"text": "06441", "left": 355, "top": 80, "right": 385, "bottom": 95, "height": 15},
+                {"text": "42071", "left": 390, "top": 80, "right": 425, "bottom": 95, "height": 15},
+                {"text": "MÖBEL", "left": 500, "top": 80, "right": 535, "bottom": 95, "height": 15},
+                {"text": "SCHMIDT", "left": 540, "top": 80, "right": 600, "bottom": 95, "height": 15},
+            ],
+        },
+        {
+            "text": "Hintergasse 13 35576 Wetzlar",
+            "left": 355,
+            "top": 100,
+            "right": 500,
+            "bottom": 115,
+            "ocr_source": "whole_image",
+            "words": [
+                {"text": "Hintergasse", "left": 355, "top": 100, "right": 420, "bottom": 115, "height": 15},
+                {"text": "13", "left": 425, "top": 100, "right": 440, "bottom": 115, "height": 15},
+                {"text": "35576", "left": 445, "top": 100, "right": 480, "bottom": 115, "height": 15},
+                {"text": "Wetzlar", "left": 485, "top": 100, "right": 530, "bottom": 115, "height": 15},
+            ],
+        },
+    ]
+    monkeypatch.setattr(
+        extra_lines,
+        "_ocr_lines",
+        lambda _image: (lines, {"bands_used": 0}),
+    )
+
+    result = compose_extra_lines(image, [("fax", "06441 9876")])
+
+    assert result.manifest["status"] == "composed"
+    assert result.manifest["centred"] is False
+    assert result.manifest["anchor_box"][0] == 355
+    assert result.manifest["blocks"][0]["rows"][0]["position"][0] == 355
 
 
 def test_digits_are_compared_as_contained_sequence(monkeypatch):

@@ -56,6 +56,7 @@ def _lines(
             {
                 "text": [],
                 "heights": [],
+                "words": [],
                 "left": left,
                 "top": top,
                 "right": left,
@@ -64,12 +65,23 @@ def _lines(
         )
         line["text"].append(text)
         line["heights"].append((text, data["height"][index]))
+        line["words"].append(
+            {
+                "text": text,
+                "left": left,
+                "top": top,
+                "right": left + data["width"][index],
+                "bottom": top + data["height"][index],
+                "height": data["height"][index],
+            }
+        )
         line["left"] = min(line["left"], left)
         line["top"] = min(line["top"], top)
         line["right"] = max(line["right"], left + data["width"][index])
         line["bottom"] = max(line["bottom"], top + data["height"][index])
     for line in grouped.values():
         line["text"] = " ".join(line["text"])
+        line["words"].sort(key=lambda word: word["left"])
     return sorted(grouped.values(), key=lambda line: line["top"])
 
 
@@ -132,21 +144,105 @@ def _ocr_lines(image: Image.Image) -> tuple[list[dict[str, Any]], dict[str, Any]
     return ocr_lines, metadata
 
 
+def _contact_segments(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    segments = []
+    for line in lines:
+        words = line.get("words") or [
+            {
+                "text": line.get("text", ""),
+                "left": line["left"],
+                "top": line["top"],
+                "right": line["right"],
+                "bottom": line["bottom"],
+                "height": max(
+                    [height for _word, height in line.get("heights", [])] or [1]
+                ),
+            }
+        ]
+        median_height = sorted(word["height"] for word in words)[len(words) // 2]
+        current = [words[0]]
+        groups = []
+        for word in words[1:]:
+            gap = word["left"] - current[-1]["right"]
+            if gap > max(3 * median_height, 3):
+                groups.append(current)
+                current = [word]
+            else:
+                current.append(word)
+        groups.append(current)
+        for group in groups:
+            segments.append(
+                {
+                    "text": " ".join(word["text"] for word in group),
+                    "heights": [
+                        (word["text"], word["height"]) for word in group
+                    ],
+                    "left": group[0]["left"],
+                    "top": min(word["top"] for word in group),
+                    "right": group[-1]["right"],
+                    "bottom": max(word["bottom"] for word in group),
+                    "ocr_source": line.get("ocr_source"),
+                    "full_text": line.get("text", ""),
+                }
+            )
+    return segments
+
+
+def _contact_score(segment: dict[str, Any]) -> int:
+    text = segment["text"]
+    return (
+        len(re.findall(r"\d", text))
+        + 3 * bool(re.search(r"@", text))
+        + 2 * bool(re.search(r"(?:www\.|https?://|\.de\b)", text, re.I))
+    )
+
+
 def _anchor(image: Image.Image) -> dict[str, Any] | None:
     ocr_lines, metadata = _ocr_lines(image)
+    whole_lines = [
+        line for line in ocr_lines if line.get("ocr_source") == "whole_image"
+    ]
+    alignment_segments = _contact_segments(whole_lines or ocr_lines)
     contacts = [
-        line
-        for line in ocr_lines
-        if line.get("ocr_source") == "whole_image"
-        and CONTACT_RE.search(line["text"])
+        segment
+        for segment in alignment_segments
+        if CONTACT_RE.search(segment["text"])
     ]
     if not contacts:
-        contacts = [
-            line for line in ocr_lines if CONTACT_RE.search(line["text"])
-        ]
-    if not contacts:
         return None
-    anchor = dict(max(contacts, key=lambda line: line["bottom"]))
+    anchor = dict(
+        max(contacts, key=lambda segment: (segment["bottom"], _contact_score(segment)))
+    )
+    heights = sorted(
+        height for segment in contacts for _word, height in segment["heights"]
+    )
+    tolerance = max(1, heights[len(heights) // 2])
+    left_groups: list[list[dict[str, Any]]] = []
+    for segment in sorted(contacts, key=lambda item: item["left"]):
+        group = next(
+            (
+                group
+                for group in left_groups
+                if abs(group[0]["left"] - segment["left"]) <= tolerance
+            ),
+            None,
+        )
+        if group is None:
+            left_groups.append([segment])
+        else:
+            group.append(segment)
+    common = max(
+        left_groups,
+        key=lambda group: len({segment["text"] for segment in group}),
+        default=[],
+    )
+    distinct_common = {segment["text"] for segment in common}
+    anchor["alignment_left"] = (
+        round(sum(segment["left"] for segment in common) / len(common), 2)
+        if len(distinct_common) >= 2
+        else None
+    )
+    anchor["contact_segments"] = contacts
     anchor["ocr_lines"] = ocr_lines
     anchor["ocr_metadata"] = metadata
     return anchor
@@ -658,25 +754,22 @@ def compose_extra_lines(
     margin = max(int(round(source.width * 0.04)), cap_height)
     left_limit = content_left + margin
     right_limit = content_right - margin
-    anchor_text = anchor["text"].strip()
-    domain_only = bool(
-        re.fullmatch(
-            r"(?:[a-z]+://)?(?:www\.)?[^\s/]+\.[a-z]{2,}(?:/\S*)?",
-            anchor_text,
-            flags=re.I,
+    if anchor.get("alignment_left") is not None:
+        centred = False
+    else:
+        centred = (
+            abs((anchor["left"] + anchor["right"]) / 2 - source.width / 2)
+            < source.width * 0.06
         )
-    )
-    centred = (
-        abs((anchor["left"] + anchor["right"]) / 2 - source.width / 2)
-        < source.width * 0.06
-        and not (
-            not domain_only
-            and anchor["left"]
-            <= left_limit + (content_right - content_left) * 0.08
-        )
-    )
     max_available = right_limit - left_limit
-    desired_left = max(left_limit, anchor["left"])
+    desired_left = max(
+        left_limit,
+        (
+            anchor["alignment_left"]
+            if anchor.get("alignment_left") is not None
+            else anchor["left"]
+        ),
+    )
     if max_available <= 0:
         return ExtraLineComposition(
             source.copy(),
