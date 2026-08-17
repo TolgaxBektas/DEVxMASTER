@@ -198,6 +198,17 @@ def _content_end(image: Image.Image, background: tuple[int, int, int]) -> int:
     return 0
 
 
+def _uniform_rows(
+    image: Image.Image,
+    start: int,
+    end: int,
+    background: tuple[int, int, int],
+) -> bool:
+    return start >= 0 and end <= image.height and start < end and all(
+        _row_uniform(image, y, background) for y in range(start, end)
+    )
+
+
 def _average(pixels: list[tuple[int, int, int]]) -> tuple[int, int, int]:
     return tuple(
         sum(pixel[index] for pixel in pixels) // len(pixels) for index in range(3)
@@ -497,11 +508,23 @@ def compose_extra_lines(
         )
     text_colour, background = colours
     text_colour = _snap(text_colour)
-    heights = sorted(
+    anchor_heights = sorted(
         [height for word, height in anchor["heights"] if CONTACT_RE.search(word)]
         or [height for _word, height in anchor["heights"]]
     )
-    cap_height = max(1, heights[len(heights) // 2])
+    contact_heights = []
+    for line in anchor.get("ocr_lines", [anchor]):
+        line_heights = [
+            height
+            for word, height in line.get("heights", [])
+            if CONTACT_RE.search(word)
+        ]
+        if not line_heights and CONTACT_RE.search(line.get("text", "")):
+            line_heights = [height for _word, height in line.get("heights", [])]
+        contact_heights.extend(line_heights)
+    reference_heights = sorted(contact_heights or anchor_heights)
+    anchor_height = max(1, anchor_heights[len(anchor_heights) // 2])
+    cap_height = max(1, reference_heights[len(reference_heights) // 2])
     bold = _is_bold(source, anchor, text_colour, background)
     margin = max(int(round(source.width * 0.04)), cap_height)
     available = source.width - 2 * margin
@@ -559,6 +582,8 @@ def compose_extra_lines(
     band_fits = band_end - anchor["bottom"] >= line_height * 0.4 and _row_uniform(
         source, band_end - 1, background
     )
+    content_end_value = None
+    insertion_gap = None
     if not band_fits:
         centred = True
         bottom = list(
@@ -579,21 +604,31 @@ def compose_extra_lines(
         background = max(set(bottom), key=bottom.count)
         text_colour = (0, 0, 0) if sum(background) > 381 else (255, 255, 255)
         content_end = _content_end(source, background)
-        lower_margin = max(0, source.height - content_end)
-        band_end = min(source.height, content_end + min(lower_margin, line_height))
+        gap = max(1, int(round(line_height / 2)))
+        content_end_value = content_end
+        insertion_gap = gap
+        band_end = content_end + gap
     content_height = sum(len(block["rows"]) * line_height for block in blocks)
     content_height += block_gap * max(0, len(blocks) - 1) + bottom_air
-    grown = Image.new("RGB", (source.width, source.height + content_height), background)
-    grown.paste(source.crop((0, 0, source.width, band_end)), (0, 0))
+    if not band_fits:
+        available = max(0, source.height - band_end)
+        fits_margin = available >= content_height and _uniform_rows(
+            source, band_end, band_end + content_height, background
+        )
+        missing = max(0, content_height - available)
+        output_height = source.height if fits_margin else source.height + missing
+        grown = source.copy() if fits_margin else Image.new(
+            "RGB", (source.width, output_height), background
+        )
+        if not fits_margin:
+            grown.paste(source, (0, 0))
+    else:
+        grown = Image.new("RGB", (source.width, source.height + content_height), background)
+        grown.paste(source.crop((0, 0, source.width, band_end)), (0, 0))
     if band_fits:
         seam = source.crop((0, band_end - 1, source.width, band_end))
         for offset in range(content_height):
             grown.paste(seam, (0, band_end + offset))
-        grown.paste(
-            source.crop((0, band_end, source.width, source.height)),
-            (0, band_end + content_height),
-        )
-    else:
         grown.paste(
             source.crop((0, band_end, source.width, source.height)),
             (0, band_end + content_height),
@@ -662,14 +697,19 @@ def compose_extra_lines(
             "font_size": font.size,
             "bold": bold,
             "band_end": band_end,
+            "content_end": content_end_value,
+            "insertion_gap": insertion_gap,
             "centred": centred,
+            "anchor_height": anchor_height,
             "cap_height": cap_height,
+            "reference_height": cap_height,
             "line_height": line_height,
             "block_gap": block_gap,
             "lines": line_values,
             "discarded": discarded,
             "blocks": manifest_blocks,
             "ocr": anchor.get("ocr_metadata", {}),
+            "grew": grown.height > source.height,
             "output_size": list(grown.size),
         },
     )

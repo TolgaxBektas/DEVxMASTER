@@ -37,7 +37,7 @@ def test_composes_measured_lines_into_uniform_contact_bar(monkeypatch):
 
 
 def test_appends_strip_when_no_uniform_contact_bar_exists(monkeypatch):
-    image = Image.new("RGB", (200, 100), "white")
+    image = Image.new("RGB", (200, 70), "white")
     draw = ImageDraw.Draw(image)
     draw.rectangle((20, 40, 179, 49), fill="black")
     draw.rectangle((0, 50, 199, 99), fill=(230, 230, 230))
@@ -234,7 +234,8 @@ def test_appended_strip_is_near_content_not_bottom_margin(monkeypatch):
     assert result.manifest["placement"] == "appended_strip"
     assert result.manifest["band_end"] < image.height
     assert result.manifest["band_end"] - result.manifest["line_height"] <= 81
-    assert result.image.height > image.height
+    assert result.manifest["grew"] is False
+    assert result.image.height == image.height
     added = result.image.height - image.height
     assert result.image.getpixel((0, image.height - 1 + added)) == image.getpixel(
         (0, image.height - 1)
@@ -295,6 +296,65 @@ def test_short_postal_or_house_number_does_not_count_as_duplicate(monkeypatch):
 
     assert result.manifest["status"] == "composed"
     assert result.manifest.get("discarded", []) == []
+
+
+def test_reference_height_uses_all_contact_lines_not_only_anchor(monkeypatch):
+    image = Image.new("RGB", (500, 160), "white")
+    ImageDraw.Draw(image).rectangle((0, 40, 499, 159), fill=(20, 80, 140))
+    anchor = _anchor(bottom=60)
+    anchor["ocr_lines"] = [
+        {**anchor, "text": "Telefon 06441 12345", "heights": [("Telefon", 10), ("06441", 10)]},
+        {
+            **anchor,
+            "text": "www.example.de",
+            "heights": [("www.example.de", 60)],
+            "top": 70,
+            "bottom": 130,
+        },
+    ]
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: anchor)
+
+    result = compose_extra_lines(image, [("fax", "06441 9876")])
+
+    assert result.manifest["status"] == "composed"
+    assert result.manifest["anchor_height"] == 10
+    assert result.manifest["reference_height"] == 10
+    assert result.manifest["cap_height"] == 10
+
+
+def test_appended_lines_reuse_sufficient_lower_margin_without_growth(monkeypatch):
+    image = Image.new("RGB", (220, 140), "white")
+    ImageDraw.Draw(image).rectangle((20, 40, 199, 60), fill=(20, 80, 140))
+    anchor = _anchor(bottom=60)
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: anchor)
+
+    result = compose_extra_lines(image, [("fax", "06441 9876")])
+
+    assert result.manifest["placement"] == "appended_strip"
+    assert result.manifest["grew"] is False
+    assert result.image.size == image.size
+    assert result.manifest["insertion_gap"] == result.manifest["line_height"] // 2
+    assert ImageChops.difference(
+        result.image.crop((0, 0, image.width, result.manifest["band_end"])),
+        image.crop((0, 0, image.width, result.manifest["band_end"])),
+    ).getbbox() is None
+
+
+def test_appended_lines_grow_only_for_missing_height(monkeypatch):
+    image = Image.new("RGB", (220, 80), "white")
+    ImageDraw.Draw(image).rectangle((20, 40, 199, 60), fill=(20, 80, 140))
+    anchor = _anchor(bottom=60)
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: anchor)
+
+    result = compose_extra_lines(image, [("fax", "06441 9876")])
+
+    assert result.manifest["placement"] == "appended_strip"
+    assert result.manifest["grew"] is True
+    assert result.image.width == image.width
+    assert result.image.height > image.height
+    assert result.manifest["band_end"] - result.manifest["content_end"] == (
+        result.manifest["line_height"] // 2
+    )
 
 
 def test_font_size_matches_height_probe_when_width_is_available(monkeypatch):
