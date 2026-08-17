@@ -41,6 +41,41 @@ export const pages = mysqlTable("ingestion_pages", {
   adProbability: float("ad_probability"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
+export const classifications = mysqlTable("ingestion_document_classifications", {
+  id: int("id").autoincrement().primaryKey(),
+  tenantId: int("tenant_id").notNull(),
+  documentId: int("document_id").notNull(),
+  type: varchar("type", { length: 64 }),
+  typeSource: varchar("type_source", { length: 16 }),
+  typeConfidence: float("type_confidence"),
+  publicationName: varchar("publication_name", { length: 255 }),
+  publicationNameSource: varchar("publication_name_source", { length: 16 }),
+  publicationNameConfidence: float("publication_name_confidence"),
+  editionLabel: varchar("edition_label", { length: 128 }),
+  editionSource: varchar("edition_source", { length: 16 }),
+  editionConfidence: float("edition_confidence"),
+  periodStartYear: int("period_start_year"),
+  periodEndYear: int("period_end_year"),
+  periodIssue: int("period_issue"),
+  periodSource: varchar("period_source", { length: 16 }),
+  periodConfidence: float("period_confidence"),
+  regionPlace: varchar("region_place", { length: 255 }),
+  regionDistrict: varchar("region_district", { length: 255 }),
+  regionState: varchar("region_state", { length: 255 }),
+  regionSource: varchar("region_source", { length: 16 }),
+  regionConfidence: float("region_confidence"),
+  derivedAt: timestamp("derived_at"),
+  correctedAt: timestamp("corrected_at"),
+  correctedBy: varchar("corrected_by", { length: 255 }),
+  actualityStatus: varchar("actuality_status", { length: 16 }),
+  actualityDecidedAt: timestamp("actuality_decided_at"),
+  actualityDecidedBy: varchar("actuality_decided_by", { length: 255 }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  tenantDocument: uniqueIndex("ingestion_classifications_tenant_document_uq")
+    .on(table.tenantId, table.documentId),
+}));
 export const occurrences = mysqlTable("ingestion_occurrences", {
   id: int("id").autoincrement().primaryKey(),
   tenantId: int("tenant_id").notNull(),
@@ -52,6 +87,7 @@ export const occurrences = mysqlTable("ingestion_occurrences", {
   bbox: json("bbox"),
   imageKey: varchar("image_key", { length: 1024 }),
   confidence: float("confidence"),
+  evidence: json("evidence"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
-export const ingestionSchema = { sources, documents, pages, occurrences };
+export const ingestionSchema = { sources, documents, classifications, pages, occurrences };

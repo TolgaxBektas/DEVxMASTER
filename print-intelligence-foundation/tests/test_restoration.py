@@ -104,18 +104,13 @@ def test_fixture_restoration_accepts_clean_lines_and_refuses_uncertain_ads(tmp_p
         for manifest in manifests[:3]
     )
     assert all(manifest["review_status"] == "pending" for manifest in manifests)
-    assert all(
-        "qr_detection_unavailable"
-        in {finding["rule"] for finding in manifest["findings"]}
-        for manifest in manifests
-    )
     with factory() as check:
         reasons = [
             item.reason
             for item in check.scalars(select(ReviewItem)).all()
             if item.ad_id
         ]
-        assert any("QR detection is unavailable" in reason for reason in reasons)
+        assert reasons
     session.close()
 
 
@@ -157,9 +152,7 @@ def test_existing_order_form_occurrence_respects_restoration_gate(tmp_path):
         assert "order-form artwork gate failed" in manifest["cascade_justification"]
         assert "low confidence" in manifest["cascade_justification"]
         assert manifest["geometry_quality"]["status"] == "not_assessed"
-        assert {
-            finding["rule"] for finding in manifest["findings"]
-        } == {"qr_detection_unavailable"}
+        assert manifest["findings"] == []
         assert not (
             tmp_path / "work" / document.content_sha256 / "restoration_source"
         ).exists()

@@ -7,6 +7,7 @@ import {
   mysqlTable,
   text,
   timestamp,
+  uniqueIndex,
   varchar,
 } from "drizzle-orm/mysql-core";
 
@@ -62,6 +63,7 @@ export const customers = mysqlTable(
     industryId: int("industry_id"),
     address: text("address"),
     notes: text("notes"),
+    sourceOccurrenceId: int("source_occurrence_id"),
     tags: json("tags").$type<string[]>(),
     status: mysqlEnum("status", ["active", "inactive"])
       .default("active")
@@ -72,6 +74,8 @@ export const customers = mysqlTable(
   (table) => ({
     tenantIdx: index("customers_tenant_idx").on(table.tenantId),
     nameIdx: index("customers_name_idx").on(table.name),
+    sourceOccurrenceIdx: uniqueIndex("customers_source_occurrence_idx")
+      .on(table.tenantId, table.sourceOccurrenceId),
   }),
 );
 

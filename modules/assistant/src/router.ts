@@ -1,4 +1,4 @@
-import { permissionProcedure, router } from "@xmaster-center/kernel";
+import { permissionProcedure, router, TRPCError } from "@xmaster-center/kernel";
 import { evaluateAutomation, type AutomationMode } from "@xmaster-center/ai";
 import { z } from "zod";
 
@@ -49,7 +49,10 @@ export function createAssistantRouter(deps: AssistantDeps) {
         .input(z.object({ id: z.string() }))
         .mutation(async ({ ctx, input }) => {
           if (states.get(input.id) !== "approved")
-            throw new Error("Vorschlag muss zuerst freigegeben werden");
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: "Vorschlag muss zuerst freigegeben werden.",
+            });
           states.set(input.id, "executed");
           await deps.audit({ tenantId: ctx.auth.tenantId, action: "assistant.proposal.executed", entityId: input.id, details: { proposalId: input.id } });
           return { id: input.id, state: "executed" };

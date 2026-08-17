@@ -8,6 +8,7 @@ export type CrmRepository = {
     tenantId: string,
     input: Record<string, unknown>,
   ): Promise<unknown>;
+  hasIngestionLead(tenantId: string, occurrenceId: number): Promise<boolean>;
   updateCustomer(
     tenantId: string,
     id: number,
@@ -54,6 +55,16 @@ export function createDrizzleCrmRepository(db: any): CrmRepository {
         tenantId: Number(tenantId),
       });
       return this.getCustomer(tenantId, Number(result[0]?.insertId));
+    },
+    async hasIngestionLead(tenantId, occurrenceId) {
+      return (await db
+        .select({ id: customers.id })
+        .from(customers)
+        .where(and(
+          eq(customers.tenantId, Number(tenantId)),
+          eq(customers.sourceOccurrenceId, occurrenceId),
+        ))
+        .limit(1)).length > 0;
     },
     async updateCustomer(tenantId, id, input) {
       await db
