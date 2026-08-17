@@ -20,9 +20,15 @@ def _normalize(value: str) -> str:
 
 def _phone(value: str) -> str:
     digits = re.sub(r"\D", "", value)
+    if digits.startswith("0049") and len(digits) > 10:
+        return "0" + digits[4:]
+    if digits.startswith("0043") and len(digits) > 10:
+        return "0" + digits[4:]
+    if value.lstrip().startswith("+43") and len(digits) > 8:
+        return "0" + digits[2:]
     if digits.startswith("49") and len(digits) > 8:
         return "0" + digits[2:]
-    return digits[1:] if digits.startswith("00") and len(digits) > 6 else digits
+    return digits
 
 
 def _phone_equivalent(first: str, second: str) -> bool:
@@ -203,38 +209,68 @@ def _decode_qr(image: Image.Image) -> tuple[list[str], str | None]:
     except ImportError:
         return [], "QR-Code-Prüfung nicht verfügbar (Decoder nicht installiert)."
     try:
-        variants = [image]
-        enlarged = image.resize(
-            (image.width * 4, image.height * 4),
-            Image.Resampling.LANCZOS,
+        pixel_budget = 4_000_000
+        scale = max(
+            1.0,
+            min(4.0, (pixel_budget / max(1, image.width * image.height)) ** 0.5),
         )
-        gray = ImageOps.autocontrast(enlarged.convert("L"))
-        variants.extend([
-            enlarged,
-            gray,
-            ImageEnhance.Contrast(gray).enhance(2.0),
-            gray.filter(ImageFilter.SHARPEN),
-        ])
-        tile_width = max(128, image.width // 2)
-        tile_height = max(128, image.height // 2)
-        for top in range(0, image.height, max(1, tile_height // 2)):
-            for left in range(0, image.width, max(1, tile_width // 2)):
+        enlarged_size = (
+            max(1, round(image.width * scale)),
+            max(1, round(image.height * scale)),
+        )
+        enlarged = image.resize(enlarged_size, Image.Resampling.LANCZOS)
+        tile_width = max(128, min(image.width, 1200))
+        tile_height = max(128, min(image.height, 1200))
+        step_x = max(1, tile_width // 2)
+        step_y = max(1, tile_height // 2)
+        tiles = [
+            (left, top)
+            for top in range(0, image.height, step_y)
+            for left in range(0, image.width, step_x)
+        ]
+        if len(tiles) > 16:
+            last_index = len(tiles) - 1
+            tiles = [
+                tiles[round(index * last_index / 15)]
+                for index in range(16)
+            ]
+
+        def variants():
+            yield image
+            yield enlarged
+            gray = ImageOps.autocontrast(enlarged.convert("L"))
+            yield gray
+            yield ImageEnhance.Contrast(gray).enhance(2.0)
+            yield gray.filter(ImageFilter.SHARPEN)
+            for left, top in tiles:
                 tile = image.crop((
                     left,
                     top,
                     min(image.width, left + tile_width),
                     min(image.height, top + tile_height),
                 ))
-                variants.append(tile.resize(
-                    (tile.width * 4, tile.height * 4),
+                tile_scale = max(
+                    1.0,
+                    min(
+                        4.0,
+                        (pixel_budget / max(1, tile.width * tile.height)) ** 0.5,
+                    ),
+                )
+                yield tile.resize(
+                    (
+                        max(1, round(tile.width * tile_scale)),
+                        max(1, round(tile.height * tile_scale)),
+                    ),
                     Image.Resampling.LANCZOS,
-                ))
-        values = [
-            item.data.decode("utf-8", errors="replace").strip()
-            for variant in variants
-            for item in decode(variant)
-            if item.data
-        ]
+                )
+
+        values = []
+        for variant in variants():
+            values.extend(
+                item.data.decode("utf-8", errors="replace").strip()
+                for item in decode(variant)
+                if item.data
+            )
     except (OSError, ValueError):
         return [], "QR-Code konnte nicht gelesen werden."
     values = sorted(set(value for value in values if value))
@@ -374,6 +410,20 @@ def _edge_bitmap(image: Image.Image) -> list[bool]:
         for column in range(96)
         for index in [row * 96 + column]
     ]
+
+
+def _grid_neighbors(index: int, size: int = 12) -> list[int]:
+    row, column = divmod(index, size)
+    neighbors = []
+    if row > 0:
+        neighbors.append(index - size)
+    if row + 1 < size:
+        neighbors.append(index + size)
+    if column > 0:
+        neighbors.append(index - 1)
+    if column + 1 < size:
+        neighbors.append(index + 1)
+    return neighbors
 def _aligned_candidate(
     original: Image.Image,
     restored: Image.Image,
@@ -479,14 +529,8 @@ def compare_visual_motifs(
             component = set(pending)
             while pending:
                 index = pending.pop()
-                row, column = divmod(index, 12)
-                for neighbor in (
-                    (row - 1) * 12 + column,
-                    (row + 1) * 12 + column,
-                    row * 12 + column - 1,
-                    row * 12 + column + 1,
-                ):
-                    if neighbor in cells and 0 <= neighbor < 144:
+                for neighbor in _grid_neighbors(index):
+                    if neighbor in cells:
                         cells.remove(neighbor)
                         component.add(neighbor)
                         pending.append(neighbor)

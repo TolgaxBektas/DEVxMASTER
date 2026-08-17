@@ -147,6 +147,12 @@ requested size, fitted region, source and normalized dimensions, resampling
 method, and lower-resolution indicator are recorded in the manifest. A
 provider response with any other dimensions is refused; the provider requires
 `IMAGE_EDIT_API_KEY` and HTTPS.
+`IMAGE_EDIT_QUALITY` defaults to `medium`, which is intended for the
+offer-form workflow. Set it to `high` only after the order has been accepted
+and the same advertisement is being restored for brochure printing. The
+default `IMAGE_EDIT_MAX_COST_CENTS` and `IMAGE_EDIT_HARD_STOP_CENTS` are
+`1000` (10 USD) so a run can cover roughly 150 medium-quality images; both
+limits remain configurable.
 Restoration does not upscale source detail, remove backgrounds, sharpen, or add
 transparency. Order-form artwork is only exported when the framed advert has
 sufficient detector confidence and passes a cheap geometric plausibility check.

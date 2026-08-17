@@ -48,6 +48,7 @@ def make_image_edit_provider(settings: Settings):
             settings.image_edit_model,
             settings.image_edit_api_key,
             settings.image_edit_timeout,
+            settings.image_edit_quality,
         )
     return None
 
