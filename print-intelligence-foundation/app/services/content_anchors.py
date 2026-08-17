@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from difflib import SequenceMatcher
-from typing import Any
+from typing import Any, Iterable
 
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
@@ -142,6 +142,40 @@ def _text_findings(
                 "value": " ".join(added),
             })
     return findings
+
+
+def _watermark_marker_presence(
+    lines: list[str], markers: Iterable[str]
+) -> set[str]:
+    text = " ".join(lines).casefold()
+    return {
+        marker.casefold().strip()
+        for marker in markers
+        if marker.strip()
+        and re.search(
+            rf"(?<!\w){re.escape(marker.casefold().strip())}(?!\w)",
+            text,
+        )
+    }
+
+
+def _remove_watermark_markers(
+    lines: list[str], markers: Iterable[str]
+) -> list[str]:
+    cleaned = lines[:]
+    for marker in markers:
+        marker = marker.casefold().strip()
+        if not marker:
+            continue
+        pattern = re.compile(
+            rf"(?<!\w){re.escape(marker)}(?!\w)", re.I
+        )
+        cleaned = [
+            _normalize(pattern.sub("", line))
+            for line in cleaned
+            if _normalize(pattern.sub("", line))
+        ]
+    return cleaned
 
 
 def _ocr_is_uncertain(
@@ -549,9 +583,42 @@ def extract_content_anchors(
 def compare_content_anchors(
     original: dict[str, Any],
     restored: dict[str, Any],
+    watermark_markers: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     findings: list[dict[str, str]] = []
     ocr_uncertain = _ocr_is_uncertain(original, restored)
+    watermark_markers = tuple(watermark_markers or ())
+    watermark_enabled = bool(watermark_markers)
+    original_watermarks = (
+        _watermark_marker_presence(
+            original.get("text_lines") or [], watermark_markers
+        )
+        if watermark_enabled
+        else set()
+    )
+    restored_watermarks = (
+        _watermark_marker_presence(
+            restored.get("text_lines") or [], watermark_markers
+        )
+        if watermark_enabled
+        else set()
+    )
+    watermark_removed = bool(original_watermarks - restored_watermarks)
+    if watermark_enabled:
+        if restored_watermarks - original_watermarks:
+            findings.append({
+                "type": "new",
+                "severity": "abweichung",
+                "category": "Wasserzeichen",
+                "value": ", ".join(sorted(restored_watermarks - original_watermarks)),
+            })
+        elif original_watermarks & restored_watermarks:
+            findings.append({
+                "type": "uncertain",
+                "severity": "unsicher",
+                "category": "Wasserzeichen",
+                "value": "Wasserzeichen nicht entfernt",
+            })
 
     for category, label in (
         ("phones", "Telefonnummer"),
@@ -643,7 +710,16 @@ def compare_content_anchors(
             "category": "QR-Code",
             "value": "QR-Code-Prüfung nicht verfügbar.",
         })
-    findings.extend(_text_findings(original, restored))
+    text_original = dict(original)
+    text_restored = dict(restored)
+    if watermark_enabled:
+        text_original["text_lines"] = _remove_watermark_markers(
+            original.get("text_lines") or [], watermark_markers
+        )
+        text_restored["text_lines"] = _remove_watermark_markers(
+            restored.get("text_lines") or [], watermark_markers
+        )
+    findings.extend(_text_findings(text_original, text_restored))
     severity = (
         "abweichung"
         if any(item["severity"] == "abweichung" for item in findings)
@@ -651,12 +727,19 @@ def compare_content_anchors(
         if findings
         else "passed"
     )
-    return {
+    result = {
         "status": severity,
         "severity": severity,
         "qr_removed": qr_removed,
         "findings": findings,
     }
+    if watermark_enabled:
+        result.update({
+            "watermark_removed": watermark_removed,
+            "watermark_markers_original": sorted(original_watermarks),
+            "watermark_markers_restored": sorted(restored_watermarks),
+        })
+    return result
 
 
 def finding_messages(comparison: dict[str, Any]) -> list[str]:

@@ -773,7 +773,11 @@ class Pipeline:
                 company_name=company_name,
                 ocr_size=ocr_size,
             )
-            comparison = compare_content_anchors(original_anchors, restored_anchors)
+            comparison = compare_content_anchors(
+                original_anchors,
+                restored_anchors,
+                watermark_markers=self.watermark_markers,
+            )
             excluded_lost_regions = []
             if (
                 comparison["qr_removed"]
@@ -803,6 +807,12 @@ class Pipeline:
             }
             result.manifest["content_comparison"] = comparison
             result.manifest["qr_removed"] = comparison["qr_removed"]
+            result.manifest["watermark_removed"] = comparison["watermark_removed"]
+            result.manifest["watermark_comparison"] = {
+                "markers_original": comparison["watermark_markers_original"],
+                "markers_restored": comparison["watermark_markers_restored"],
+                "removed_intentionally": comparison["watermark_removed"],
+            }
             result.manifest["visual_comparison"] = visual_comparison
             messages = finding_messages(comparison)
             if messages:
@@ -1087,33 +1097,16 @@ class Pipeline:
             "edit_status": "refused",
         }
         if watermark_evidence:
-            manifest["cascade_level"] = 2
-            manifest["cascade_justification"] = (
-                f"{reason}; deterministic restoration is insufficient because "
-                "the watermark remains"
-            )
             manifest["watermark"] = {
                 "detected": True,
                 "markers": watermark_evidence,
                 "source": "pdf_text_layer",
-            }
-            manifest["deterministic_restoration"] = {
-                "status": "refused",
-                "reason": (
-                    "Watermark remains in a deterministic PDF render; "
-                    "pixel-shift restoration is insufficient."
-                ),
             }
         occurrence.restoration_manifest_json = json.dumps(
             manifest,
             ensure_ascii=False,
         )
         occurrence.restoration_path = None
-        if watermark_evidence:
-            reason = (
-                f"{reason}; watermark detected; deterministic restoration is "
-                "insufficient"
-            )
         self._add_review(occurrence, reason)
 
     def _extract_missing(self, doc, source, deadline):

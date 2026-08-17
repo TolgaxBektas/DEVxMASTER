@@ -89,6 +89,53 @@ def test_qr_removal_semantics():
     assert invented["status"] == "abweichung"
 
 
+def test_watermark_removal_semantics_excludes_marker_from_text_comparison():
+    base = {
+        "phones": [],
+        "emails": [],
+        "domains": [],
+        "qr_codes": [],
+        "qr_present": False,
+        "qr_detection": "available",
+    }
+    removed = compare_content_anchors(
+        {
+            **base,
+            "text_lines": ["Muster GmbH", "© inixmedia"],
+        },
+        {
+            **base,
+            "text_lines": ["Muster GmbH"],
+        },
+        watermark_markers=["inixmedia"],
+    )
+    assert removed["status"] == "passed"
+    assert removed["watermark_removed"] is True
+    assert removed["watermark_markers_original"] == ["inixmedia"]
+
+    retained = compare_content_anchors(
+        {
+            **base,
+            "text_lines": ["Muster GmbH", "© inixmedia"],
+        },
+        {
+            **base,
+            "text_lines": ["Muster GmbH", "© inixmedia"],
+        },
+        watermark_markers=["inixmedia"],
+    )
+    assert retained["status"] == "unsicher"
+    assert retained["findings"][0]["category"] == "Wasserzeichen"
+
+    invented = compare_content_anchors(
+        {**base, "text_lines": ["Muster GmbH"]},
+        {**base, "text_lines": ["Muster GmbH inixmedia"]},
+        watermark_markers=["inixmedia"],
+    )
+    assert invented["status"] == "abweichung"
+    assert invented["findings"][0]["severity"] == "abweichung"
+
+
 def test_anchor_extraction_keeps_text_and_is_safe_without_qr(monkeypatch):
     monkeypatch.setitem(__import__("sys").modules, "pyzbar", None)
     anchors = extract_content_anchors(

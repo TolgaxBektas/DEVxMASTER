@@ -154,11 +154,14 @@ def test_watermarked_ad_skips_pixel_stage_and_requires_generating_review(
         )
         monkeypatch.setattr(
             "app.services.pipeline.compare_content_anchors",
-            lambda *_args: {
+            lambda *_args, **_kwargs: {
                 "findings": [],
                 "severity": "passed",
                 "status": "passed",
                 "qr_removed": False,
+                "watermark_removed": False,
+                "watermark_markers_original": [],
+                "watermark_markers_restored": [],
             },
         )
         monkeypatch.setattr(
@@ -248,6 +251,44 @@ def test_watermarked_ad_without_generative_stage_is_refused_for_review(tmp_path)
                 select(ReviewItem).where(ReviewItem.ad_id == occurrence.id)
             ).reason
         )
+
+
+def test_unrelated_refusal_keeps_watermark_as_evidence_not_cause(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'watermark-refusal.db'}")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with factory() as session:
+        pipeline = Pipeline(
+            session,
+            RecordedVisionProvider("tests/fixtures/qwen"),
+            LocalStorage(tmp_path / "storage"),
+            restoration_enabled=True,
+            local_work_dir=tmp_path / "work",
+        )
+        occurrence = AdOccurrence(
+            page_id=1,
+            occurrence_key="1,1,10,10",
+            bbox="1,1,10,10",
+        )
+        session.add(occurrence)
+        session.flush()
+        evidence = [{
+            "marker": "inixmedia",
+            "text": "© inixmedia",
+            "object_index": 3,
+            "bounds_pdf": [10, 20, 30, 40],
+            "bounds": [10, 20, 30, 40],
+            "source": "pdf_text_layer",
+        }]
+        pipeline._refuse_restoration(
+            occurrence, "restoration refused: artwork is unavailable", evidence
+        )
+        manifest = json.loads(occurrence.restoration_manifest_json)
+        assert manifest["cascade_level"] == 1
+        assert manifest["cascade_justification"] == (
+            "restoration refused: artwork is unavailable"
+        )
+        assert manifest["watermark"]["markers"] == evidence
 
 
 def test_fixture_restoration_accepts_clean_lines_and_refuses_uncertain_ads(tmp_path):
