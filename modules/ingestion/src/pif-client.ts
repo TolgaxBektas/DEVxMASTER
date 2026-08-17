@@ -34,6 +34,7 @@ export function createPifProcessor(input: {
       throw new Error(body || "PDF-Verarbeitung wurde abgelehnt");
     }
     const result = (await response.json()) as {
+      metadata?: { title?: string; subject?: string; creation_date?: string };
       pages: Array<{
         page_number: number;
         text: string;
@@ -41,27 +42,48 @@ export function createPifProcessor(input: {
         classification: string;
         ad_probability: number;
         occurrences: Array<{
-          bbox: Record<string, number>;
+          bbox: {
+            x: number;
+            y: number;
+            width: number;
+            height: number;
+            confidence: number;
+          };
           image_key: string;
           confidence: number;
+          evidence?: string[];
           company: string;
           preview: string;
         }>;
+        title_candidates?: Array<{ text: string; size: number }>;
       }>;
     };
-    return result.pages.map((page) => ({
+    const pages = result.pages.map((page) => ({
       pageNumber: page.page_number,
       text: page.text,
       imageKey: page.image_key,
       classification: page.classification,
       adProbability: page.ad_probability,
+      titleCandidates: page.title_candidates ?? [],
       occurrences: page.occurrences.map((occurrence) => ({
         bbox: occurrence.bbox,
         imageKey: occurrence.image_key,
         confidence: occurrence.confidence,
+        evidence: occurrence.evidence ?? [],
         company: occurrence.company,
         preview: occurrence.preview,
       })),
     }));
+    Object.defineProperty(pages, "pdfMetadata", {
+      value: result.metadata
+        ? {
+            title: result.metadata.title,
+            subject: result.metadata.subject,
+            creationDate: result.metadata.creation_date,
+          }
+        : undefined,
+      enumerable: false,
+    });
+    return pages;
   };
 }

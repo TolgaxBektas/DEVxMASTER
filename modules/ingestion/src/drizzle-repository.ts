@@ -1,17 +1,92 @@
 import type { MySql2Database } from "drizzle-orm/mysql2";
-import { and, desc, eq } from "drizzle-orm";
-import { documents, occurrences, pages, sources, ingestionSchema } from "./schema.js";
-import type { IngestionOccurrence, IngestionRepository } from "./repository.js";
+import { and, desc, eq, gte, lte, ne } from "drizzle-orm";
+import { classifications, documents, occurrences, pages, sources, ingestionSchema } from "./schema.js";
+import type { DerivedClassification, DocumentClassification } from "./classification.js";
+import { documentActualityStatus, sourceActualityHint, type ActualityStatus } from "./actuality.js";
+import {
+  IngestionSourceNotFoundError,
+  occurrenceFingerprint,
+  type DocumentListFilters,
+  type IngestionDocument,
+  type IngestionOccurrence,
+  type IngestionRepository,
+} from "./repository.js";
 
 type IngestionDb = MySql2Database<typeof ingestionSchema>;
 
+function readBbox(value: unknown): Record<string, number> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const keys = ["x", "y", "width", "height", "confidence"];
+  if (!keys.every((key) => typeof record[key] === "number")) return null;
+  return Object.fromEntries(keys.map((key) => [key, record[key] as number])) as Record<string, number>;
+}
+
 export function createDrizzleIngestionRepository(db: unknown): IngestionRepository {
   const database = db as IngestionDb;
+  const toDocument = <T extends Omit<IngestionDocument, "tenantId" | "classification" | "actualityStatus" | "actualitySource" | "actualityDecidedAt" | "actualityDecidedBy"> & { tenantId: number }>(
+    document: T,
+    classification: DocumentClassification | null,
+  ): IngestionDocument => ({
+    ...document,
+    tenantId: String(document.tenantId),
+    classification,
+    actualityStatus: classification?.actualityStatus ?? documentActualityStatus(classification),
+    actualitySource: classification?.actualityStatus ? "manual" : "derived",
+    actualityDecidedAt: classification?.actualityDecidedAt ?? null,
+    actualityDecidedBy: classification?.actualityDecidedBy ?? null,
+  });
+  const readClassification = async (tenantId: string, documentId: number) => {
+    const row = (await database.select().from(classifications).where(and(
+      eq(classifications.tenantId, Number(tenantId)),
+      eq(classifications.documentId, documentId),
+    )).limit(1))[0];
+    if (!row) return null;
+    return {
+      type: row.type,
+      typeSource: row.typeSource as DocumentClassification["typeSource"],
+      typeConfidence: row.typeConfidence,
+      publicationName: row.publicationName,
+      publicationNameSource: row.publicationNameSource as DocumentClassification["publicationNameSource"],
+      publicationNameConfidence: row.publicationNameConfidence,
+      editionLabel: row.editionLabel,
+      editionSource: row.editionSource as DocumentClassification["editionSource"],
+      editionConfidence: row.editionConfidence,
+      periodStartYear: row.periodStartYear,
+      periodEndYear: row.periodEndYear,
+      periodIssue: row.periodIssue,
+      periodSource: row.periodSource as DocumentClassification["periodSource"],
+      periodConfidence: row.periodConfidence,
+      regionPlace: row.regionPlace,
+      regionDistrict: row.regionDistrict,
+      regionState: row.regionState,
+      regionSource: row.regionSource as DocumentClassification["regionSource"],
+      regionConfidence: row.regionConfidence,
+      derivedAt: row.derivedAt,
+      correctedAt: row.correctedAt,
+      correctedBy: row.correctedBy,
+      actualityStatus: row.actualityStatus as ActualityStatus | null,
+      actualityDecidedAt: row.actualityDecidedAt,
+      actualityDecidedBy: row.actualityDecidedBy,
+    } satisfies DocumentClassification;
+  };
   return {
     async listSources(tenantId) {
-      return database.select().from(sources)
+      const result = await database.select().from(sources)
         .where(eq(sources.tenantId, Number(tenantId)))
-        .orderBy(desc(sources.createdAt)) as never;
+        .orderBy(desc(sources.createdAt));
+      return result.map((source) => ({
+        ...source,
+        tenantId: String(source.tenantId),
+        metadata: source.metadata && typeof source.metadata === "object"
+          ? source.metadata as Record<string, unknown>
+          : null,
+        actualityHint: sourceActualityHint(
+          source.metadata && typeof source.metadata === "object"
+            ? source.metadata as Record<string, unknown>
+            : null,
+        ),
+      }));
     },
     async createSource(tenantId, input) {
       const existing = await database.select().from(sources).where(and(
@@ -36,7 +111,7 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
         eq(sources.id, sourceId),
         eq(sources.tenantId, Number(tenantId)),
       )).limit(1))[0];
-      if (!source) throw new Error("Quelle nicht gefunden");
+      if (!source) throw new IngestionSourceNotFoundError();
       return source as never;
     },
     async updateSource(tenantId, sourceId, input) {
@@ -46,21 +121,223 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
       ));
       return this.getSource(tenantId, sourceId);
     },
-    async listDocuments(tenantId) {
-      return database.select().from(documents)
-        .where(eq(documents.tenantId, Number(tenantId)))
-        .orderBy(desc(documents.createdAt)) as never;
+    async listDocuments(tenantId, filters: DocumentListFilters = {}) {
+      const classificationFilters = [
+        filters.type ? eq(classifications.type, filters.type) : undefined,
+        filters.regionState ? eq(classifications.regionState, filters.regionState) : undefined,
+        filters.regionDistrict ? eq(classifications.regionDistrict, filters.regionDistrict) : undefined,
+        filters.periodYear != null
+          ? and(
+              lte(classifications.periodStartYear, filters.periodYear),
+              gte(classifications.periodEndYear, filters.periodYear),
+            )
+          : undefined,
+      ].filter((filter): filter is NonNullable<typeof filter> => filter !== undefined);
+      const rows = await database.select({
+        document: documents,
+        classification: classifications,
+      }).from(documents)
+        .leftJoin(classifications, and(
+          eq(classifications.tenantId, documents.tenantId),
+          eq(classifications.documentId, documents.id),
+        ))
+        .where(and(
+          eq(documents.tenantId, Number(tenantId)),
+          ...classificationFilters,
+        ))
+        .orderBy(desc(documents.createdAt));
+      const result = rows.map(({ document, classification }) => ({
+        ...document,
+        tenantId: String(document.tenantId),
+        classification: classification
+          ? {
+              type: classification.type,
+              typeSource: classification.typeSource as DocumentClassification["typeSource"],
+              typeConfidence: classification.typeConfidence,
+              publicationName: classification.publicationName,
+              publicationNameSource: classification.publicationNameSource as DocumentClassification["publicationNameSource"],
+              publicationNameConfidence: classification.publicationNameConfidence,
+              editionLabel: classification.editionLabel,
+              editionSource: classification.editionSource as DocumentClassification["editionSource"],
+              editionConfidence: classification.editionConfidence,
+              periodStartYear: classification.periodStartYear,
+              periodEndYear: classification.periodEndYear,
+              periodIssue: classification.periodIssue,
+              periodSource: classification.periodSource as DocumentClassification["periodSource"],
+              periodConfidence: classification.periodConfidence,
+              regionPlace: classification.regionPlace,
+              regionDistrict: classification.regionDistrict,
+              regionState: classification.regionState,
+              regionSource: classification.regionSource as DocumentClassification["regionSource"],
+              regionConfidence: classification.regionConfidence,
+              derivedAt: classification.derivedAt,
+              correctedAt: classification.correctedAt,
+              correctedBy: classification.correctedBy,
+              actualityStatus: classification.actualityStatus as ActualityStatus | null,
+              actualityDecidedAt: classification.actualityDecidedAt,
+              actualityDecidedBy: classification.actualityDecidedBy,
+            } satisfies DocumentClassification
+          : null,
+      }));
+      return result.map((item) => ({
+        ...item,
+        actualityStatus: item.classification?.actualityStatus
+          ?? documentActualityStatus(item.classification),
+        actualitySource: item.classification?.actualityStatus ? "manual" as const : "derived" as const,
+        actualityDecidedAt: item.classification?.actualityDecidedAt ?? null,
+        actualityDecidedBy: item.classification?.actualityDecidedBy ?? null,
+      })).filter((item) => !filters.actualityStatus || item.actualityStatus === filters.actualityStatus) as never;
+    },
+    async upsertDerivedClassification(tenantId, documentId, value) {
+      const existing = (await database.select().from(classifications).where(and(
+        eq(classifications.tenantId, Number(tenantId)),
+        eq(classifications.documentId, documentId),
+      )).limit(1))[0];
+      const derived = {
+        type: value.type,
+        typeSource: value.typeSource,
+        typeConfidence: value.typeConfidence,
+        publicationName: value.publicationName,
+        publicationNameSource: value.publicationNameSource,
+        publicationNameConfidence: value.publicationNameConfidence,
+        editionLabel: value.editionLabel,
+        editionSource: value.editionSource,
+        editionConfidence: value.editionConfidence,
+        periodStartYear: value.periodStartYear,
+        periodEndYear: value.periodEndYear,
+        periodIssue: value.periodIssue,
+        periodSource: value.periodSource,
+        periodConfidence: value.periodConfidence,
+        regionPlace: value.regionPlace,
+        regionDistrict: value.regionDistrict,
+        regionState: value.regionState,
+        regionSource: value.regionSource,
+        regionConfidence: value.regionConfidence,
+        derivedAt: new Date(),
+      };
+      if (!existing) {
+        await database.insert(classifications).values({
+          tenantId: Number(tenantId),
+          documentId,
+          ...derived,
+          typeSource: value.typeSource,
+          publicationNameSource: value.publicationNameSource,
+          editionSource: value.editionSource,
+          periodSource: value.periodSource,
+          regionSource: value.regionSource,
+        });
+      } else {
+        const update: Record<string, unknown> = { derivedAt: derived.derivedAt };
+        if (existing.typeSource !== "manual") Object.assign(update, { type: derived.type, typeConfidence: derived.typeConfidence, typeSource: derived.typeSource });
+        if (existing.publicationNameSource !== "manual") Object.assign(update, { publicationName: derived.publicationName, publicationNameConfidence: derived.publicationNameConfidence, publicationNameSource: derived.publicationNameSource });
+        if (existing.editionSource !== "manual") Object.assign(update, { editionLabel: derived.editionLabel, editionConfidence: derived.editionConfidence, editionSource: derived.editionSource });
+        if (existing.periodSource !== "manual") Object.assign(update, {
+          periodStartYear: derived.periodStartYear, periodEndYear: derived.periodEndYear,
+          periodIssue: derived.periodIssue, periodConfidence: derived.periodConfidence, periodSource: derived.periodSource,
+        });
+        if (existing.regionSource !== "manual") Object.assign(update, {
+          regionPlace: derived.regionPlace, regionDistrict: derived.regionDistrict,
+          regionState: derived.regionState, regionConfidence: derived.regionConfidence, regionSource: derived.regionSource,
+        });
+        await database.update(classifications).set(update).where(eq(classifications.id, existing.id));
+      }
+      const result = await readClassification(tenantId, documentId);
+      if (!result) throw new Error("Dokumenteinordnung konnte nicht gespeichert werden");
+      return result;
+    },
+    async updateClassificationManual(tenantId, documentId, value, actor) {
+      const current = await readClassification(tenantId, documentId);
+      if (!current) throw new Error("Dokumenteinordnung ist noch nicht vorhanden");
+      if (Object.keys(value).length === 0) throw new Error("Keine Änderung vorgenommen.");
+      const update: Record<string, unknown> = { correctedAt: new Date(), correctedBy: actor };
+      if (value.type !== undefined) Object.assign(update, { type: value.type, typeSource: "manual" });
+      if (value.publicationName !== undefined) Object.assign(update, { publicationName: value.publicationName, publicationNameSource: "manual" });
+      if (value.editionLabel !== undefined) Object.assign(update, { editionLabel: value.editionLabel, editionSource: "manual" });
+      if (value.periodStartYear !== undefined || value.periodEndYear !== undefined || value.periodIssue !== undefined) {
+        Object.assign(update, {
+          ...(value.periodStartYear !== undefined ? { periodStartYear: value.periodStartYear } : {}),
+          ...(value.periodEndYear !== undefined ? { periodEndYear: value.periodEndYear } : {}),
+          ...(value.periodIssue !== undefined ? { periodIssue: value.periodIssue } : {}),
+          periodSource: "manual",
+          actualityStatus: null,
+          actualityDecidedAt: null,
+          actualityDecidedBy: null,
+        });
+      }
+      if (value.regionPlace !== undefined || value.regionDistrict !== undefined || value.regionState !== undefined) {
+        Object.assign(update, {
+          ...(value.regionPlace !== undefined ? { regionPlace: value.regionPlace } : {}),
+          ...(value.regionDistrict !== undefined ? { regionDistrict: value.regionDistrict } : {}),
+          ...(value.regionState !== undefined ? { regionState: value.regionState } : {}),
+          regionSource: "manual",
+        });
+      }
+      await database.update(classifications).set(update).where(and(
+        eq(classifications.tenantId, Number(tenantId)),
+        eq(classifications.documentId, documentId),
+      ));
+      const result = await readClassification(tenantId, documentId);
+      if (!result) throw new Error("Dokumenteinordnung konnte nicht geändert werden");
+      return result;
+    },
+    async decideDocumentActuality(tenantId, documentId, status, actor) {
+      const current = await this.getDocument(tenantId, documentId);
+      if (!current.classification) throw new Error("Dokumenteinordnung ist noch nicht vorhanden");
+      await database.update(classifications).set({
+        actualityStatus: status,
+        actualityDecidedAt: new Date(),
+        actualityDecidedBy: actor,
+      }).where(and(
+        eq(classifications.tenantId, Number(tenantId)),
+        eq(classifications.documentId, documentId),
+      ));
+      return this.getDocument(tenantId, documentId);
     },
     async listOccurrences(tenantId) {
-      return database.select().from(occurrences)
+      const rows = await database.select({
+        occurrence: occurrences,
+        pageNumber: pages.pageNumber,
+      }).from(occurrences)
+        .leftJoin(pages, eq(pages.id, occurrences.pageId))
         .where(eq(occurrences.tenantId, Number(tenantId)))
-        .orderBy(desc(occurrences.createdAt)) as never;
+        .orderBy(desc(occurrences.createdAt));
+      return rows.map(({ occurrence, pageNumber }) => ({
+        ...occurrence,
+        ...(pageNumber == null ? {} : { pageNumber }),
+        bbox: readBbox(occurrence.bbox),
+        evidence: Array.isArray(occurrence.evidence) ? occurrence.evidence as string[] : [],
+      }));
+    },
+    async getOccurrence(tenantId, occurrenceId) {
+      const row = (await database.select().from(occurrences).where(and(
+        eq(occurrences.id, occurrenceId),
+        eq(occurrences.tenantId, Number(tenantId)),
+      )).limit(1))[0];
+      if (!row) throw new Error("Fundstelle nicht gefunden");
+      return {
+        ...row,
+        bbox: readBbox(row.bbox),
+        evidence: Array.isArray(row.evidence) ? row.evidence as string[] : [],
+      } as never;
+    },
+    async reviewOccurrence(tenantId, occurrenceId, status) {
+      const current = await this.getOccurrence(tenantId, occurrenceId);
+      if (current.status === status) return { occurrence: current, changed: false };
+      await database.update(occurrences).set({ status }).where(and(
+        eq(occurrences.id, occurrenceId),
+        eq(occurrences.tenantId, Number(tenantId)),
+        ne(occurrences.status, status),
+      ));
+      return { occurrence: await this.getOccurrence(tenantId, occurrenceId), changed: true };
     },
     async createUploadedDocument(tenantId, input) {
       const existing = await database.select().from(documents).where(
         and(eq(documents.tenantId, Number(tenantId)), eq(documents.sha256, input.sha256)),
       ).limit(1);
-      if (existing[0]) return { document: existing[0] as never, deduplicated: true };
+      if (existing[0]) return {
+        document: toDocument(existing[0], null),
+        deduplicated: true,
+      };
       try {
         const documentRow = await database.insert(documents).values({
           tenantId: Number(tenantId),
@@ -77,14 +354,17 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
         const document = (await database.select().from(documents)
           .where(eq(documents.id, documentId)).limit(1))[0];
         if (!document) throw new Error("Dokument konnte nicht angelegt werden");
-        return { document: document as never, deduplicated: false };
+        return { document: toDocument(document, null), deduplicated: false };
       } catch (error) {
         if (!/duplicate|unique|ER_DUP_ENTRY/i.test(String(error))) throw error;
         const concurrent = await database.select().from(documents).where(
           and(eq(documents.tenantId, Number(tenantId)), eq(documents.sha256, input.sha256)),
         ).limit(1);
         if (!concurrent[0]) throw error;
-        return { document: concurrent[0] as never, deduplicated: true };
+        return {
+          document: toDocument(concurrent[0], null),
+          deduplicated: true,
+        };
       }
     },
     async getDocument(tenantId, documentId) {
@@ -92,17 +372,42 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
         and(eq(documents.id, documentId), eq(documents.tenantId, Number(tenantId))),
       ).limit(1))[0];
       if (!document) throw new Error("Dokument nicht gefunden");
-      return document as never;
+      return toDocument(document, await readClassification(tenantId, documentId));
     },
     async getDocumentById(documentId) {
       const document = (await database.select().from(documents)
         .where(eq(documents.id, documentId)).limit(1))[0];
       if (!document) throw new Error("Dokument nicht gefunden");
-      return document as never;
+      return toDocument(document, await readClassification(String(document.tenantId), documentId));
     },
     async replaceProcessedDocument(tenantId, documentId, processedPages) {
       const document = await this.getDocument(tenantId, documentId);
-      await database.delete(occurrences).where(eq(occurrences.documentId, documentId));
+      const previous = await database.select().from(occurrences).where(and(
+        eq(occurrences.documentId, documentId),
+        eq(occurrences.tenantId, Number(tenantId)),
+      ));
+      const previousPages = await database.select().from(pages).where(eq(pages.documentId, documentId));
+      const pageNumbers = new Map(previousPages.map((page) => [page.id, page.pageNumber]));
+      const previousByIdentity = new Map(previous.map((item) => {
+        const pageNumber = pageNumbers.get(item.pageId);
+        const identity = pageNumber === undefined
+          ? {
+            company: item.company,
+            preview: item.preview,
+            bbox: readBbox(item.bbox),
+          }
+          : {
+            pageNumber,
+            company: item.company,
+            preview: item.preview,
+            bbox: readBbox(item.bbox),
+          };
+        return [occurrenceFingerprint(identity), item.status] as const;
+      }));
+      await database.delete(occurrences).where(and(
+        eq(occurrences.documentId, documentId),
+        eq(occurrences.tenantId, Number(tenantId)),
+      ));
       await database.delete(pages).where(eq(pages.documentId, documentId));
       const created: IngestionOccurrence[] = [];
       for (const processed of processedPages) {
@@ -122,10 +427,16 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
             pageId,
             company: occurrence.company,
             preview: occurrence.preview,
-            status: "detected",
+            status: previousByIdentity.get(occurrenceFingerprint({
+              pageNumber: processed.pageNumber,
+              company: occurrence.company,
+              preview: occurrence.preview,
+              bbox: occurrence.bbox,
+            })) ?? "detected",
             bbox: occurrence.bbox,
             imageKey: occurrence.imageKey,
             confidence: occurrence.confidence,
+            evidence: occurrence.evidence ?? [],
           });
           created.push({
             id: Number(occurrenceRow[0]?.insertId),
@@ -133,10 +444,16 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
             pageNumber: processed.pageNumber,
             company: occurrence.company,
             preview: occurrence.preview,
-            status: "detected",
+            status: previousByIdentity.get(occurrenceFingerprint({
+              pageNumber: processed.pageNumber,
+              company: occurrence.company,
+              preview: occurrence.preview,
+              bbox: occurrence.bbox,
+            })) ?? "detected",
             bbox: occurrence.bbox,
             imageKey: occurrence.imageKey,
             confidence: occurrence.confidence,
+            evidence: occurrence.evidence ?? [],
           });
         }
       }
@@ -165,7 +482,7 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
         and(eq(documents.id, documentId), eq(documents.tenantId, Number(tenantId))),
       ).limit(1))[0];
       if (!row) throw new Error("Dokument nicht gefunden");
-      return { ...row, tenantId: String(row.tenantId) } as never;
+      return toDocument(row, await readClassification(tenantId, documentId));
     },
   };
 }

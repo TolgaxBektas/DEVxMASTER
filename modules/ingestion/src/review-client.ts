@@ -25,6 +25,19 @@ export type PifReview = {
     geometry_quality_status: string | null;
     model_name: string | null;
     plan_digest: string | null;
+    content_comparison?: {
+      status: string;
+      severity?: string;
+      findings: Array<{ type: string; severity?: string; category: string; value: string }>;
+    } | null;
+    visual_comparison?: {
+      alignment?: {
+        class?: string;
+        score?: number;
+      };
+      lost_cells?: number;
+      added_cells?: number;
+    } | null;
   };
   images: {
     original_available: boolean;

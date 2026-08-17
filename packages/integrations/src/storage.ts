@@ -1,5 +1,6 @@
 import {
   GetObjectCommand,
+  NoSuchKey,
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
@@ -55,11 +56,18 @@ export class S3Storage implements Storage {
     );
   }
   async get(key: string) {
-    const result = await this.client.send(
-      new GetObjectCommand({ Bucket: this.bucket, Key: key }),
-    );
-    if (!result.Body) return null;
-    return new Uint8Array(await result.Body.transformToByteArray());
+    try {
+      const result = await this.client.send(
+        new GetObjectCommand({ Bucket: this.bucket, Key: key }),
+      );
+      if (!result.Body) return null;
+      return new Uint8Array(await result.Body.transformToByteArray());
+    } catch (error) {
+      if (error instanceof NoSuchKey || (error as { name?: string }).name === "NoSuchKey") {
+        return null;
+      }
+      throw error;
+    }
   }
   presignGet(key: string, expiresInSeconds = 900) {
     return getSignedUrl(

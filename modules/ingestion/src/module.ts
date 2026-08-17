@@ -6,17 +6,27 @@ import {
   type EventExecutor,
   type ModuleDefinition,
 } from "@xmaster-center/kernel";
-import { createHash } from "node:crypto";
 import type { Storage } from "@xmaster-center/integrations";
 import { ingestionSchema } from "./schema.js";
 import { createIngestionRouter } from "./router.js";
 import { MemoryIngestionRepository } from "./memory-repository.js";
 import { createDrizzleIngestionRepository } from "./drizzle-repository.js";
-import type { IngestionRepository } from "./repository.js";
+import { occurrenceFingerprint, type IngestionRepository } from "./repository.js";
 import { registerReviewImageRoutes, registerUploadRoute } from "./rest.js";
 import { persistDocumentBytes } from "./rest.js";
+import { deriveDocumentClassification } from "./classification.js";
+import { documentActualityStatus } from "./actuality.js";
+import { publishCurrentActualityTransition } from "./actuality-replay.js";
 import { ingestionPages, IngestionPage, OccurrencesPage, ReviewPage } from "./ui/index.js";
 import type { PifReviewClient } from "./review-client.js";
+
+export type AdBoundingBox = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  confidence: number;
+};
 
 export type ProcessedPage = {
   pageNumber: number;
@@ -24,41 +34,18 @@ export type ProcessedPage = {
   imageKey: string;
   classification: string;
   adProbability: number;
+  titleCandidates?: Array<{ text: string; size: number }>;
   occurrences: Array<{
-    bbox: Record<string, number>;
+    bbox: AdBoundingBox;
     imageKey: string;
     confidence: number;
+    evidence: string[];
     company: string;
     preview: string;
   }>;
 };
 
 type JobContext = { job: { tenantId: string | null } };
-
-function normalizeOccurrenceText(value: string): string {
-  return value.normalize("NFKC").toLocaleLowerCase("de-DE").trim().replace(/\s+/g, " ");
-}
-
-function occurrenceFingerprint(occurrence: {
-  pageNumber?: number;
-  company: string;
-  preview: string;
-  bbox?: Record<string, number> | null;
-}): string {
-  const bbox = Object.entries(occurrence.bbox ?? {})
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([key, value]) => `${key}=${Math.round(value * 1000) / 1000}`)
-    .join(",");
-  return createHash("sha256")
-    .update([
-      occurrence.pageNumber ?? "",
-      normalizeOccurrenceText(occurrence.company),
-      normalizeOccurrenceText(occurrence.preview),
-      bbox,
-    ].join("\u001f"))
-    .digest("hex")
-    .slice(0, 24);
-}
 
 export function advertisementEventIdempotencyKey(
   tenantId: string,
@@ -106,7 +93,11 @@ export function createIngestionModule(deps: {
     documentId: number;
     storageKey: string;
     outputPrefix: string;
-  }) => Promise<ProcessedPage[]>;
+  }) => Promise<ProcessedPage[] & { pdfMetadata?: {
+    title?: string;
+    subject?: string;
+    creationDate?: string;
+  } }>;
   fetchSource?: (input: { url: string }) => Promise<{ bytes: Buffer; filename: string }>;
   discoverProposals?: (input: { seedPages: string[]; searchTerms: string[]; maxResults: number }) => Promise<Array<{
     url: string; score: number; metadata: Record<string, unknown>;
@@ -151,7 +142,7 @@ export function createIngestionModule(deps: {
             });
             if (deps.reviewClient) {
               registerReviewImageRoutes(app, {
-                reviewClient: deps.reviewClient!,
+                reviewClient: deps.reviewClient,
                 ...(deps.reviewTenantId ? { reviewTenantId: deps.reviewTenantId } : {}),
               });
             }
@@ -162,21 +153,17 @@ export function createIngestionModule(deps: {
       { id: "ingestion.sources", label: "Quellen", href: "/ingestion/sources", permission: "ingestion.source.read", order: 5 },
       { id: "ingestion.documents", label: "Dokumente", href: "/ingestion", permission: "ingestion.document.read", order: 10 },
       { id: "ingestion.occurrences", label: "Fundstellen", href: "/ingestion/occurrences", permission: "ingestion.occurrence.read", order: 20 },
-      ...(deps.reviewTenantId
-        ? [{ id: "ingestion.review", label: "Prüfung", href: "/ingestion/review", permission: "ingestion.review.read", order: 15 as const }]
-        : []),
     ],
     pages: ingestionPages.map(([id, title, path, permission]) => ({
       id,
       title,
       path,
       permission,
-      component:
-        path === "/ingestion/occurrences"
-          ? OccurrencesPage
-          : path === "/ingestion/review"
-            ? ReviewPage
-            : IngestionPage,
+      component: path === "/ingestion/occurrences"
+        ? OccurrencesPage
+        : path === "/ingestion/review"
+          ? ReviewPage
+          : IngestionPage,
     })),
     permissions: [
       { permission: "ingestion.source.read", title: "Quellen lesen" },
@@ -186,7 +173,9 @@ export function createIngestionModule(deps: {
       { permission: "ingestion.document.read", title: "Dokumente lesen" },
       { permission: "ingestion.document.write", title: "Dokumente aufnehmen" },
       { permission: "ingestion.document.upload", title: "Dokumente hochladen" },
+      { permission: "ingestion.document.classify", title: "Dokumente einordnen" },
       { permission: "ingestion.occurrence.read", title: "Fundstellen lesen" },
+      { permission: "ingestion.occurrence.review", title: "Fundstellen entscheiden" },
       { permission: "ingestion.review.read", title: "Prüffälle lesen" },
       { permission: "ingestion.review.decide", title: "Prüffälle entscheiden" },
     ],
@@ -277,42 +266,73 @@ export function createIngestionModule(deps: {
               await deps.transaction(async (db) => {
                 const txRepository = deps.repositoryForTransaction?.(db)
                   ?? createDrizzleIngestionRepository(db);
-                const occurrences = await txRepository.replaceProcessedDocument(
-                  tenantId,
-                  document.id,
+              const previousOccurrences = (await txRepository.listOccurrences(tenantId))
+                .filter((item) => item.documentId === document.id);
+              const previousStatus = document.actualityStatus;
+              await txRepository.upsertDerivedClassification(
+                tenantId,
+                document.id,
+                deriveDocumentClassification({
+                  filename: document.filename,
                   pages,
-                );
-                const executor = createDrizzleEventRepository(db);
-                for (const occurrence of occurrences) {
-                  await deps.publish({
-                    name: "advertisement.detected",
+                  ...(pages.pdfMetadata ? { pdfMetadata: pages.pdfMetadata } : {}),
+                }),
+              );
+              const occurrences = await txRepository.replaceProcessedDocument(
+                tenantId,
+                document.id,
+                pages,
+              );
+              const processedDocument = await txRepository.getDocument(tenantId, document.id);
+              const executor = createDrizzleEventRepository(db);
+              const actualityStatus = processedDocument.actualityStatus
+                ?? documentActualityStatus(processedDocument.classification);
+              if (
+                previousOccurrences.length > 0
+                && previousStatus !== actualityStatus
+                && actualityStatus === "current"
+              ) {
+                await publishCurrentActualityTransition({
+                  tenantId,
+                  document: processedDocument,
+                  previousStatus,
+                  currentStatus: actualityStatus,
+                  occurrences,
+                  publish: deps.publish,
+                  executor,
+                });
+              }
+              for (const occurrence of occurrences) {
+                await deps.publish({
+                  name: "advertisement.detected",
+                  tenantId,
+                  aggregateType: "occurrence",
+                  aggregateId: String(occurrence.id),
+                  payload: {
+                    occurrenceId: occurrence.id,
+                    documentId: document.id,
+                    company: occurrence.company,
+                    preview: occurrence.preview,
+                    actualityStatus,
+                  },
+                  idempotencyKey: advertisementEventIdempotencyKey(
                     tenantId,
-                    aggregateType: "occurrence",
-                    aggregateId: String(occurrence.id),
-                    payload: {
-                      occurrenceId: occurrence.id,
-                      documentId: document.id,
-                      company: occurrence.company,
-                      preview: occurrence.preview,
-                    },
-                    idempotencyKey: advertisementEventIdempotencyKey(
-                      tenantId,
-                      document.sha256,
-                      occurrence,
-                    ),
-                  }, executor);
-                }
-                if (deps.audit) {
-                  await appendAudit(createDrizzleAuditRepository(db), {
-                    tenantId,
-                    action: "ingestion.document.processed",
-                    entityType: "ingestion_document",
-                    entityId: document.id,
-                    actorId: null,
-                    actorName: "Ingestion-Worker",
-                    detailsJson: JSON.stringify({ occurrences: occurrences.length }),
-                  });
-                }
+                    document.sha256,
+                    occurrence,
+                  ),
+                }, executor);
+              }
+              if (deps.audit) {
+                await appendAudit(createDrizzleAuditRepository(db), {
+                  tenantId,
+                  action: "ingestion.document.processed",
+                  entityType: "ingestion_document",
+                  entityId: document.id,
+                  actorId: null,
+                  actorName: "Ingestion-Worker",
+                  detailsJson: JSON.stringify({ occurrences: occurrences.length }),
+                });
+              }
               });
             } catch (error) {
               const message = error instanceof Error ? error.message : "Verarbeitung fehlgeschlagen";

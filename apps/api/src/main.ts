@@ -64,6 +64,8 @@ const crm = createCrmModule({
   audit,
   publish: (input, executor) => eventBus.publish(input, executor),
   enqueue: (input) => queue.enqueue(input),
+  getDocumentActuality: async (tenantId, documentId) =>
+    (await createDrizzleIngestionRepository(db).getDocument(tenantId, documentId)).actualityStatus,
 });
 const billing = createBillingModule({
   db,

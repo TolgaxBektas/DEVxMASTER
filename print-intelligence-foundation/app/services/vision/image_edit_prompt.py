@@ -1,9 +1,11 @@
 import hashlib
 
 
-IMAGE_EDIT_PROMPT_VERSION = "generative-restoration-v1.0.0"
+IMAGE_EDIT_PROMPT_VERSION = "generative-restoration-v1.1.0"
 IMAGE_EDIT_PROMPT = """Use only the supplied advertisement image as reference.
-CONTENT IS FROZEN, PLACEMENT IS NOT. Preserve aspect ratio, dimensions, logos,
+CONTENT IS FROZEN, PLACEMENT IS NOT. Remove visible watermarks, but do not remove
+any original logo, QR code, telephone number, footer, or image motif. Preserve
+aspect ratio, dimensions, logos,
 brand and product colors, typography, and the layout character. Do not create,
 rewrite, correct, or invent characters. Do not add text, icons, graphics,
 frames, or QR codes. Do not duplicate content. Do not fill empty areas,

@@ -7,6 +7,7 @@ import {
 } from "@xmaster-center/kernel";
 import type { CrmRepository } from "./repository.js";
 import { createCrmRouter } from "./router.js";
+import { isCurrentForLead } from "./module.js";
 
 function setup() {
   const audit = new MemoryAuditRepository();
@@ -27,6 +28,10 @@ function setup() {
       const row = { ...input, id: rows.size + 1, tenantId: Number(tenantId) };
       rows.set(Number(row.id), row);
       return row;
+    },
+    async hasIngestionLead(tenantId, occurrenceId) {
+      return [...rows.values()].some((row) =>
+        row.tenantId === Number(tenantId) && row.sourceOccurrenceId === occurrenceId);
     },
     async updateCustomer() {},
     async deleteCustomer() {},
@@ -78,6 +83,12 @@ function setup() {
 }
 
 describe("CRM-Modulvertrag", () => {
+  it("erzeugt Leads nur für den aktuell bestätigten Dokumentzustand", () => {
+    expect(isCurrentForLead("current")).toBe(true);
+    expect(isCurrentForLead("outdated")).toBe(false);
+    expect(isCurrentForLead("unverified")).toBe(false);
+    expect(isCurrentForLead(undefined)).toBe(false);
+  });
   it("setzt Rechte durch und begrenzt den Tenant-Zugriff", async () => {
     const setupResult = setup();
     setupResult.context.permissions = new Set(["crm.customer.read"]);

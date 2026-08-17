@@ -10,10 +10,12 @@ RUN apt-get update \
         tesseract-ocr-deu \
         tesseract-ocr-eng \
         fonts-liberation \
+        libzbar0 \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir -r requirements.txt
 COPY app app
 COPY tests tests
+COPY scripts scripts
 COPY alembic alembic
 COPY alembic.ini .
 RUN useradd --create-home appuser \
