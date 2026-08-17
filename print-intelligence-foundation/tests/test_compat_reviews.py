@@ -222,8 +222,14 @@ def test_deferred_channels_keep_high_quality_precedence_and_are_readable(
             "verified": True,
             "faxes": [{"value": "030 DE", "source_url": "https://de.example"}],
         }
+        germany_repeat = _metadata("Zusatzkanal GmbH", 12, "xdata_germany")
+        germany_repeat["evidence"] = {
+            "verified": True,
+            "faxes": [{"value": "030 HQ", "source_url": "https://de.example/replaced"}],
+        }
         assert _import(client, high_quality).status_code == 200
         assert _import(client, germany).status_code == 200
+        assert _import(client, germany_repeat).status_code == 200
         with factory() as session:
             company = session.scalar(select(Company))
             channels = session.scalars(select(DeferredChannel)).all()
@@ -234,6 +240,10 @@ def test_deferred_channels_keep_high_quality_precedence_and_are_readable(
                 ("030 HQ", "xdata_nb_high_quality"),
                 ("030 DE", "xdata_germany"),
             }
+            high_quality_channel = next(
+                channel for channel in channels if channel.value == "030 HQ"
+            )
+            assert high_quality_channel.source_url == "https://hq.example"
         response = client.get(
             "/api/v1/deferred-channels?status=waiting_for_x_core&data_source=xdata_germany",
             headers={"x-service-token": "review-token"},

@@ -103,7 +103,13 @@ def record_deferred_channels(
             and existing.data_source == XDATA_GERMANY
         ):
             existing.data_source = data_source
-        if entry["source_url"]:
-            existing.source_url = entry["source_url"]
-        if entry["retrieved_at"]:
-            existing.retrieved_at = entry["retrieved_at"]
+        can_write = (
+            data_source == existing.data_source
+            or data_source == XDATA_NB_HIGH_QUALITY
+            and existing.data_source == XDATA_GERMANY
+        )
+        if can_write:
+            if entry["source_url"]:
+                existing.source_url = entry["source_url"]
+            if entry["retrieved_at"]:
+                existing.retrieved_at = entry["retrieved_at"]
