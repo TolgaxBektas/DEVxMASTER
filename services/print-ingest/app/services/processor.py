@@ -197,11 +197,36 @@ def _advertiser_and_contact(text, blocks):
             if word.strip(".,:;·|()[]{}")[:1].isupper()
         ]
         advertiser = len(title_words) >= 2 and len(text.split()) <= 24
+    if not advertiser and contact:
+        title_words = [
+            word.strip(".,:;·|()[]{}")
+            for word in text[:contact.start()].split()
+            if word.strip(".,:;·|()[]{}")[:1].isalpha()
+        ]
+        advertiser = sum(word[:1].isupper() for word in title_words) >= 2
     return bool(advertiser), bool(contact)
 
 
 def _has_phone(text):
     return bool(PHONE_SIGNALS.search(text))
+
+
+def _ocr_region_text(page_image, box, width, height):
+    if not page_image:
+        return ""
+    try:
+        with Image.open(io.BytesIO(page_image)) as image:
+            x0 = max(0, min(image.width, round(box[0] / width * image.width)))
+            y0 = max(0, min(image.height, round(box[1] / height * image.height)))
+            x1 = max(0, min(image.width, round(box[2] / width * image.width)))
+            y1 = max(0, min(image.height, round(box[3] / height * image.height)))
+            if x1 <= x0 or y1 <= y0:
+                return ""
+            crop = image.crop((x0, y0, x1, y1))
+            crop = crop.resize((crop.width * 2, crop.height * 2))
+            return pytesseract.image_to_string(crop, lang="deu+eng")
+    except Exception:
+        return ""
 
 
 def _provenance_warnings(text):
@@ -229,6 +254,8 @@ def _sender_has_strong_public_origin(text, blocks):
         for block in blocks
         if max(block.get("font_sizes", [0])) >= 14
     )
+    if not blocks:
+        prominent = text
     return bool(PUBLIC_ORIGIN_SIGNALS.search(prominent))
 
 
@@ -297,12 +324,28 @@ def _material_geometry(layout, width, height):
     page_area = width * height
     items = []
     for drawing in layout["drawings"]:
-        box = drawing["bbox"]
+        raw_box = drawing["bbox"]
+        box = (
+            max(0, min(width, raw_box[0])),
+            max(0, min(height, raw_box[1])),
+            max(0, min(width, raw_box[2])),
+            max(0, min(height, raw_box[3])),
+        )
+        if box[2] <= box[0] or box[3] <= box[1]:
+            continue
         area = (box[2] - box[0]) * (box[3] - box[1])
         if area >= page_area * 0.015 and (drawing["fill"] or drawing["color"] or drawing["width"] > 0):
             items.append((box, "frame"))
     for image in layout.get("images", []):
-        box = image["bbox"]
+        raw_box = image["bbox"]
+        box = (
+            max(0, min(width, raw_box[0])),
+            max(0, min(height, raw_box[1])),
+            max(0, min(width, raw_box[2])),
+            max(0, min(height, raw_box[3])),
+        )
+        if box[2] <= box[0] or box[3] <= box[1]:
+            continue
         area = (box[2] - box[0]) * (box[3] - box[1])
         if area >= page_area * 0.02:
             items.append((box, "image"))
@@ -329,6 +372,30 @@ def _has_logo_evidence(layout, box):
         if overlap / drawing_area >= 0.8 and 0.002 <= drawing_area / area < 0.85:
             return True
     return False
+
+
+def _candidate_has_logo(
+    layout,
+    box,
+    text,
+    blocks,
+    geometry_kind=None,
+    page_dominant=False,
+    allow_image_inference=False,
+):
+    if _has_logo_evidence(layout, box):
+        return True
+    advertiser, contact = _advertiser_and_contact(text, blocks)
+    area = (box[2] - box[0]) * (box[3] - box[1])
+    page_area = layout["page_width"] * layout["page_height"]
+    return (
+        allow_image_inference
+        and geometry_kind == "image"
+        and not page_dominant
+        and area < page_area * 0.75
+        and advertiser
+        and contact
+    )
 
 
 def _material_coverage(items, width, height):
@@ -371,11 +438,22 @@ def _candidate_is_ad(
         and _has_phone(text)
         and (max_words is None or len(text.split()) <= max_words)
     )
+    editorial = _looks_editorial(text, blocks, page_dominant)
+    editorial_ok = (
+        not editorial
+        or (
+            marked
+            and not EDITORIAL_SIGNALS.search(text)
+            and logo
+            and advertiser
+            and contact
+        )
+    )
     accepted = (
         standard_evidence
         and not _sender_has_strong_public_origin(text, blocks)
         and not _looks_directory_or_overview(text, blocks, page_dominant, logo)
-        and not _looks_editorial(text, blocks, page_dominant)
+        and editorial_ok
     )
     return accepted, advertiser, contact
 
@@ -419,24 +497,45 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
         for marker in marking_blocks:
             marker_box = marker["bbox"]
             if _intersection(box, marker_box) > 0:
-                return True
+                if marker_box[0] <= box[0] + 40 and marker_box[1] <= box[1] + 40:
+                    return True
             left_gap = box[0] - marker_box[2]
-            if 0 <= left_gap <= 16 and marker_box[1] < box[3] and marker_box[3] > box[1]:
+            vertical_gap = max(marker_box[1] - box[3], box[1] - marker_box[3], 0)
+            if (
+                0 <= left_gap <= 40
+                and vertical_gap <= 40
+                and marker_box[1] <= box[1] + 40
+            ):
                 return True
         return False
 
     candidates = []
     material = _material_geometry(layout, width, height)
     coverage = _material_coverage(material, width, height)
+    large_material = [
+        box
+        for box, _kind in material
+        if (box[2] - box[0]) * (box[3] - box[1]) >= width * height * 0.08
+    ]
+    ocr_neighbors = (
+        bool(marking_blocks)
+        and len(large_material) >= 3
+        and all(
+            box[0] > 5 and box[1] > 5 and box[2] < width - 5 and box[3] < height - 5
+            for box in large_material
+        )
+    )
     dominant_material = any(
         (box[2] - box[0]) * (box[3] - box[1]) >= width * height * 0.75
         for box, _kind in material
     )
-    if coverage >= 0.65 and (dominant_material or (marking_blocks and len(blocks) <= 12)):
+    if coverage >= 0.65 and dominant_material:
         box = _union([item[0] for item in material])
         box = (max(0, box[0]), max(0, box[1]), min(width, box[2]), min(height, box[3]))
         contained = list(blocks)
         candidate_text = " ".join(block["text"] for block in contained)
+        if ocr_neighbors and len(candidate_text.split()) < 4:
+            candidate_text = _ocr_region_text(page_image, box, width, height)
         if len(candidate_text.split()) < 10 and len((text or "").split()) > len(candidate_text.split()):
             candidate_text = text
         marked = bool(marking_blocks)
@@ -446,7 +545,7 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
             marked,
             True,
             max_words=180,
-            logo=_has_logo_evidence(layout, box),
+            logo=_candidate_has_logo(layout, box, candidate_text, contained),
         )
         if accepted:
             if marked:
@@ -466,6 +565,8 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
             (block["bbox"][2] - block["bbox"][0]) * (block["bbox"][3] - block["bbox"][1])
         )]
         candidate_text = " ".join(block["text"] for block in contained)
+        if ocr_neighbors and len(candidate_text.split()) < 4:
+            candidate_text = _ocr_region_text(page_image, box, width, height)
         advertiser, contact = _advertiser_and_contact(candidate_text, contained)
         marked = marked_box(box)
         page_dominant = geometry_kind == "image" and (
@@ -476,7 +577,15 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
             contained,
             marked,
             page_dominant,
-            logo=_has_logo_evidence(layout, box),
+            logo=_candidate_has_logo(
+                layout,
+                box,
+                candidate_text,
+                contained,
+                geometry_kind,
+                page_dominant,
+                ocr_neighbors,
+            ),
         )
         if not accepted:
             continue
@@ -489,6 +598,7 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
             "page_dominant": page_dominant,
             "marked": marked,
             "text": candidate_text,
+            "ocr_neighbors": ocr_neighbors,
         })
     results = []
     for candidate in candidates:
@@ -503,7 +613,15 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
             candidate["blocks"],
             candidate["marked"],
             candidate["page_dominant"],
-            logo=_has_logo_evidence(layout, box),
+            logo=_candidate_has_logo(
+                layout,
+                box,
+                text_value,
+                candidate["blocks"],
+                candidate["geometry"],
+                candidate["page_dominant"],
+                candidate.get("ocr_neighbors", False),
+            ),
         )
         if not accepted:
             continue
@@ -512,7 +630,15 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
             evidence.append("advertiser")
         if contact:
             evidence.append("contact")
-        if _has_logo_evidence(layout, box):
+        if _candidate_has_logo(
+            layout,
+            box,
+            text_value,
+            candidate["blocks"],
+            candidate["geometry"],
+            candidate["page_dominant"],
+            candidate.get("ocr_neighbors", False),
+        ):
             evidence.append("logo")
         if candidate["marked"]:
             evidence.append("publisher-marking")
