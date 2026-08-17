@@ -265,7 +265,11 @@ export function createIngestionRouter(
         }),
     }),
     review: router({
-      list: permissionProcedure("ingestion.review.read").query(async ({ ctx }) => {
+      list: permissionProcedure("ingestion.review.read")
+        .input(z.object({
+          data_source: z.enum(["xdata_nb_high_quality", "xdata_germany"]).optional(),
+        }).optional())
+        .query(async ({ ctx, input }) => {
         if (!reviewClient || !reviewTenantId) {
           return {
             enabled: false,
@@ -280,7 +284,7 @@ export function createIngestionRouter(
             items: [],
           };
         }
-        return { enabled: true, items: await reviewClient.listOpen() };
+        return { enabled: true, items: await reviewClient.listOpen(input?.data_source) };
       }),
       get: permissionProcedure("ingestion.review.read")
         .input(z.object({ id: z.number().int().positive() }))
