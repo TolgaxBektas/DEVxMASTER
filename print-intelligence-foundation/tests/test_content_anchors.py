@@ -2,6 +2,8 @@ from PIL import Image
 import types
 
 from app.services.content_anchors import (
+    _grid_neighbors,
+    _phone,
     compare_content_anchors,
     extract_content_anchors,
 )
@@ -85,6 +87,19 @@ def test_phone_ocr_difference_is_uncertain_not_passed():
     )
     assert result["status"] == "unsicher"
     assert result["findings"][0]["severity"] == "unsicher"
+
+
+def test_phone_normalization_uses_one_canonical_german_form():
+    assert _phone("0049 40 123456") == "040123456"
+    assert _phone("+49 40 123456") == "040123456"
+    assert _phone("040 123456") == "040123456"
+
+
+def test_grid_neighbors_do_not_wrap_between_edge_columns():
+    assert 11 not in _grid_neighbors(0)
+    assert 0 not in _grid_neighbors(11)
+    assert 12 in _grid_neighbors(0)
+    assert 10 in _grid_neighbors(11)
 
 
 def test_text_comparison_reports_substantial_missing_run():
