@@ -7,7 +7,7 @@ from typing import Any
 from sqlalchemy import select
 
 from app.models import Company
-from app.services.dedupe import contact_key, normalize_name
+from app.services.dedupe import normalize_name
 
 XDATA_NB_HIGH_QUALITY = "xdata_nb_high_quality"
 XDATA_GERMANY = "xdata_germany"
@@ -18,9 +18,6 @@ def _digits(value: Any) -> str:
 
 
 def _contact_values(fields: dict[str, Any]) -> tuple[str, set[str], set[str], set[str]]:
-    key = contact_key(fields)
-    if not key.replace("|", ""):
-        key = ""
     domains: set[str] = set()
     phones: set[str] = set()
     emails: set[str] = set()
@@ -57,6 +54,14 @@ def _contact_values(fields: dict[str, Any]) -> tuple[str, set[str], set[str], se
 
     for name, value in fields.items():
         visit(name, value)
+    key_parts = []
+    if domains:
+        key_parts.append("domain=" + ",".join(sorted(domains)))
+    if phones:
+        key_parts.append("phone=" + ",".join(sorted(phones)))
+    if emails:
+        key_parts.append("email=" + ",".join(sorted(emails)))
+    key = "|".join(key_parts)
     return key, domains, phones, emails
 
 
@@ -77,16 +82,21 @@ def _matches(
     source: str,
 ) -> bool:
     stored_key, stored_domains, stored_phones, stored_emails = _stored_values(company)
-    if company.data_source == source and (
-        (key.startswith("weak:")) or stored_key == key
-    ):
-        return True
-    return bool(
-        (not key.startswith("weak:") and company.contact_key and key == company.contact_key)
-        or domains & stored_domains
-        or phones & stored_phones
-        or emails & stored_emails
+    incoming_hard = bool(domains or phones or emails)
+    stored_hard = bool(stored_domains or stored_phones or stored_emails)
+    hard_match = bool(
+        (incoming_hard and stored_hard)
+        and (
+            key == stored_key
+            or key == company.contact_key
+            or domains & stored_domains
+            or phones & stored_phones
+            or emails & stored_emails
+        )
     )
+    if hard_match:
+        return True
+    return company.data_source == source and not incoming_hard and not stored_hard
 
 
 def _append_secondary_finding(company: Company, source: str, fields: dict[str, Any]) -> None:

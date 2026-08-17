@@ -124,3 +124,72 @@ def test_secondary_findings_keep_only_latest_twenty(tmp_path):
         assert len(json.loads(company.secondary_findings_json)) == 20
     finally:
         session.close()
+
+
+def test_imports_with_same_name_and_different_hard_contacts_stay_separate(tmp_path):
+    session = _session(tmp_path)
+    try:
+        first = resolve_company(
+            session,
+            "Taxi Müller",
+            {
+                "company": "Taxi Müller",
+                "evidence": {
+                    "website_domain": {"value": "taxi-a.example"},
+                    "phones": [{"value": "030 11111"}],
+                },
+            },
+            XDATA_NB_HIGH_QUALITY,
+        )
+        second = resolve_company(
+            session,
+            "Taxi Müller",
+            {
+                "company": "Taxi Müller",
+                "evidence": {
+                    "website_domain": {"value": "taxi-b.example"},
+                    "phones": [{"value": "030 22222"}],
+                },
+            },
+            XDATA_NB_HIGH_QUALITY,
+        )
+        assert second.id != first.id
+    finally:
+        session.close()
+
+
+def test_repeated_import_with_same_hard_contacts_reuses_company(tmp_path):
+    session = _session(tmp_path)
+    try:
+        fields = {
+            "company": "Taxi Müller",
+            "evidence": {
+                "website_domain": {"value": "taxi.example"},
+                "phones": [{"value": "030 11111"}],
+            },
+        }
+        first = resolve_company(session, "Taxi Müller", fields, XDATA_NB_HIGH_QUALITY)
+        second = resolve_company(session, "Taxi Müller", fields, XDATA_NB_HIGH_QUALITY)
+        assert second.id == first.id
+    finally:
+        session.close()
+
+
+def test_weak_same_source_match_requires_weak_stored_company(tmp_path):
+    session = _session(tmp_path)
+    try:
+        hard = resolve_company(
+            session,
+            "Taxi Müller",
+            {"company": "Taxi Müller", "domain": "taxi.example"},
+            XDATA_NB_HIGH_QUALITY,
+        )
+        weak = resolve_company(
+            session,
+            "Taxi Müller",
+            {"company": "Taxi Müller"},
+            XDATA_NB_HIGH_QUALITY,
+        )
+        assert weak.id != hard.id
+    finally:
+        session.close()

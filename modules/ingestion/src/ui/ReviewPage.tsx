@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Button,
   Card,
@@ -228,50 +228,69 @@ export function ReviewPage({ api }: ModulePageProps) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [decide, next]);
 
-  if (queue.isLoading) return <Skeleton />;
-  if (queue.error) return <EmptyState title="Prüffälle konnten nicht geladen werden" />;
+  const pageHeader = (
+    <div className="page-heading">
+      <div>
+        <div className="eyebrow">INGESTION</div>
+        <h1>Prüfung</h1>
+        <p>Original und Bearbeitung manuell freigeben oder ablehnen.</p>
+      </div>
+      <span className="form-message">A: Freigeben · R: Ablehnen · N: Weiter</span>
+    </div>
+  );
+  const sourceTabs = (
+    <div className="review-source-tabs" role="tablist" aria-label="Datenquelle">
+      {(Object.keys(SOURCE_LABELS) as DataSource[]).map((source) => {
+        const sourceQueue = source === "xdata_nb_high_quality" ? highQualityQueue : germanyQueue;
+        return (
+          <button
+            className={activeSource === source ? "source-tab active" : "source-tab"}
+            key={source}
+            type="button"
+            role="tab"
+            aria-selected={activeSource === source}
+            onClick={() => setActiveSource(source)}
+          >
+            {SOURCE_LABELS[source]} ({sourceQueue.data?.items.length ?? 0})
+          </button>
+        );
+      })}
+    </div>
+  );
+  const statePage = (content: ReactNode) => (
+    <div className="stack">
+      {pageHeader}
+      {sourceTabs}
+      {content}
+    </div>
+  );
+
+  if (queue.isLoading) return statePage(<Skeleton />);
+  if (queue.error) return statePage(<EmptyState title="Prüffälle konnten nicht geladen werden" />);
   if (!queue.data?.enabled) {
-    return (
+    return statePage(
       <EmptyState
         title="Prüfung deaktiviert"
         {...(queue.data?.message ? { description: queue.data.message } : {})}
-      />
+      />,
     );
   }
   if (!queue.data.items.length) {
-    return <EmptyState title="Keine offenen Prüffälle" description={queue.data.message ?? "Alle Fälle wurden bearbeitet."} />;
+    return statePage(
+      <EmptyState
+        title="Keine offenen Prüffälle"
+        description={queue.data.message ?? "Alle Fälle wurden bearbeitet."}
+      />,
+    );
   }
-  if (selected.error) return <EmptyState title="Prüffall konnte nicht geladen werden" />;
-  if (selected.isLoading || !selected.data) return <Skeleton />;
+  if (selected.error) return statePage(<EmptyState title="Prüffall konnte nicht geladen werden" />);
+  if (selected.isLoading || !selected.data) return statePage(<Skeleton />);
 
   const review = selected.data;
   return (
     <div className="stack">
-      <div className="page-heading">
-        <div>
-          <div className="eyebrow">INGESTION</div>
-          <h1>Prüfung</h1>
-          <p>Original und Bearbeitung manuell freigeben oder ablehnen.</p>
-        </div>
-        <span className="form-message">A: Freigeben · R: Ablehnen · N: Weiter</span>
-      </div>
-      <div className="review-source-tabs" role="tablist" aria-label="Datenquelle">
-        {(Object.keys(SOURCE_LABELS) as DataSource[]).map((source) => {
-          const sourceQueue = source === "xdata_nb_high_quality" ? highQualityQueue : germanyQueue;
-          return (
-            <button
-              className={activeSource === source ? "source-tab active" : "source-tab"}
-              key={source}
-              type="button"
-              role="tab"
-              aria-selected={activeSource === source}
-              onClick={() => setActiveSource(source)}
-            >
-              {SOURCE_LABELS[source]} ({sourceQueue.data?.items.length ?? 0})
-            </button>
-          );
-        })}
-      </div>
+      {pageHeader}
+      {sourceTabs}
       <div className="review-layout">
         <Card>
           <h2>{SOURCE_LABELS[activeSource]}</h2>
