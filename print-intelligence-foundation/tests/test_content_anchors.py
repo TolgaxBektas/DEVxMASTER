@@ -1,8 +1,10 @@
 from PIL import Image
 import types
 
+import app.services.content_anchors as anchors_module
 from app.services.content_anchors import (
     compare_content_anchors,
+    compare_visual_motifs,
     extract_content_anchors,
 )
 
@@ -167,3 +169,74 @@ def test_ocr_uses_shared_effective_resolution(monkeypatch):
     monkeypatch.setitem(__import__("sys").modules, "pytesseract", fake_tesseract)
     extract_content_anchors(Image.new("RGB", (20, 10), "white"), ocr_size=(80, 40))
     assert seen_sizes[0] == (80, 40)
+
+
+def _visual_result(monkeypatch, original_grid, restored_grid, region):
+    original = Image.new("RGB", (96, 96), "white")
+    restored = Image.new("RGB", (96, 96), "white")
+    grid_calls = iter([original_grid, *([restored_grid] * 150)])
+    monkeypatch.setattr(
+        anchors_module,
+        "_aligned_candidate",
+        lambda *_args, **_kwargs: restored,
+    )
+    monkeypatch.setattr(
+        anchors_module,
+        "_edge_grid",
+        lambda _image: next(grid_calls),
+    )
+    monkeypatch.setattr(
+        anchors_module,
+        "_edge_bitmap",
+        lambda _image: [False] * 144,
+    )
+    return compare_visual_motifs(
+        original,
+        restored,
+        excluded_lost_regions=[region],
+    )
+
+
+def test_qr_removed_excludes_only_lost_qr_region(monkeypatch):
+    original_grid = [0.0] * 144
+    restored_grid = [0.0] * 144
+    for index in (13, 14, 25, 26):
+        original_grid[index] = 0.5
+    result = _visual_result(
+        monkeypatch,
+        original_grid,
+        restored_grid,
+        {"x": 8, "y": 8, "width": 24, "height": 24},
+    )
+    assert result["lost_cells"] == 0
+    assert not result["findings"]
+
+
+def test_qr_removed_does_not_hide_lost_motif_elsewhere(monkeypatch):
+    original_grid = [0.0] * 144
+    restored_grid = [0.0] * 144
+    for index in (13, 14, 25, 26, 100, 101):
+        original_grid[index] = 0.5
+    result = _visual_result(
+        monkeypatch,
+        original_grid,
+        restored_grid,
+        {"x": 0, "y": 0, "width": 96, "height": 96},
+    )
+    assert result["lost_cells"] > 0
+    assert any(finding["severity"] == "abweichung" for finding in result["findings"])
+
+
+def test_qr_region_does_not_hide_added_content(monkeypatch):
+    original_grid = [0.0] * 144
+    restored_grid = [0.0] * 144
+    for index in (13, 14, 25, 26):
+        restored_grid[index] = 0.5
+    result = _visual_result(
+        monkeypatch,
+        original_grid,
+        restored_grid,
+        {"x": 8, "y": 8, "width": 24, "height": 24},
+    )
+    assert result["added_cells"] > 0
+    assert any(finding["severity"] == "abweichung" for finding in result["findings"])

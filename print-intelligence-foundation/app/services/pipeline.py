@@ -696,7 +696,18 @@ class Pipeline:
                 ocr_size=ocr_size,
             )
             comparison = compare_content_anchors(original_anchors, restored_anchors)
-            visual_comparison = compare_visual_motifs(original_image, proposal_image)
+            excluded_lost_regions = []
+            if (
+                comparison["qr_removed"]
+                and original_anchors.get("qr_detection") == "available"
+                and original_anchors.get("qr_region")
+            ):
+                excluded_lost_regions.append(original_anchors["qr_region"])
+            visual_comparison = compare_visual_motifs(
+                original_image,
+                proposal_image,
+                excluded_lost_regions=excluded_lost_regions,
+            )
             comparison["findings"].extend(visual_comparison["findings"])
             comparison["status"] = comparison["severity"] = (
                 "abweichung"

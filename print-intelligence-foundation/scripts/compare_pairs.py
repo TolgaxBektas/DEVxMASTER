@@ -33,12 +33,20 @@ def main() -> int:
             restored_anchors = extract_content_anchors(
                 image.convert("RGB"), ocr_size=ocr_size
             )
+        comparison = compare_content_anchors(
+            original_anchors, restored_anchors
+        )
+        excluded_lost_regions = []
+        if (
+            comparison["qr_removed"]
+            and original_anchors.get("qr_detection") == "available"
+            and original_anchors.get("qr_region")
+        ):
+            excluded_lost_regions.append(original_anchors["qr_region"])
         visual_comparison = compare_visual_motifs(
             Image.open(original).convert("RGB"),
             Image.open(restored).convert("RGB"),
-        )
-        comparison = compare_content_anchors(
-            original_anchors, restored_anchors
+            excluded_lost_regions=excluded_lost_regions,
         )
         comparison["findings"].extend(visual_comparison["findings"])
         comparison["status"] = comparison["severity"] = (

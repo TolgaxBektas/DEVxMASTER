@@ -215,7 +215,9 @@ def _decode_qr(image: Image.Image) -> tuple[list[str], str | None]:
     return values, None
 
 
-def _qr_presence(image: Image.Image) -> tuple[bool, float]:
+def _qr_presence(
+    image: Image.Image,
+) -> tuple[bool, float, dict[str, float] | None]:
     gray = ImageOps.autocontrast(image.convert("L"))
     width, height = gray.size
     pixels = list(gray.resize((min(width, 256), min(height, 256))).getdata())
@@ -223,6 +225,7 @@ def _qr_presence(image: Image.Image) -> tuple[bool, float]:
     scan_height = min(height, 256)
     best = 0.0
     finder_best = 0.0
+    finder_region = None
     for size in range(20, min(scan_width, scan_height) // 2 + 1, 4):
         for top in range(0, scan_height - size + 1, max(2, size // 6)):
             for left in range(0, scan_width - size + 1, max(2, size // 6)):
@@ -272,8 +275,20 @@ def _qr_presence(image: Image.Image) -> tuple[bool, float]:
                                     (origin_y + row) * 21 + origin_x + column
                                 ] == expected
                                 total += 1
-                    finder_best = max(finder_best, matches / total)
-    return finder_best >= 0.78, finder_best if finder_best else best
+                    score = matches / total
+                    if score > finder_best:
+                        finder_best = score
+                        finder_region = {
+                            "x": left * width / scan_width,
+                            "y": top * height / scan_height,
+                            "width": size * width / scan_width,
+                            "height": size * height / scan_height,
+                        }
+    return (
+        finder_best >= 0.78,
+        finder_best if finder_best else best,
+        finder_region if finder_best >= 0.78 else None,
+    )
 
 
 def _edge_grid(image: Image.Image, size: int = 12) -> list[float]:
@@ -345,6 +360,8 @@ def _aligned_candidate(
 def compare_visual_motifs(
     original: Image.Image,
     restored: Image.Image,
+    *,
+    excluded_lost_regions: list[dict[str, float]] | None = None,
 ) -> dict[str, Any]:
     original = original.convert("RGB")
     restored = restored.convert("RGB")
@@ -442,6 +459,33 @@ def compare_visual_motifs(
             result.append(component)
         return result
 
+    excluded_lost_regions = excluded_lost_regions or []
+    max_qr_side = min(width, height) * 0.25
+
+    def cell_intersects_region(index: int, region: dict[str, float]) -> bool:
+        region_width = max(0.0, min(region.get("width", 0.0), max_qr_side))
+        region_height = max(0.0, min(region.get("height", 0.0), max_qr_side))
+        center_x = region.get("x", 0.0) + region.get("width", 0.0) / 2
+        center_y = region.get("y", 0.0) + region.get("height", 0.0) / 2
+        left = max(0.0, center_x - region_width / 2)
+        top = max(0.0, center_y - region_height / 2)
+        row, column = divmod(index, 12)
+        cell_left = column * width / 12
+        cell_top = row * height / 12
+        cell_right = (column + 1) * width / 12
+        cell_bottom = (row + 1) * height / 12
+        return (
+            cell_left < left + region_width
+            and cell_right > left
+            and cell_top < top + region_height
+            and cell_bottom > top
+        )
+
+    for region in excluded_lost_regions:
+        lost = {
+            index for index in lost
+            if not cell_intersects_region(index, region)
+        }
     lost_components = [part for part in components(set(lost)) if len(part) >= 2]
     added_components = [part for part in components(set(added)) if len(part) >= 2]
     result["lost_cells"] = len(lost)
@@ -485,7 +529,7 @@ def extract_content_anchors(
         if not value.replace(".", "").isdigit()
     })
     qr_codes, qr_finding = _decode_qr(image)
-    qr_present, qr_score = _qr_presence(image)
+    qr_present, qr_score, qr_region = _qr_presence(image)
     return {
         "text_lines": lines,
         "company_name": _normalize(company_name) if company_name else None,
@@ -495,6 +539,7 @@ def extract_content_anchors(
         "qr_codes": qr_codes,
         "qr_present": qr_present,
         "qr_presence_score": round(qr_score, 4),
+        "qr_region": qr_region,
         "qr_detection": "available" if qr_finding is None else "unavailable",
         "ocr_token_count": len(_words(lines)),
         "ocr_confidence": ocr_confidence,
