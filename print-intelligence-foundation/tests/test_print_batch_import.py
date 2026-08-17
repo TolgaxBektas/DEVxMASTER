@@ -14,15 +14,18 @@ from app.models import AdOccurrence, Company, Document, Page, ReviewItem
 from app.services.storage import LocalStorage
 
 
-def _metadata():
+def _metadata(data_source=None):
+    source = {
+        "publication": "Testblatt",
+        "issue": "01/2026",
+        "page": 4,
+        "url": "https://example.test/testblatt.pdf",
+    }
+    if data_source is not None:
+        source["data_source"] = data_source
     return {
         "company_name": "Import Test GmbH",
-        "source": {
-            "publication": "Testblatt",
-            "issue": "01/2026",
-            "page": 4,
-            "url": "https://example.test/testblatt.pdf",
-        },
+        "source": source,
         "bbox": [1, 2, 30, 40],
         "crop_size": [1200, 800],
         "evidence": {
@@ -91,6 +94,46 @@ def test_print_batch_import_is_idempotent_and_reviewable(tmp_path):
         queue = client.get("/review-queue")
         assert queue.status_code == 200
         assert len(queue.json()) == 1
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize(
+    ("data_source", "expected"),
+    [
+        ("xdata_germany", "xdata_germany"),
+        ("xdata_nb_high_quality", "xdata_nb_high_quality"),
+    ],
+)
+def test_print_batch_import_uses_explicit_source(tmp_path, data_source, expected):
+    client, factory, _ = _client(tmp_path)
+    try:
+        response = client.post(
+            "/imports/print-batch",
+            files=_files(_metadata(data_source)),
+        )
+        assert response.status_code == 200
+        with factory() as session:
+            occurrence = session.scalar(select(AdOccurrence))
+            company = session.scalar(select(Company))
+            assert occurrence.data_source == expected
+            assert occurrence.source_explicit is True
+            assert company.data_source == expected
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_print_batch_import_defaults_to_germany_source(tmp_path):
+    client, factory, _ = _client(tmp_path)
+    try:
+        response = client.post("/imports/print-batch", files=_files())
+        assert response.status_code == 200
+        with factory() as session:
+            occurrence = session.scalar(select(AdOccurrence))
+            company = session.scalar(select(Company))
+            assert occurrence.data_source == "xdata_germany"
+            assert occurrence.source_explicit is False
+            assert company.data_source == "xdata_germany"
     finally:
         app.dependency_overrides.clear()
 
@@ -187,7 +230,7 @@ def test_print_batch_import_rejects_unknown_source_metadata(tmp_path):
     client, factory, _ = _client(tmp_path)
     try:
         metadata = _metadata()
-        metadata["source"]["supplement"] = "extra source detail"
+        metadata["source"]["data_source"] = "xdata_other"
         response = client.post("/imports/print-batch", files=_files(metadata))
         assert response.status_code == 422
         with factory() as session:

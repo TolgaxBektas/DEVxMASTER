@@ -30,33 +30,13 @@ def _data_source(
 ) -> str:
     if occurrence and occurrence.data_source:
         return occurrence.data_source
-    if document and (
-        (document.filename or "").startswith("print-batch-")
-        or (document.content_sha256 or "").startswith("print-batch-")
-    ):
-        return XDATA_NB_HIGH_QUALITY
     return XDATA_GERMANY
 
 
 def _source_clause(data_source: str):
-    fallback_print_batch = (
-        (Document.filename.like("print-batch-%"))
-        | (Document.content_sha256.like("print-batch-%"))
-    )
-    fallback_source = (
-        XDATA_NB_HIGH_QUALITY
-        if data_source == XDATA_NB_HIGH_QUALITY
-        else XDATA_GERMANY
-    )
-    if fallback_source == XDATA_NB_HIGH_QUALITY:
-        return or_(
-            AdOccurrence.data_source == data_source,
-            (AdOccurrence.id.is_(None) & fallback_print_batch),
-        )
-    return or_(
-        AdOccurrence.data_source == data_source,
-        (AdOccurrence.id.is_(None) & ~fallback_print_batch),
-    )
+    if data_source == XDATA_GERMANY:
+        return or_(AdOccurrence.data_source == data_source, AdOccurrence.id.is_(None))
+    return AdOccurrence.data_source == data_source
 
 
 def _item_query():
