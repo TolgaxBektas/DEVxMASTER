@@ -79,6 +79,7 @@ class AdOccurrence(Base):
     fields_json: Mapped[str] = mapped_column(Text, default="{}")
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
     data_source: Mapped[str] = mapped_column(String(40), default="xdata_germany")
+    source_explicit: Mapped[bool] = mapped_column(default=False)
     page: Mapped[Page] = relationship(back_populates="ads")
     company: Mapped[Company | None] = relationship()
 

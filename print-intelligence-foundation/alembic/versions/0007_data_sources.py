@@ -1,4 +1,8 @@
-"""add xDATA source-aware company state"""
+"""add xDATA source-aware company state.
+
+Source provenance is assigned by ingestion, never inferred from filenames.
+Existing databases are corrected by 0008 using the legacy migration marker.
+"""
 
 import json
 from datetime import datetime, timezone
@@ -37,35 +41,22 @@ def upgrade():
     connection = op.get_bind()
     connection.execute(
         sa.text(
-            "UPDATE ad_occurrences SET data_source = CASE WHEN EXISTS ("
-            "SELECT 1 FROM pages p JOIN documents d ON d.id = p.document_id "
-            "WHERE p.id = ad_occurrences.page_id AND "
-            "(d.filename LIKE 'print-batch-%' OR d.content_sha256 LIKE 'print-batch-%')"
-            ") THEN 'xdata_nb_high_quality' ELSE 'xdata_germany' END"
+            "UPDATE ad_occurrences SET data_source = 'xdata_germany'"
         )
     )
     rows = connection.execute(
         sa.text(
-            "SELECT c.id, c.name, c.contact_key, "
-            "EXISTS (SELECT 1 FROM ad_occurrences a "
-            "JOIN pages p ON p.id = a.page_id "
-            "JOIN documents d ON d.id = p.document_id "
-            "WHERE a.company_id = c.id AND "
-            "(d.filename LIKE 'print-batch-%' OR d.content_sha256 LIKE 'print-batch-%')) "
-            "AS is_high_quality FROM companies c"
+            "SELECT c.id FROM companies c"
         )
     ).mappings()
     now = datetime.now(timezone.utc)
     canonical_by_company = {}
     occurrence_rows = connection.execute(
         sa.text(
-            "SELECT a.company_id, a.fields_json, d.filename "
-            "FROM ad_occurrences a JOIN pages p ON p.id = a.page_id "
-            "JOIN documents d ON d.id = p.document_id "
+            "SELECT a.company_id, a.fields_json "
+            "FROM ad_occurrences a "
             "WHERE a.company_id IS NOT NULL "
-            "ORDER BY CASE WHEN "
-            "(d.filename LIKE 'print-batch-%' OR d.content_sha256 LIKE 'print-batch-%') "
-            "THEN 0 ELSE 1 END, a.id"
+            "ORDER BY a.id"
         )
     ).mappings()
     for occurrence in occurrence_rows:
@@ -78,15 +69,13 @@ def upgrade():
             fields = {}
         canonical_by_company[company_id] = fields if isinstance(fields, dict) else {}
     for row in rows:
-        source = "xdata_nb_high_quality" if row["is_high_quality"] else "xdata_germany"
         connection.execute(
             sa.text(
-                "UPDATE companies SET data_source = :source, "
+                "UPDATE companies SET data_source = 'xdata_germany', "
                 "canonical_fields_json = :fields, canonical_updated_at = :updated_at "
                 "WHERE id = :id"
             ),
             {
-                "source": source,
                 "fields": json.dumps(canonical_by_company.get(row["id"], {}), ensure_ascii=False),
                 "updated_at": now,
                 "id": row["id"],

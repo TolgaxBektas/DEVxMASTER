@@ -14,15 +14,18 @@ from app.models import AdOccurrence, Company, Page, ReviewItem
 from app.services.storage import LocalStorage
 
 
-def _metadata(name: str, page: int) -> dict:
+def _metadata(name: str, page: int, data_source: str | None = None) -> dict:
+    source = {
+        "publication": "Reviewblatt",
+        "issue": "01/2026",
+        "page": page,
+        "url": f"https://example.test/{page}.pdf",
+    }
+    if data_source is not None:
+        source["data_source"] = data_source
     return {
         "company_name": name,
-        "source": {
-            "publication": "Reviewblatt",
-            "issue": "01/2026",
-            "page": page,
-            "url": f"https://example.test/{page}.pdf",
-        },
+        "source": source,
         "bbox": [1, 2, 30, 40],
         "crop_size": [1200, 800],
         "evidence": {"verified": True},
@@ -87,7 +90,7 @@ def test_open_review_list_contains_metadata_and_image_availability(tmp_path, mon
         assert item["page"] == 4
         assert item["company"]["name"] == "Review Test GmbH"
         assert item["company"]["verification"] == {"verified": True}
-        assert item["data_source"] == "xdata_nb_high_quality"
+        assert item["data_source"] == "xdata_germany"
         assert item["restoration"]["review_status"] == "pending"
         assert item["restoration"]["geometry_quality_status"] == (
             "external_generated_not_geometrically_measured"
@@ -116,8 +119,8 @@ def test_review_source_filter_separates_open_cases(tmp_path, monkeypatch):
             "/api/v1/reviews/open?data_source=other",
             headers={"x-service-token": "review-token"},
         )
-        assert len(high_quality.json()) == 1
-        assert germany.json() == []
+        assert high_quality.json() == []
+        assert len(germany.json()) == 1
         assert invalid.status_code == 422
     finally:
         app.dependency_overrides.clear()
