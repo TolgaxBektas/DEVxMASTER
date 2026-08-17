@@ -384,39 +384,37 @@ def test_long_value_uses_smaller_font_and_stays_within_margins(monkeypatch):
         [("website", "www.example.de/a-very-long-address-that-needs-fitting")],
     )
 
+    assert result.manifest["status"] == "skipped"
+    assert result.manifest["reason"] == "font_below_readability_threshold"
+    assert result.image.tobytes() == image.tobytes()
+    assert result.manifest["font_minimum_scale"] == (
+        extra_lines.FONT_MINIMUM_SCALE
+    )
+
+
+def test_right_aligned_anchor_shrinks_social_line_inside_right_margin(monkeypatch):
+    image = Image.new("RGB", (500, 140), "white")
+    ImageDraw.Draw(image).rectangle((0, 40, 499, 139), fill=(20, 80, 140))
+    anchor = _anchor(left=440, right=490)
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: anchor)
+
+    result = compose_extra_lines(
+        image,
+        [("instagram", "instagram.com/profile")],
+    )
+
     assert result.manifest["status"] == "composed"
     probe = extra_lines._fit_font(
         "X", result.manifest["cap_height"], result.manifest["bold"]
     )
     assert probe is not None
-    assert result.manifest["font_size"] < probe.size
-    margin = max(round(image.width * 0.04), result.manifest["cap_height"])
-    assert all(
-        margin <= row["position"][0]
-        and row["position"][0] + row["width"] <= image.width - margin
-        for block in result.manifest["blocks"]
-        for row in block["rows"]
-    )
-
-
-def test_right_aligned_anchor_shrinks_social_line_inside_right_margin(monkeypatch):
-    image = Image.new("RGB", (240, 140), "white")
-    ImageDraw.Draw(image).rectangle((0, 40, 239, 139), fill=(20, 80, 140))
-    anchor = _anchor(left=230, right=239)
-    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: anchor)
-
-    result = compose_extra_lines(
-        image,
-        [("instagram", "www.instagram.com/a-very-long-profile-name")],
-    )
-
-    assert result.manifest["status"] == "composed"
+    assert result.manifest["font_size"] == probe.size
     margin = max(round(image.width * 0.04), result.manifest["cap_height"])
     for block in result.manifest["blocks"]:
         for row in block["rows"]:
             assert margin <= row["position"][0]
             assert row["position"][0] + row["width"] <= image.width - margin
-    assert any(block["shifted"] for block in result.manifest["blocks"])
+    assert all(block["shifted"] for block in result.manifest["blocks"])
 
 
 def test_descender_on_last_line_has_full_glyph_clearance(monkeypatch):

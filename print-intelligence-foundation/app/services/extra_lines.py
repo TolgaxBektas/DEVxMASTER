@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import math
 from pathlib import Path
 import re
 from typing import Any, Mapping, Sequence
@@ -8,6 +9,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 
 CONTACT_RE = re.compile(r"(@|www\.|\.de\b|tel\.|telefon|fax|\d{3,})", re.I)
+FONT_MINIMUM_SCALE = 0.70
 SOCIAL_ASSETS = Path(__file__).parents[1] / "assets" / "social"
 FONT_CANDIDATES = {
     False: (
@@ -631,8 +633,6 @@ def compose_extra_lines(
     right_limit = content_right - margin
     max_available = right_limit - left_limit
     desired_left = max(left_limit, anchor["left"])
-    left_available = right_limit - desired_left
-    shifted_for_fit = False
     if max_available <= 0:
         return ExtraLineComposition(
             source.copy(),
@@ -643,10 +643,6 @@ def compose_extra_lines(
                 "discarded": discarded,
             },
         )
-    if left_available <= 0:
-        desired_left = left_limit
-        left_available = max_available
-        shifted_for_fit = True
     probe = _fit_font("X", cap_height, bold)
     if probe is None:
         return ExtraLineComposition(
@@ -672,8 +668,10 @@ def compose_extra_lines(
                 "discarded": discarded,
             },
         )
-    def fit_blocks(available: int):
-        for size in range(probe.size, 0, -1):
+    minimum_font_size = max(1, math.ceil(probe.size * FONT_MINIMUM_SCALE))
+
+    def fit_blocks(available: int, minimum_size: int):
+        for size in range(probe.size, minimum_size - 1, -1):
             candidate = ImageFont.truetype(font_path, size)
             candidate_blocks = _group_lines(
                 channels, draw_probe, candidate, cap_height, available
@@ -682,24 +680,29 @@ def compose_extra_lines(
                 return candidate, candidate_blocks
         return None, []
 
-    font, blocks = fit_blocks(max_available if centred else left_available)
-    if font is None and not centred and desired_left != left_limit:
-        desired_left = left_limit
-        shifted_for_fit = True
-        font, blocks = fit_blocks(max_available)
+    probe_blocks = _group_lines(
+        channels, draw_probe, probe, cap_height, max_available
+    )
+    if all(block["width"] <= max_available for block in probe_blocks):
+        font, blocks = probe, probe_blocks
+    else:
+        font, blocks = fit_blocks(max_available, minimum_font_size)
     if font is None:
         return ExtraLineComposition(
             source.copy(),
             {
                 "status": "skipped",
-                "reason": "no_line_space",
+                "reason": "font_below_readability_threshold",
                 "lines": line_values,
                 "discarded": discarded,
+                "font_minimum_scale": FONT_MINIMUM_SCALE,
+                "font_minimum_size": minimum_font_size,
             },
         )
     content_height, glyph_bottom = _layout_height(
         blocks, line_height, block_gap, font, cap_height, bottom_air
     )
+    font_floor_applied = probe.size > minimum_font_size and font.size == minimum_font_size
     if not band_fits:
         available = max(0, source.height - band_end)
         fits_margin = available >= content_height and _uniform_rows(
@@ -740,9 +743,7 @@ def compose_extra_lines(
         block_x = max(
             left_limit, min(desired_x, right_limit - block["width"])
         )
-        shifted = shifted_for_fit or (
-            not centred and abs(block_x - desired_x) > 0.01
-        )
+        shifted = not centred and abs(block_x - desired_x) > 0.01
         rows_manifest = []
         for row in block["rows"]:
             row_x = block_x
@@ -797,6 +798,8 @@ def compose_extra_lines(
             "background": list(background),
             "content_bounds": list(content_bounds),
             "font_size": font.size,
+            "font_minimum_scale": FONT_MINIMUM_SCALE if font_floor_applied else None,
+            "font_minimum_size": minimum_font_size if font_floor_applied else None,
             "bold": bold,
             "band_end": band_end,
             "content_end": content_end_value,
