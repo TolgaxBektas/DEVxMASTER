@@ -10,7 +10,7 @@ from app.api.auth import require_auth
 from app.api.dependencies import session_dependency, storage_dependency
 from app.core.config import get_settings
 from app.models import AdOccurrence, Document, Page, ReviewItem
-from app.services.companies import XDATA_GERMANY, resolve_company
+from app.services.companies import XDATA_GERMANY, XDATA_NB_HIGH_QUALITY, resolve_company
 from app.services.ingest import UploadTooLargeError, read_limited
 from app.services.storage import sha256
 
@@ -131,8 +131,17 @@ def import_print_batch(
         occurrence = session.scalar(
             select(AdOccurrence).where(AdOccurrence.page_id == page.id)
         )
-    occurrence.data_source = payload.source.data_source
-    occurrence.source_explicit = "data_source" in payload.source.model_fields_set
+    is_new_occurrence = occurrence.id is None
+    source_explicit = "data_source" in payload.source.model_fields_set
+    if is_new_occurrence:
+        occurrence.source_explicit = source_explicit
+        occurrence.data_source = payload.source.data_source
+    elif occurrence.source_explicit or source_explicit:
+        if occurrence.data_source != XDATA_NB_HIGH_QUALITY or (
+            payload.source.data_source == XDATA_NB_HIGH_QUALITY
+        ):
+            occurrence.data_source = payload.source.data_source
+        occurrence.source_explicit = True
     session.flush()
 
     company = resolve_company(

@@ -25,7 +25,7 @@ def upgrade():
     connection.execute(
         sa.text(
             "UPDATE ad_occurrences SET data_source = 'xdata_germany' "
-            "WHERE data_source = 'xdata_nb_high_quality' AND source_explicit = 0 "
+            "WHERE data_source = 'xdata_nb_high_quality' AND source_explicit IS FALSE "
             "AND EXISTS ("
             "SELECT 1 FROM pages p JOIN documents d ON d.id = p.document_id "
             "WHERE p.id = ad_occurrences.page_id AND "

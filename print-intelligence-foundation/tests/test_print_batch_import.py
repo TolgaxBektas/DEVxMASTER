@@ -138,6 +138,50 @@ def test_print_batch_import_defaults_to_germany_source(tmp_path):
         app.dependency_overrides.clear()
 
 
+def test_print_batch_reimport_without_source_preserves_explicit_high_quality(tmp_path):
+    client, factory, _ = _client(tmp_path)
+    try:
+        explicit = _metadata("xdata_nb_high_quality")
+        assert client.post("/imports/print-batch", files=_files(explicit)).status_code == 200
+        assert client.post("/imports/print-batch", files=_files()).status_code == 200
+        with factory() as session:
+            occurrence = session.scalar(select(AdOccurrence))
+            assert occurrence.data_source == "xdata_nb_high_quality"
+            assert occurrence.source_explicit is True
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_print_batch_reimport_germany_does_not_downgrade_high_quality(tmp_path):
+    client, factory, _ = _client(tmp_path)
+    try:
+        explicit = _metadata("xdata_nb_high_quality")
+        germany = _metadata("xdata_germany")
+        assert client.post("/imports/print-batch", files=_files(explicit)).status_code == 200
+        assert client.post("/imports/print-batch", files=_files(germany)).status_code == 200
+        with factory() as session:
+            occurrence = session.scalar(select(AdOccurrence))
+            assert occurrence.data_source == "xdata_nb_high_quality"
+            assert occurrence.source_explicit is True
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_print_batch_reimport_high_quality_upgrades_germany(tmp_path):
+    client, factory, _ = _client(tmp_path)
+    try:
+        germany = _metadata("xdata_germany")
+        explicit = _metadata("xdata_nb_high_quality")
+        assert client.post("/imports/print-batch", files=_files(germany)).status_code == 200
+        assert client.post("/imports/print-batch", files=_files(explicit)).status_code == 200
+        with factory() as session:
+            occurrence = session.scalar(select(AdOccurrence))
+            assert occurrence.data_source == "xdata_nb_high_quality"
+            assert occurrence.source_explicit is True
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_print_batch_import_rejects_incomplete_case_without_record(tmp_path):
     client, factory, _ = _client(tmp_path)
     try:
