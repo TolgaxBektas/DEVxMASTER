@@ -36,6 +36,12 @@ def main() -> int:
         comparison = compare_content_anchors(
             original_anchors, restored_anchors
         )
+        for key in (
+            "watermark_removed",
+            "watermark_markers_original",
+            "watermark_markers_restored",
+        ):
+            comparison.pop(key, None)
         excluded_lost_regions = []
         if (
             comparison["qr_removed"]

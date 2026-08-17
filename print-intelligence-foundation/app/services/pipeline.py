@@ -116,7 +116,9 @@ class Pipeline:
         self.image_edit_color_tolerance = image_edit_color_tolerance
         self.watermark_markers = [
             marker.casefold().strip()
-            for marker in (watermark_markers or ["inixmedia"])
+            for marker in (
+                ["inixmedia"] if watermark_markers is None else watermark_markers
+            )
             if marker.strip()
         ]
         self._restoration_cost_used = 0

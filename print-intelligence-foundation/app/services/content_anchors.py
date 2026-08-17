@@ -731,14 +731,11 @@ def compare_content_anchors(
         "status": severity,
         "severity": severity,
         "qr_removed": qr_removed,
+        "watermark_removed": watermark_removed,
+        "watermark_markers_original": sorted(original_watermarks),
+        "watermark_markers_restored": sorted(restored_watermarks),
         "findings": findings,
     }
-    if watermark_enabled:
-        result.update({
-            "watermark_removed": watermark_removed,
-            "watermark_markers_original": sorted(original_watermarks),
-            "watermark_markers_restored": sorted(restored_watermarks),
-        })
     return result
 
 

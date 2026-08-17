@@ -50,7 +50,7 @@ class _LowConfidenceOrderFormProvider:
         return {"company": "Synthetic Bau GmbH"}
 
 
-def _run(tmp_path, enabled):
+def _run(tmp_path, enabled, watermark_markers=None):
     engine = create_engine(f"sqlite:///{tmp_path / 'restoration.db'}")
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
@@ -62,6 +62,7 @@ def _run(tmp_path, enabled):
             render_dpi=120,
             local_work_dir=tmp_path / "work",
             restoration_enabled=enabled,
+            watermark_markers=watermark_markers,
         )
         document = pipeline.ingest(FIXTURE.read_bytes())
         ads = session.scalars(
@@ -78,6 +79,24 @@ def test_restoration_is_off_by_default_and_preserves_existing_artifacts(tmp_path
     assert all(ad.restoration_path is None for ad in ads)
     assert all(json.loads(ad.restoration_manifest_json) == {} for ad in ads)
     assert all(ad.artwork_path for ad in ads)
+    session.close()
+
+
+def test_empty_watermark_marker_list_completes_restoration_path(tmp_path):
+    session, _, ads, _ = _run(tmp_path, True, watermark_markers=[])
+    manifests = [json.loads(ad.restoration_manifest_json) for ad in ads]
+    applied = [manifest for manifest in manifests if manifest["edit_status"] == "applied"]
+    assert applied
+    comparisons = [manifest["content_comparison"] for manifest in applied]
+    assert all(comparison["watermark_removed"] is False for comparison in comparisons)
+    assert all(
+        comparison["watermark_markers_original"] == []
+        for comparison in comparisons
+    )
+    assert all(
+        comparison["watermark_markers_restored"] == []
+        for comparison in comparisons
+    )
     session.close()
 
 
