@@ -71,6 +71,8 @@ const FIELD_LABELS: Record<string, string> = {
   phones: "Telefon",
   faxes: "Fax",
   social_profiles: "Social-Kanäle",
+  facebook: "Facebook",
+  instagram: "Instagram",
   address: "Adresse",
   street: "Straße",
   postal_code: "PLZ",
@@ -165,7 +167,7 @@ function DeferredChannels({ channels }: { channels: readonly DeferredChannel[] }
       <strong>Zusatzkanäle – wartet auf Feld in X-Core</strong>
       {channels.map((channel) => (
         <span key={channel.id}>
-          {channel.field_name}: {channel.value}
+          {FIELD_LABELS[channel.field_name] ?? channel.field_name}: {channel.value}
           {channel.source_url ? ` · ${channel.source_url}` : ""}
         </span>
       ))}
