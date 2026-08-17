@@ -146,8 +146,43 @@ def test_print_batch_reimport_without_source_preserves_explicit_high_quality(tmp
         assert client.post("/imports/print-batch", files=_files()).status_code == 200
         with factory() as session:
             occurrence = session.scalar(select(AdOccurrence))
+            company = session.scalar(select(Company))
+            metadata = json.loads(occurrence.artwork_metadata_json)
             assert occurrence.data_source == "xdata_nb_high_quality"
             assert occurrence.source_explicit is True
+            assert company.data_source == "xdata_nb_high_quality"
+            assert metadata["source"]["data_source"] == "xdata_nb_high_quality"
+            assert len(json.loads(company.secondary_findings_json)) == 1
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_print_batch_reimport_without_source_preserves_company_without_hard_contacts(
+    tmp_path,
+):
+    client, factory, _ = _client(tmp_path)
+    try:
+        explicit = _metadata("xdata_nb_high_quality")
+        explicit["evidence"] = {"verified": True}
+        assert client.post("/imports/print-batch", files=_files(explicit)).status_code == 200
+        germany_default = _metadata()
+        germany_default["evidence"] = {"verified": True}
+        assert (
+            client.post(
+                "/imports/print-batch",
+                files=_files(germany_default),
+            ).status_code
+            == 200
+        )
+        with factory() as session:
+            occurrence = session.scalar(select(AdOccurrence))
+            companies = session.scalars(select(Company)).all()
+            metadata = json.loads(occurrence.artwork_metadata_json)
+            assert len(companies) == 1
+            assert companies[0].data_source == "xdata_nb_high_quality"
+            assert occurrence.data_source == "xdata_nb_high_quality"
+            assert metadata["source"]["data_source"] == "xdata_nb_high_quality"
+            assert len(json.loads(companies[0].secondary_findings_json)) == 1
     finally:
         app.dependency_overrides.clear()
 

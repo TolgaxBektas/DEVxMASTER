@@ -143,21 +143,25 @@ def import_print_batch(
             occurrence.data_source = payload.source.data_source
         occurrence.source_explicit = True
     session.flush()
+    effective_source = occurrence.data_source
 
     company = resolve_company(
         session,
         payload.company_name,
         {"company": payload.company_name, **payload.evidence},
-        payload.source.data_source,
+        effective_source,
+        write_source=payload.source.data_source,
     )
 
     prefix = f"print-batch/{identity}"
     occurrence.artwork_path = storage.put(original_bytes, f"{prefix}/original.png")
     occurrence.restoration_path = storage.put(restored_bytes, f"{prefix}/restored.png")
+    stored_source = payload.source.model_dump()
+    stored_source["data_source"] = effective_source
     occurrence.artwork_metadata_json = json.dumps(
         {
             "company_name": payload.company_name,
-            "source": payload.source.model_dump(),
+            "source": stored_source,
             "crop_size": payload.crop_size,
             "evidence": payload.evidence,
             "plan_digest": payload.plan_digest,

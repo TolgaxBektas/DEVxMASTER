@@ -116,15 +116,17 @@ def resolve_company(
     session,
     name: str,
     fields: dict[str, Any],
-    source: str,
+    lookup_source: str,
+    write_source: str | None = None,
 ) -> Company:
+    write_source = lookup_source if write_source is None else write_source
     normalized = normalize_name(name)
     key, domains, phones, _emails = _contact_values(fields)
     if not key:
         digest = hashlib.sha256(
             json.dumps(fields, ensure_ascii=False, sort_keys=True).encode()
         ).hexdigest()
-        key = f"weak:{source}:{digest}"
+        key = f"weak:{lookup_source}:{digest}"
     candidates = session.scalars(
         select(Company).where(Company.normalized_name == normalized)
     ).all()
@@ -132,7 +134,7 @@ def resolve_company(
         (
             candidate
             for candidate in candidates
-            if _matches(candidate, key, domains, phones, _emails, source)
+            if _matches(candidate, key, domains, phones, _emails, lookup_source)
         ),
         None,
     )
@@ -142,7 +144,7 @@ def resolve_company(
             name=name,
             normalized_name=normalized,
             contact_key=key,
-            data_source=source,
+            data_source=write_source,
             canonical_fields_json=json.dumps(fields, ensure_ascii=False),
             secondary_findings_json="[]",
             canonical_updated_at=now,
@@ -150,12 +152,12 @@ def resolve_company(
         session.add(company)
         session.flush()
         return company
-    if source == XDATA_GERMANY and company.data_source == XDATA_NB_HIGH_QUALITY:
-        _append_secondary_finding(company, source, fields)
+    if write_source == XDATA_GERMANY and company.data_source == XDATA_NB_HIGH_QUALITY:
+        _append_secondary_finding(company, write_source, fields)
         return company
     company.name = name
     company.contact_key = key
     company.canonical_fields_json = json.dumps(fields, ensure_ascii=False)
-    company.data_source = source
+    company.data_source = write_source
     company.canonical_updated_at = now
     return company
