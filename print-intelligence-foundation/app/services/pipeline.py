@@ -713,6 +713,7 @@ class Pipeline:
                 "restored": restored_anchors,
             }
             result.manifest["content_comparison"] = comparison
+            result.manifest["qr_removed"] = comparison["qr_removed"]
             result.manifest["visual_comparison"] = visual_comparison
             messages = finding_messages(comparison)
             if messages:

@@ -10,7 +10,13 @@ from app.services.content_anchors import (
 def test_content_comparison_reports_missing_and_new_contacts():
     result = compare_content_anchors(
         {
-            "text_lines": ["Firma", "Telefon 040 123456"],
+            "text_lines": [
+                "Firma Muster GmbH",
+                "Telefon 040 123456",
+                "Büro Hamburg Innenstadt",
+                "Montag bis Freitag geöffnet",
+                "www.example.de",
+            ],
             "phones": ["040123456"],
             "emails": ["alt@example.de"],
             "domains": ["example.de"],
@@ -19,7 +25,13 @@ def test_content_comparison_reports_missing_and_new_contacts():
             "qr_detection": "available",
         },
         {
-            "text_lines": ["Firma"],
+            "text_lines": [
+                "Firma Muster GmbH",
+                "Telefon 040 123456",
+                "Büro Hamburg Innenstadt",
+                "Montag bis Freitag geöffnet",
+                "www.example.de",
+            ],
             "phones": ["040123456"],
             "emails": ["neu@example.de"],
             "domains": ["example.de"],
@@ -41,11 +53,38 @@ def test_content_comparison_reports_missing_and_new_contacts():
         and finding["severity"] == "abweichung"
         for finding in result["findings"]
     )
-    assert any(
-        finding["category"] == "QR-Code-Inhalt"
-        and finding["value"] == "https://example.de"
-        for finding in result["findings"]
+    assert result["qr_removed"] is True
+    assert not any(finding["category"].startswith("QR-Code") for finding in result["findings"])
+
+
+def test_qr_removal_semantics():
+    base = {
+        "text_lines": ["Firma mit ausreichend lesbarem Text"],
+        "phones": [],
+        "emails": [],
+        "domains": [],
+        "qr_codes": [],
+        "qr_detection": "available",
+    }
+    removed = compare_content_anchors(
+        {**base, "qr_present": True},
+        {**base, "qr_present": False},
     )
+    assert removed["status"] == "passed"
+    assert removed["qr_removed"] is True
+
+    retained = compare_content_anchors(
+        {**base, "qr_present": True},
+        {**base, "qr_present": True},
+    )
+    assert retained["status"] == "unsicher"
+    assert retained["findings"][0]["value"] == "QR-Code nicht entfernt"
+
+    invented = compare_content_anchors(
+        {**base, "qr_present": False},
+        {**base, "qr_present": True},
+    )
+    assert invented["status"] == "abweichung"
 
 
 def test_anchor_extraction_keeps_text_and_is_safe_without_qr(monkeypatch):

@@ -512,7 +512,6 @@ def compare_content_anchors(
         ("phones", "Telefonnummer"),
         ("emails", "E-Mail-Adresse"),
         ("domains", "Web-Adresse"),
-        ("qr_codes", "QR-Code-Inhalt"),
     ):
         before = set(original.get(category) or [])
         after = set(restored.get(category) or [])
@@ -558,19 +557,20 @@ def compare_content_anchors(
                 "value": value,
             })
 
-    if original.get("qr_present") and not restored.get("qr_present"):
-        findings.append({
-            "type": "missing",
-            "severity": "abweichung",
-            "category": "QR-Code-Anwesenheit",
-            "value": "Quadratischer QR-Code-Bereich im Original",
-        })
-    elif restored.get("qr_present") and not original.get("qr_present"):
+    qr_removed = bool(original.get("qr_present") and not restored.get("qr_present"))
+    if restored.get("qr_present") and not original.get("qr_present"):
         findings.append({
             "type": "new",
             "severity": "abweichung",
             "category": "QR-Code-Anwesenheit",
             "value": "Quadratischer QR-Code-Bereich im Restaurat",
+        })
+    elif original.get("qr_present") and restored.get("qr_present"):
+        findings.append({
+            "type": "uncertain",
+            "severity": "unsicher",
+            "category": "QR-Code-Anwesenheit",
+            "value": "QR-Code nicht entfernt",
         })
 
     if original.get("company_name") and restored.get("company_name"):
@@ -609,6 +609,7 @@ def compare_content_anchors(
     return {
         "status": severity,
         "severity": severity,
+        "qr_removed": qr_removed,
         "findings": findings,
     }
 
