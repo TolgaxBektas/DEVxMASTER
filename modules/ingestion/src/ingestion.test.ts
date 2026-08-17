@@ -891,6 +891,7 @@ describe("Ingestion-Bestand", () => {
     expect(calls).toBe(2);
     expect(repository.occurrences).toHaveLength(1);
     expect(publishedKeys).toHaveLength(2);
+    expect(publishedKeys.some((key) => key.includes("actuality-transition"))).toBe(false);
     expect(publishedKeys[0]).toBe(publishedKeys[1]);
   });
 
