@@ -150,6 +150,7 @@ def import_print_batch(
         payload.company_name,
         {"company": payload.company_name, **payload.evidence},
         effective_source,
+        write_source=payload.source.data_source,
     )
 
     prefix = f"print-batch/{identity}"

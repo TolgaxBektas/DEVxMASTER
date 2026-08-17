@@ -152,6 +152,7 @@ def test_print_batch_reimport_without_source_preserves_explicit_high_quality(tmp
             assert occurrence.source_explicit is True
             assert company.data_source == "xdata_nb_high_quality"
             assert metadata["source"]["data_source"] == "xdata_nb_high_quality"
+            assert len(json.loads(company.secondary_findings_json)) == 1
     finally:
         app.dependency_overrides.clear()
 
@@ -181,6 +182,7 @@ def test_print_batch_reimport_without_source_preserves_company_without_hard_cont
             assert companies[0].data_source == "xdata_nb_high_quality"
             assert occurrence.data_source == "xdata_nb_high_quality"
             assert metadata["source"]["data_source"] == "xdata_nb_high_quality"
+            assert len(json.loads(companies[0].secondary_findings_json)) == 1
     finally:
         app.dependency_overrides.clear()
 
