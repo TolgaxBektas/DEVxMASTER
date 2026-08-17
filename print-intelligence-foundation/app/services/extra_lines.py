@@ -66,16 +66,71 @@ def _lines(image: Image.Image) -> list[dict[str, Any]]:
 
 
 def _anchor(image: Image.Image) -> dict[str, Any] | None:
-    found = []
+    ocr_lines = []
     for candidate in (
         image,
         ImageOps.autocontrast(image.convert("L")),
         ImageOps.invert(image.convert("RGB")),
     ):
-        lines = [line for line in _lines(candidate) if CONTACT_RE.search(line["text"])]
-        if lines:
-            found.append(lines[-1])
-    return max(found, key=lambda line: line["bottom"]) if found else None
+        ocr_lines.extend(_lines(candidate))
+    contacts = [line for line in ocr_lines if CONTACT_RE.search(line["text"])]
+    if not contacts:
+        return None
+    anchor = dict(max(contacts, key=lambda line: line["bottom"]))
+    anchor["ocr_lines"] = ocr_lines
+    return anchor
+
+
+def _normal_key(channel: str, value: str) -> tuple[str, str]:
+    value = value.strip().lower()
+    value = re.sub(r"^[a-z]+://", "", value)
+    value = re.sub(r"^www\.", "", value)
+    value = value.rstrip(".,;)")
+    if channel in {"phone", "fax"}:
+        return "digits", "".join(re.findall(r"\d", value))
+    if channel == "email":
+        return "email", value
+    return "address", value
+
+
+def _present_keys(lines: list[dict[str, Any]]) -> set[tuple[str, str]]:
+    keys: set[tuple[str, str]] = set()
+    for line in lines:
+        text = line["text"].lower()
+        for email in re.findall(r"[\w.+-]+@[\w.-]+\.[a-z]{2,}", text):
+            keys.add(_normal_key("email", email))
+        for address in re.findall(
+            r"(?:https?://)?(?:www\.)?[a-z0-9.-]+\.[a-z]{2,}(?:/[^\s,;)]*)?",
+            text,
+        ):
+            keys.add(_normal_key("website", address))
+        digits = "".join(re.findall(r"\d", text))
+        if digits:
+            keys.add(("digits", digits))
+    return keys
+
+
+def _filter_existing(
+    channels: list[tuple[str, str]], anchor: dict[str, Any]
+) -> tuple[list[tuple[str, str]], list[dict[str, str]]]:
+    lines = anchor.get("ocr_lines") or [anchor]
+    present = _present_keys(lines)
+    kept, discarded = [], []
+    for channel, value in channels:
+        if _normal_key(channel, value) in present:
+            discarded.append(
+                {"channel": channel, "value": value, "reason": "already_present"}
+            )
+        else:
+            kept.append((channel, value))
+    return kept, discarded
+
+
+def _content_end(image: Image.Image, background: tuple[int, int, int]) -> int:
+    for y in range(image.height - 1, -1, -1):
+        if not _row_uniform(image, y, background):
+            return y + 1
+    return 0
 
 
 def _average(pixels: list[tuple[int, int, int]]) -> tuple[int, int, int]:
@@ -351,6 +406,18 @@ def compose_extra_lines(
                 "lines": line_values,
             },
         )
+    channels, discarded = _filter_existing(channels, anchor)
+    line_values = [value for _channel, value in channels]
+    if not channels:
+        return ExtraLineComposition(
+            source.copy(),
+            {
+                "status": "skipped",
+                "reason": "all_lines_already_present",
+                "lines": [],
+                "discarded": discarded,
+            },
+        )
     colours = _colours(source, anchor)
     if colours is None:
         return ExtraLineComposition(
@@ -359,6 +426,7 @@ def compose_extra_lines(
                 "status": "skipped",
                 "reason": "no_colour_measurement",
                 "lines": line_values,
+                "discarded": discarded,
             },
         )
     text_colour, background = colours
@@ -375,7 +443,12 @@ def compose_extra_lines(
     if probe is None:
         return ExtraLineComposition(
             source.copy(),
-            {"status": "skipped", "reason": "font_not_found", "lines": line_values},
+            {
+                "status": "skipped",
+                "reason": "font_not_found",
+                "lines": line_values,
+                "discarded": discarded,
+            },
         )
     draw_probe = ImageDraw.Draw(source)
     font = None
@@ -393,7 +466,12 @@ def compose_extra_lines(
     if font is None:
         return ExtraLineComposition(
             source.copy(),
-            {"status": "skipped", "reason": "no_line_space", "lines": line_values},
+            {
+                "status": "skipped",
+                "reason": "no_line_space",
+                "lines": line_values,
+                "discarded": discarded,
+            },
         )
     line_height = max(1, int(round(cap_height * 1.75)))
     block_gap = max(1, int(round(cap_height * 0.9)))
@@ -407,7 +485,6 @@ def compose_extra_lines(
         source, band_end - 1, background
     )
     if not band_fits:
-        band_end = source.height
         centred = True
         bottom = list(
             source.crop(
@@ -421,10 +498,14 @@ def compose_extra_lines(
                     "status": "skipped",
                     "reason": "no_colour_measurement",
                     "lines": line_values,
+                    "discarded": discarded,
                 },
             )
         background = max(set(bottom), key=bottom.count)
         text_colour = (0, 0, 0) if sum(background) > 381 else (255, 255, 255)
+        content_end = _content_end(source, background)
+        lower_margin = max(0, source.height - content_end)
+        band_end = min(source.height, content_end + min(lower_margin, line_height))
     content_height = sum(len(block["rows"]) * line_height for block in blocks)
     content_height += block_gap * max(0, len(blocks) - 1) + bottom_air
     grown = Image.new("RGB", (source.width, source.height + content_height), background)
@@ -433,6 +514,11 @@ def compose_extra_lines(
         seam = source.crop((0, band_end - 1, source.width, band_end))
         for offset in range(content_height):
             grown.paste(seam, (0, band_end + offset))
+        grown.paste(
+            source.crop((0, band_end, source.width, source.height)),
+            (0, band_end + content_height),
+        )
+    else:
         grown.paste(
             source.crop((0, band_end, source.width, source.height)),
             (0, band_end + content_height),
@@ -506,6 +592,7 @@ def compose_extra_lines(
             "line_height": line_height,
             "block_gap": block_gap,
             "lines": line_values,
+            "discarded": discarded,
             "blocks": manifest_blocks,
             "output_size": list(grown.size),
         },

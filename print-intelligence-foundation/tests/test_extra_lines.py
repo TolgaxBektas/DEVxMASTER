@@ -118,7 +118,11 @@ def test_phone_and_fax_stack_when_the_available_width_is_too_small(monkeypatch):
     monkeypatch.setattr(extra_lines, "_anchor", lambda _image: _anchor(right=100))
 
     result = compose_extra_lines(
-        image, [("phone", "06441 12345"), ("fax", "06441 98765")]
+        image,
+        [
+            ("phone", "06441 555555555"),
+            ("fax", "06441 987654321"),
+        ],
     )
 
     assert result.manifest["status"] in {"composed", "skipped"}
@@ -169,3 +173,69 @@ def test_missing_font_fails_closed(monkeypatch):
     assert result.manifest["status"] == "skipped"
     assert result.manifest["reason"] == "font_not_found"
     assert ImageChops.difference(result.image, image).getbbox() is None
+
+
+def test_rejects_domain_already_present_with_normalized_spelling(monkeypatch):
+    image = Image.new("RGB", (220, 100), "white")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((0, 40, 219, 99), fill=(230, 230, 230))
+    anchor = _anchor()
+    anchor["ocr_lines"] = [
+        {
+            "text": "www.haack-immobilien-wetzlar.de",
+            "heights": [("www.haack-immobilien-wetzlar.de", 10)],
+            "left": 20,
+            "top": 40,
+            "right": 200,
+            "bottom": 50,
+        }
+    ]
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: anchor)
+
+    result = compose_extra_lines(
+        image, [("website", "https://haack-immobilien-wetzlar.de")]
+    )
+
+    assert result.manifest["status"] == "skipped"
+    assert result.manifest["reason"] == "all_lines_already_present"
+    assert result.manifest["discarded"] == [
+        {
+            "channel": "website",
+            "value": "https://haack-immobilien-wetzlar.de",
+            "reason": "already_present",
+        }
+    ]
+    assert ImageChops.difference(result.image, image).getbbox() is None
+
+
+def test_rejects_fax_with_different_separators(monkeypatch):
+    image = Image.new("RGB", (220, 100), "white")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((0, 40, 219, 99), fill=(230, 230, 230))
+    anchor = _anchor()
+    anchor["ocr_lines"] = [{**anchor, "text": "Fax 06441-905-15"}]
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: anchor)
+
+    result = compose_extra_lines(image, [("fax", "06441 / 905 15")])
+
+    assert result.manifest["status"] == "skipped"
+    assert result.manifest["discarded"][0]["reason"] == "already_present"
+
+
+def test_appended_strip_is_near_content_not_bottom_margin(monkeypatch):
+    image = Image.new("RGB", (220, 220), "white")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((20, 40, 199, 80), fill=(20, 80, 140))
+    anchor = _anchor(bottom=50)
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: anchor)
+
+    result = compose_extra_lines(image, [("fax", "06441 9876")])
+
+    assert result.manifest["placement"] == "appended_strip"
+    assert result.manifest["band_end"] < image.height
+    assert result.manifest["band_end"] - result.manifest["line_height"] <= 81
+    assert result.image.height > image.height
+    added = result.image.height - image.height
+    assert result.image.getpixel((0, image.height - 1 + added)) == image.getpixel(
+        (0, image.height - 1)
+    )
