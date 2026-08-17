@@ -1,6 +1,13 @@
 from fastapi.testclient import TestClient
 
 from app.api import stateless
+def test_company_from_text_prefers_legal_entity_over_slogan():
+    assert stateless._company_from_text(
+        "Im ganzen Landkreis für Sie da. "
+        "Caritasverband für Stadt und Landkreis Passau e. V. "
+        "Telefon 0851 123456"
+    ) == "Caritasverband für Stadt und Landkreis Passau e. V."
+
 from app.core.config import settings
 from app.main import app
 

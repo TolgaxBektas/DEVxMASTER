@@ -90,7 +90,12 @@ async def process_upload(
 
 def _company_from_text(text: str) -> str:
     match = re.search(
-        r"\b([A-ZÄÖÜ][\wÄÖÜäöüß&.-]*(?:\s+[A-ZÄÖÜ][\wÄÖÜäöüß&.-]*)*\s+(?:GmbH|AG|KG|e\.V\.))\b",
+        r"\b("
+        r"[A-ZÄÖÜ][\wÄÖÜäöüß&.-]*(?:"
+        r"\s+(?:[A-ZÄÖÜ][\wÄÖÜäöüß&.-]*|für|und|der|die|das|"
+        r"des|von|vom|zur|zum|im|in|Stadt|Landkreis)"
+        r"){0,10}\s+(?:GmbH|AG|KG|e\.\s*V\.)"
+        r")",
         text,
     )
     if match:

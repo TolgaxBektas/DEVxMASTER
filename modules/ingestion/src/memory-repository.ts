@@ -12,6 +12,7 @@ import {
   periodIncludesYear,
   type DocumentListFilters,
 } from "./repository.js";
+import { documentActualityStatus, sourceActualityHint, type ActualityStatus } from "./actuality.js";
 
 export class MemoryIngestionRepository implements IngestionRepository {
   sources: IngestionSource[] = [];
@@ -23,7 +24,10 @@ export class MemoryIngestionRepository implements IngestionRepository {
   private occurrenceId = 0;
 
   async listSources(tenantId: string) {
-    return this.sources.filter((source) => source.tenantId === tenantId);
+    return this.sources.filter((source) => source.tenantId === tenantId).map((source) => ({
+      ...source,
+      actualityHint: sourceActualityHint(source.metadata),
+    }));
   }
   async createSource(tenantId: string, input: { url: string; score: number; metadata: Record<string, unknown> }) {
     const existing = this.sources.find((source) => source.tenantId === tenantId && source.url === input.url);
@@ -60,16 +64,25 @@ export class MemoryIngestionRepository implements IngestionRepository {
     return this.documents.filter((document) => {
       if (document.tenantId !== tenantId) return false;
       const value = this.classifications.get(`${tenantId}:${document.id}`);
+      const actualityStatus = value?.actualityStatus ?? documentActualityStatus(value ?? null);
       if (filters.type && value?.type !== filters.type) return false;
+      if (filters.actualityStatus && actualityStatus !== filters.actualityStatus) return false;
       if (filters.regionState && value?.regionState !== filters.regionState) return false;
       if (filters.regionDistrict && value?.regionDistrict !== filters.regionDistrict) return false;
       if (filters.periodYear != null
         && !periodIncludesYear(value?.periodStartYear, value?.periodEndYear, filters.periodYear)) return false;
       return true;
-    }).map((document) => ({
-      ...document,
-      classification: this.classifications.get(`${tenantId}:${document.id}`) ?? null,
-    }));
+    }).map((document) => {
+      const classification = this.classifications.get(`${tenantId}:${document.id}`) ?? null;
+      return {
+        ...document,
+        classification,
+        actualityStatus: classification?.actualityStatus ?? documentActualityStatus(classification),
+        actualitySource: classification?.actualityStatus ? "manual" as const : "derived" as const,
+        actualityDecidedAt: classification?.actualityDecidedAt ?? null,
+        actualityDecidedBy: classification?.actualityDecidedBy ?? null,
+      };
+    });
   }
   async upsertDerivedClassification(tenantId: string, documentId: number, value: DerivedClassification) {
     const key = `${tenantId}:${documentId}`;
@@ -81,6 +94,7 @@ export class MemoryIngestionRepository implements IngestionRepository {
       periodStartYear: null, periodEndYear: null, periodIssue: null, periodSource: "first-pages", periodConfidence: null,
       regionPlace: null, regionDistrict: null, regionState: null, regionSource: "first-pages", regionConfidence: null,
       derivedAt: null, correctedAt: null, correctedBy: null,
+      actualityStatus: null, actualityDecidedAt: null, actualityDecidedBy: null,
     };
     if (next.typeSource !== "manual") Object.assign(next, { type: value.type, typeConfidence: value.typeConfidence, typeSource: value.typeSource });
     if (next.publicationNameSource !== "manual") Object.assign(next, { publicationName: value.publicationName, publicationNameConfidence: value.publicationNameConfidence, publicationNameSource: value.publicationNameSource });
@@ -110,6 +124,9 @@ export class MemoryIngestionRepository implements IngestionRepository {
         ...(value.periodEndYear !== undefined ? { periodEndYear: value.periodEndYear } : {}),
         ...(value.periodIssue !== undefined ? { periodIssue: value.periodIssue } : {}),
         periodSource: "manual",
+        actualityStatus: null,
+        actualityDecidedAt: null,
+        actualityDecidedBy: null,
       });
     }
     if (value.regionPlace !== undefined || value.regionDistrict !== undefined || value.regionState !== undefined) {
@@ -123,6 +140,21 @@ export class MemoryIngestionRepository implements IngestionRepository {
     current.correctedAt = new Date();
     current.correctedBy = actor;
     return current;
+  }
+  async decideDocumentActuality(tenantId: string, documentId: number, status: Exclude<ActualityStatus, "unverified">, actor: string) {
+    const document = await this.getDocument(tenantId, documentId);
+    const classification = this.classifications.get(`${tenantId}:${documentId}`);
+    if (!classification) throw new Error("Dokumenteinordnung ist noch nicht vorhanden");
+    classification.actualityStatus = status;
+    classification.actualityDecidedAt = new Date();
+    classification.actualityDecidedBy = actor;
+    return {
+      ...document,
+      actualityStatus: status,
+      actualitySource: "manual" as const,
+      actualityDecidedAt: classification.actualityDecidedAt,
+      actualityDecidedBy: actor,
+    };
   }
   async listOccurrences(tenantId: string) {
     const documents = new Set((await this.listDocuments(tenantId)).map((document) => document.id));
@@ -169,6 +201,10 @@ export class MemoryIngestionRepository implements IngestionRepository {
       state: "uploaded",
       error: null,
       classification: null,
+      actualityStatus: "unverified" as const,
+      actualitySource: "derived" as const,
+      actualityDecidedAt: null,
+      actualityDecidedBy: null,
     };
     this.documents.push(document);
     return { document, deduplicated: false };
@@ -177,12 +213,20 @@ export class MemoryIngestionRepository implements IngestionRepository {
     const document = this.documents.find((item) => item.tenantId === tenantId && item.id === documentId);
     if (!document) throw new Error("Dokument nicht gefunden");
     document.classification = this.classifications.get(`${tenantId}:${documentId}`) ?? null;
+    document.actualityStatus = document.classification?.actualityStatus ?? documentActualityStatus(document.classification);
+    document.actualitySource = document.classification?.actualityStatus ? "manual" : "derived";
+    document.actualityDecidedAt = document.classification?.actualityDecidedAt ?? null;
+    document.actualityDecidedBy = document.classification?.actualityDecidedBy ?? null;
     return document;
   }
   async getDocumentById(documentId: number) {
     const document = this.documents.find((item) => item.id === documentId);
     if (!document) throw new Error("Dokument nicht gefunden");
     document.classification = this.classifications.get(`${document.tenantId}:${documentId}`) ?? null;
+    document.actualityStatus = document.classification?.actualityStatus ?? documentActualityStatus(document.classification);
+    document.actualitySource = document.classification?.actualityStatus ? "manual" : "derived";
+    document.actualityDecidedAt = document.classification?.actualityDecidedAt ?? null;
+    document.actualityDecidedBy = document.classification?.actualityDecidedBy ?? null;
     return document;
   }
   async replaceProcessedDocument(tenantId: string, documentId: number, processedPages: Array<{

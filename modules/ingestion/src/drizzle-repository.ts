@@ -2,6 +2,7 @@ import type { MySql2Database } from "drizzle-orm/mysql2";
 import { and, desc, eq, gte, lte, ne } from "drizzle-orm";
 import { classifications, documents, occurrences, pages, sources, ingestionSchema } from "./schema.js";
 import type { DerivedClassification, DocumentClassification } from "./classification.js";
+import { documentActualityStatus, sourceActualityHint, type ActualityStatus } from "./actuality.js";
 import {
   IngestionSourceNotFoundError,
   occurrenceFingerprint,
@@ -23,13 +24,17 @@ function readBbox(value: unknown): Record<string, number> | null {
 
 export function createDrizzleIngestionRepository(db: unknown): IngestionRepository {
   const database = db as IngestionDb;
-  const toDocument = <T extends Omit<IngestionDocument, "tenantId" | "classification"> & { tenantId: number }>(
+  const toDocument = <T extends Omit<IngestionDocument, "tenantId" | "classification" | "actualityStatus" | "actualitySource" | "actualityDecidedAt" | "actualityDecidedBy"> & { tenantId: number }>(
     document: T,
     classification: DocumentClassification | null,
   ): IngestionDocument => ({
     ...document,
     tenantId: String(document.tenantId),
     classification,
+    actualityStatus: classification?.actualityStatus ?? documentActualityStatus(classification),
+    actualitySource: classification?.actualityStatus ? "manual" : "derived",
+    actualityDecidedAt: classification?.actualityDecidedAt ?? null,
+    actualityDecidedBy: classification?.actualityDecidedBy ?? null,
   });
   const readClassification = async (tenantId: string, documentId: number) => {
     const row = (await database.select().from(classifications).where(and(
@@ -60,13 +65,28 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
       derivedAt: row.derivedAt,
       correctedAt: row.correctedAt,
       correctedBy: row.correctedBy,
+      actualityStatus: row.actualityStatus as ActualityStatus | null,
+      actualityDecidedAt: row.actualityDecidedAt,
+      actualityDecidedBy: row.actualityDecidedBy,
     } satisfies DocumentClassification;
   };
   return {
     async listSources(tenantId) {
-      return database.select().from(sources)
+      const result = await database.select().from(sources)
         .where(eq(sources.tenantId, Number(tenantId)))
-        .orderBy(desc(sources.createdAt)) as never;
+        .orderBy(desc(sources.createdAt));
+      return result.map((source) => ({
+        ...source,
+        tenantId: String(source.tenantId),
+        metadata: source.metadata && typeof source.metadata === "object"
+          ? source.metadata as Record<string, unknown>
+          : null,
+        actualityHint: sourceActualityHint(
+          source.metadata && typeof source.metadata === "object"
+            ? source.metadata as Record<string, unknown>
+            : null,
+        ),
+      }));
     },
     async createSource(tenantId, input) {
       const existing = await database.select().from(sources).where(and(
@@ -153,10 +173,20 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
               derivedAt: classification.derivedAt,
               correctedAt: classification.correctedAt,
               correctedBy: classification.correctedBy,
+              actualityStatus: classification.actualityStatus as ActualityStatus | null,
+              actualityDecidedAt: classification.actualityDecidedAt,
+              actualityDecidedBy: classification.actualityDecidedBy,
             } satisfies DocumentClassification
           : null,
       }));
-      return result as never;
+      return result.map((item) => ({
+        ...item,
+        actualityStatus: item.classification?.actualityStatus
+          ?? documentActualityStatus(item.classification),
+        actualitySource: item.classification?.actualityStatus ? "manual" as const : "derived" as const,
+        actualityDecidedAt: item.classification?.actualityDecidedAt ?? null,
+        actualityDecidedBy: item.classification?.actualityDecidedBy ?? null,
+      })).filter((item) => !filters.actualityStatus || item.actualityStatus === filters.actualityStatus) as never;
     },
     async upsertDerivedClassification(tenantId, documentId, value) {
       const existing = (await database.select().from(classifications).where(and(
@@ -229,6 +259,9 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
           ...(value.periodEndYear !== undefined ? { periodEndYear: value.periodEndYear } : {}),
           ...(value.periodIssue !== undefined ? { periodIssue: value.periodIssue } : {}),
           periodSource: "manual",
+          actualityStatus: null,
+          actualityDecidedAt: null,
+          actualityDecidedBy: null,
         });
       }
       if (value.regionPlace !== undefined || value.regionDistrict !== undefined || value.regionState !== undefined) {
@@ -246,6 +279,19 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
       const result = await readClassification(tenantId, documentId);
       if (!result) throw new Error("Dokumenteinordnung konnte nicht geändert werden");
       return result;
+    },
+    async decideDocumentActuality(tenantId, documentId, status, actor) {
+      const current = await this.getDocument(tenantId, documentId);
+      if (!current.classification) throw new Error("Dokumenteinordnung ist noch nicht vorhanden");
+      await database.update(classifications).set({
+        actualityStatus: status,
+        actualityDecidedAt: new Date(),
+        actualityDecidedBy: actor,
+      }).where(and(
+        eq(classifications.tenantId, Number(tenantId)),
+        eq(classifications.documentId, documentId),
+      ));
+      return this.getDocument(tenantId, documentId);
     },
     async listOccurrences(tenantId) {
       const rows = await database.select({

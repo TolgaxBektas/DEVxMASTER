@@ -16,6 +16,7 @@ type Source = {
   metadata?: Record<string, unknown> | null;
   lastFetchedAt?: string | null;
   lastError?: string | null;
+  actualityHint?: "current" | "outdated" | "unverified" | null;
 };
 type Capabilities = { search: boolean; approve: boolean; fetch: boolean };
 const statusLabels: Record<string, string> = {
@@ -134,6 +135,11 @@ export function SourcesPage({ api }: ModulePageProps) {
                   )}
                 </span>
                 <span>Fundweg: {String(metadata.discovery ?? "unbekannt")}</span>
+                {source.actualityHint && <span>Jahreshinweis: {{
+                  current: "wahrscheinlich aktuell",
+                  outdated: "wahrscheinlich veraltet",
+                  unverified: "nicht belegt",
+                }[source.actualityHint]}</span>}
                 <span>
                   Begründung:{" "}
                   {String(metadata.reason ?? "Keine Begründung hinterlegt")}

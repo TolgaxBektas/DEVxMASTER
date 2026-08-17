@@ -11,6 +11,27 @@ import { crmSchema } from "./schema.js";
 import { createDrizzleCrmRepository } from "./repository.js";
 import { crmPages, CrmPage } from "./ui/index.js";
 
+type ActualityStatus = "current" | "outdated" | "unverified";
+
+export function isCurrentForLead(status: ActualityStatus | undefined): boolean {
+  return status === "current";
+}
+
+export function hasIngestionLead(
+  customers: unknown[],
+  occurrenceId: number,
+): boolean {
+  const marker = `Fundstelle ${occurrenceId}:`;
+  return customers.some((item) => {
+    if (!item || typeof item !== "object") return false;
+    const row = item as { notes?: unknown; tags?: unknown };
+    return typeof row.notes === "string"
+      && row.notes.includes(marker)
+      && Array.isArray(row.tags)
+      && row.tags.includes("ingestion");
+  });
+}
+
 export { crmPages } from "./ui/index.js";
 
 export function createCrmModule(deps: {
@@ -32,6 +53,10 @@ export function createCrmModule(deps: {
     tenantId: string;
     payload: unknown;
   }): Promise<unknown>;
+  getDocumentActuality?: (
+    tenantId: string,
+    documentId: number,
+  ) => Promise<ActualityStatus>;
 }): ModuleDefinition {
   const repository = createDrizzleCrmRepository(deps.db);
   return defineModule({
@@ -135,12 +160,37 @@ export function createCrmModule(deps: {
               documentId: number;
               company: string;
               preview: string;
+              actualityStatus?: "current" | "outdated" | "unverified";
             };
           };
+          const actualityStatus = await deps.getDocumentActuality?.(
+            input.tenantId,
+            input.payload.documentId,
+          ) ?? input.payload.actualityStatus;
           try {
             await deps.db.transaction(async (db: unknown) => {
             const repository = createDrizzleCrmRepository(db);
             const audit = createDrizzleAuditRepository(db);
+            if (!isCurrentForLead(actualityStatus)) {
+              await appendAudit(audit, {
+                tenantId: input.tenantId,
+                action: "lead.skipped.actuality",
+                entityType: "occurrence",
+                entityId: String(input.payload.occurrenceId),
+                actorId: "1",
+                actorName: "Ingestion-Verarbeitung",
+                detailsJson: JSON.stringify({
+                  documentId: input.payload.documentId,
+                  actualityStatus: actualityStatus ?? "unverified",
+                  reason: "Dokument ist nicht aktuell.",
+                }),
+              });
+              return;
+            }
+            if (hasIngestionLead(
+              await repository.listCustomers(input.tenantId),
+              input.payload.occurrenceId,
+            )) return;
             const customer = await repository.createCustomer(input.tenantId, {
               name: input.payload.company,
               company: input.payload.company,
