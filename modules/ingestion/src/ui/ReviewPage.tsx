@@ -71,6 +71,8 @@ const FIELD_LABELS: Record<string, string> = {
   phones: "Telefon",
   faxes: "Fax",
   social_profiles: "Social-Kanäle",
+  facebook: "Facebook",
+  instagram: "Instagram",
   address: "Adresse",
   street: "Straße",
   postal_code: "PLZ",
