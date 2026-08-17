@@ -17,21 +17,6 @@ export function isCurrentForLead(status: ActualityStatus | undefined): boolean {
   return status === "current";
 }
 
-export function hasIngestionLead(
-  customers: unknown[],
-  occurrenceId: number,
-): boolean {
-  const marker = `Fundstelle ${occurrenceId}:`;
-  return customers.some((item) => {
-    if (!item || typeof item !== "object") return false;
-    const row = item as { notes?: unknown; tags?: unknown };
-    return typeof row.notes === "string"
-      && row.notes.includes(marker)
-      && Array.isArray(row.tags)
-      && row.tags.includes("ingestion");
-  });
-}
-
 export { crmPages } from "./ui/index.js";
 
 export function createCrmModule(deps: {
@@ -187,13 +172,14 @@ export function createCrmModule(deps: {
               });
               return;
             }
-            if (hasIngestionLead(
-              await repository.listCustomers(input.tenantId),
+            if (await repository.hasIngestionLead(
+              input.tenantId,
               input.payload.occurrenceId,
             )) return;
             const customer = await repository.createCustomer(input.tenantId, {
               name: input.payload.company,
               company: input.payload.company,
+              sourceOccurrenceId: input.payload.occurrenceId,
               notes: `Quelle Dokument ${input.payload.documentId}, Fundstelle ${input.payload.occurrenceId}: ${input.payload.preview}`,
               tags: ["lead", "ingestion"],
             });

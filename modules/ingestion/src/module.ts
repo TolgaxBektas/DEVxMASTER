@@ -16,6 +16,7 @@ import { registerReviewImageRoutes, registerUploadRoute } from "./rest.js";
 import { persistDocumentBytes } from "./rest.js";
 import { deriveDocumentClassification } from "./classification.js";
 import { documentActualityStatus } from "./actuality.js";
+import { publishCurrentActualityTransition } from "./actuality-replay.js";
 import { ingestionPages, IngestionPage, OccurrencesPage, ReviewPage } from "./ui/index.js";
 import type { PifReviewClient } from "./review-client.js";
 
@@ -274,46 +275,55 @@ export function createIngestionModule(deps: {
                   ...(pages.pdfMetadata ? { pdfMetadata: pages.pdfMetadata } : {}),
                 }),
               );
-                const occurrences = await txRepository.replaceProcessedDocument(
+              const occurrences = await txRepository.replaceProcessedDocument(
+                tenantId,
+                document.id,
+                pages,
+              );
+              const processedDocument = await txRepository.getDocument(tenantId, document.id);
+              const executor = createDrizzleEventRepository(db);
+              await publishCurrentActualityTransition({
+                tenantId,
+                document: processedDocument,
+                previousStatus: document.actualityStatus,
+                currentStatus: processedDocument.actualityStatus,
+                occurrences,
+                publish: deps.publish,
+                executor,
+              });
+              const actualityStatus = processedDocument.actualityStatus
+                ?? documentActualityStatus(processedDocument.classification);
+              for (const occurrence of occurrences) {
+                await deps.publish({
+                  name: "advertisement.detected",
                   tenantId,
-                  document.id,
-                  pages,
-                );
-                const processedDocument = await txRepository.getDocument(tenantId, document.id);
-                const actualityStatus = processedDocument.actualityStatus
-                  ?? documentActualityStatus(processedDocument.classification);
-                const executor = createDrizzleEventRepository(db);
-                for (const occurrence of occurrences) {
-                  await deps.publish({
-                    name: "advertisement.detected",
+                  aggregateType: "occurrence",
+                  aggregateId: String(occurrence.id),
+                  payload: {
+                    occurrenceId: occurrence.id,
+                    documentId: document.id,
+                    company: occurrence.company,
+                    preview: occurrence.preview,
+                    actualityStatus,
+                  },
+                  idempotencyKey: advertisementEventIdempotencyKey(
                     tenantId,
-                    aggregateType: "occurrence",
-                    aggregateId: String(occurrence.id),
-                    payload: {
-                      occurrenceId: occurrence.id,
-                      documentId: document.id,
-                      company: occurrence.company,
-                      preview: occurrence.preview,
-                      actualityStatus,
-                    },
-                    idempotencyKey: advertisementEventIdempotencyKey(
-                      tenantId,
-                      document.sha256,
-                      occurrence,
-                    ),
-                  }, executor);
-                }
-                if (deps.audit) {
-                  await appendAudit(createDrizzleAuditRepository(db), {
-                    tenantId,
-                    action: "ingestion.document.processed",
-                    entityType: "ingestion_document",
-                    entityId: document.id,
-                    actorId: null,
-                    actorName: "Ingestion-Worker",
-                    detailsJson: JSON.stringify({ occurrences: occurrences.length }),
-                  });
-                }
+                    document.sha256,
+                    occurrence,
+                  ),
+                }, executor);
+              }
+              if (deps.audit) {
+                await appendAudit(createDrizzleAuditRepository(db), {
+                  tenantId,
+                  action: "ingestion.document.processed",
+                  entityType: "ingestion_document",
+                  entityId: document.id,
+                  actorId: null,
+                  actorName: "Ingestion-Worker",
+                  detailsJson: JSON.stringify({ occurrences: occurrences.length }),
+                });
+              }
               });
             } catch (error) {
               const message = error instanceof Error ? error.message : "Verarbeitung fehlgeschlagen";

@@ -46,7 +46,7 @@ describe("Ingestion-Bestand", () => {
     expect((await repository.getDocument("1", document.document.id)).actualityStatus).toBe("outdated");
   });
 
-  it("holt Leads nach einer Aktualitätsfreigabe idempotent nach", async () => {
+  it("holt Leads nach einer Jahreskorrektur idempotent nach", async () => {
     const repository = new MemoryIngestionRepository();
     const document = await repository.createUploadedDocument("1", {
       filename: "unbelegt.pdf", sha256: "g".repeat(64), storageKey: "unbelegt",
@@ -82,13 +82,26 @@ describe("Ingestion-Bestand", () => {
       undefined,
       audit,
     ).createCaller({ auth });
-    await caller.documents.actuality({ id: document.document.id, status: "current" });
+    expect(await repository.listOccurrences("1")).toHaveLength(1);
+    await caller.documents.correct({
+      id: document.document.id,
+      periodEndYear: new Date().getFullYear(),
+    });
     expect(published).toHaveLength(1);
     expect(published[0]?.payload).toMatchObject({ actualityStatus: "current" });
     expect(audit.entries).toHaveLength(1);
-    await caller.documents.actuality({ id: document.document.id, status: "current" });
+    await caller.documents.correct({
+      id: document.document.id,
+      periodEndYear: new Date().getFullYear(),
+    });
     expect(published).toHaveLength(1);
-    expect(audit.entries).toHaveLength(1);
+    expect(audit.entries).toHaveLength(2);
+    await caller.documents.actuality({ id: document.document.id, status: "outdated" });
+    expect(published).toHaveLength(1);
+    await caller.documents.actuality({ id: document.document.id, status: "current" });
+    expect(published).toHaveLength(2);
+    await caller.documents.actuality({ id: document.document.id, status: "current" });
+    expect(published).toHaveLength(2);
   });
   it("leitet Arten, Zeitraum und strukturierte Regionen aus echten Titeltexten ab", () => {
     const result = deriveDocumentClassification({
@@ -614,6 +627,49 @@ describe("Ingestion-Bestand", () => {
     await expect(repository.getDocument("1", 1104)).resolves.toMatchObject({
       classification: { periodStartYear: 2024, periodEndYear: 2026 },
       actualityStatus: "current",
+    });
+  });
+
+  it("setzt die Drizzle-Fassung bei einer Jahreskorrektur auf den abgeleiteten Zustand zurück", async () => {
+    const documentRow = {
+      id: 1105, tenantId: 1, sourceId: null, filename: "1105.pdf",
+      sha256: "z".repeat(64), storageKey: "1105.pdf", sizeBytes: 10,
+      mimeType: "application/pdf", origin: "upload", state: "processed", error: null,
+    };
+    const classificationRow = {
+      type: null, typeSource: "first-pages", typeConfidence: null,
+      publicationName: null, publicationNameSource: "first-pages", publicationNameConfidence: null,
+      editionLabel: null, editionSource: "first-pages", editionConfidence: null,
+      periodStartYear: null, periodEndYear: null, periodIssue: null,
+      periodSource: "first-pages", periodConfidence: null,
+      regionPlace: null, regionDistrict: null, regionState: null,
+      regionSource: "first-pages", regionConfidence: null,
+      derivedAt: null, correctedAt: null, correctedBy: null,
+      actualityStatus: "outdated", actualityDecidedAt: new Date(), actualityDecidedBy: "user-1",
+    };
+    const query = (value: unknown) => Object.assign(
+      Promise.resolve(value),
+      { limit: async () => value },
+    );
+    const database = {
+      select: () => ({
+        from: (table: unknown) => ({
+          where: () => query(table === documents ? [documentRow] : [classificationRow]),
+        }),
+      }),
+      update: () => ({
+        set: (value: Record<string, unknown>) => ({
+          where: async () => Object.assign(classificationRow, value),
+        }),
+      }),
+    };
+    const repository = createDrizzleIngestionRepository(database);
+    await repository.updateClassificationManual("1", 1105, {
+      periodEndYear: new Date().getFullYear(),
+    }, "user-1");
+    await expect(repository.getDocument("1", 1105)).resolves.toMatchObject({
+      actualityStatus: "current",
+      actualitySource: "derived",
     });
   });
 
