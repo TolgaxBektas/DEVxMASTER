@@ -337,6 +337,38 @@ def test_band_ocr_rejects_value_read_only_from_content_band(monkeypatch):
     assert result.manifest["ocr"]["bands_used"] == 1
 
 
+def test_whole_image_anchor_controls_alignment_while_band_detects_duplicate(
+    monkeypatch,
+):
+    image = Image.new("RGB", (400, 140), "white")
+    ImageDraw.Draw(image).rectangle((0, 40, 399, 139), fill=(20, 80, 140))
+    whole = {
+        **_anchor(left=100, right=220),
+        "text": "Telefon 06441 12345",
+        "ocr_source": "whole_image",
+    }
+    band = {
+        **_anchor(left=20, right=180),
+        "text": "www.example.de",
+        "ocr_source": "band",
+    }
+    monkeypatch.setattr(
+        extra_lines,
+        "_ocr_lines",
+        lambda _image: ([whole, band], {"bands_used": 1}),
+    )
+
+    result = compose_extra_lines(
+        image,
+        [("website", "www.example.de"), ("fax", "06441 9876")],
+    )
+
+    assert result.manifest["status"] == "composed"
+    assert result.manifest["anchor_box"][0] == 100
+    assert result.manifest["discarded"][0]["reason"] == "already_present"
+    assert result.manifest["blocks"][0]["rows"][0]["position"][0] == 100
+
+
 def test_digits_are_compared_as_contained_sequence(monkeypatch):
     image = Image.new("RGB", (240, 100), "white")
     draw = ImageDraw.Draw(image)

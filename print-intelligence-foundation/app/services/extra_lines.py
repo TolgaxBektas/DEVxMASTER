@@ -120,19 +120,30 @@ def _ocr_lines(image: Image.Image) -> tuple[list[dict[str, Any]], dict[str, Any]
         ImageOps.autocontrast(image.convert("L")),
         ImageOps.invert(image.convert("RGB")),
     ):
-        ocr_lines.extend(_lines(candidate))
+        for line in _lines(candidate):
+            line["ocr_source"] = "whole_image"
+            ocr_lines.append(line)
     bands, metadata = _content_bands(image, _edge_colour(image))
     for top, bottom in bands:
         band = image.crop((0, top, image.width, bottom))
-        ocr_lines.extend(
-            _lines(band, config="--psm 6", offset=(0, top))
-        )
+        for line in _lines(band, config="--psm 6", offset=(0, top)):
+            line["ocr_source"] = "band"
+            ocr_lines.append(line)
     return ocr_lines, metadata
 
 
 def _anchor(image: Image.Image) -> dict[str, Any] | None:
     ocr_lines, metadata = _ocr_lines(image)
-    contacts = [line for line in ocr_lines if CONTACT_RE.search(line["text"])]
+    contacts = [
+        line
+        for line in ocr_lines
+        if line.get("ocr_source") == "whole_image"
+        and CONTACT_RE.search(line["text"])
+    ]
+    if not contacts:
+        contacts = [
+            line for line in ocr_lines if CONTACT_RE.search(line["text"])
+        ]
     if not contacts:
         return None
     anchor = dict(max(contacts, key=lambda line: line["bottom"]))
