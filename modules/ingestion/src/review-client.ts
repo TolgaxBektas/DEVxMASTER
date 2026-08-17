@@ -17,6 +17,7 @@ export type PifReview = {
       reason?: string;
       sources?: string[];
     };
+    deferred_channels: readonly DeferredChannel[];
   };
   bbox: unknown;
   restoration: {
@@ -30,6 +31,16 @@ export type PifReview = {
     restored_available: boolean;
   };
   created_at: string | null;
+};
+
+export type DeferredChannel = {
+  id: number;
+  field_name: string;
+  value: string;
+  source_url: string | null;
+  retrieved_at: string | null;
+  data_source: "xdata_nb_high_quality" | "xdata_germany";
+  status: "waiting_for_x_core" | "transferred_to_x_core";
 };
 
 export type PifReviewDecision = {

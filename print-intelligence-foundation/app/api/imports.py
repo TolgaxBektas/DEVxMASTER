@@ -11,6 +11,7 @@ from app.api.dependencies import session_dependency, storage_dependency
 from app.core.config import get_settings
 from app.models import AdOccurrence, Document, Page, ReviewItem
 from app.services.companies import XDATA_GERMANY, XDATA_NB_HIGH_QUALITY, resolve_company
+from app.services.deferred_channels import record_deferred_channels
 from app.services.ingest import UploadTooLargeError, read_limited
 from app.services.storage import sha256
 
@@ -151,6 +152,9 @@ def import_print_batch(
         {"company": payload.company_name, **payload.evidence},
         effective_source,
         write_source=payload.source.data_source,
+    )
+    record_deferred_channels(
+        session, company, payload.evidence, payload.source.data_source
     )
 
     prefix = f"print-batch/{identity}"

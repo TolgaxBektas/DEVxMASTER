@@ -59,6 +59,29 @@ class Company(Base):
     canonical_updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    deferred_channels: Mapped[list["DeferredChannel"]] = relationship(
+        back_populates="company", cascade="all, delete-orphan"
+    )
+
+
+class DeferredChannel(Base):
+    __tablename__ = "deferred_channels"
+    __table_args__ = (
+        UniqueConstraint("company_id", "field_name", "value"),
+        Index("ix_deferred_channels_status_source", "status", "data_source"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    field_name: Mapped[str] = mapped_column(String(50))
+    value: Mapped[str] = mapped_column(Text)
+    source_url: Mapped[str | None] = mapped_column(Text)
+    retrieved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    data_source: Mapped[str] = mapped_column(String(40), default="xdata_germany")
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    status: Mapped[str] = mapped_column(
+        String(30), default="waiting_for_x_core"
+    )
+    company: Mapped[Company] = relationship(back_populates="deferred_channels")
 
 
 class AdOccurrence(Base):

@@ -10,7 +10,7 @@ from app.api.dependencies import session_dependency, storage_dependency
 from app.core.config import Settings
 from app.db.base import Base
 from app.main import app
-from app.models import AdOccurrence, Company, Page, ReviewItem
+from app.models import AdOccurrence, Company, DeferredChannel, Page, ReviewItem
 from app.services.storage import LocalStorage
 
 
@@ -203,6 +203,53 @@ def test_imported_contact_values_and_verification_are_normalized(tmp_path, monke
         }
         unverified = next(item for item in items if item["company"]["name"] == "Ungeprüfte Firma")
         assert unverified["company"]["verification"]["verified"] is False
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_deferred_channels_keep_high_quality_precedence_and_are_readable(
+    tmp_path, monkeypatch
+):
+    client, factory = _client(tmp_path, monkeypatch)
+    try:
+        high_quality = _metadata("Zusatzkanal GmbH", 12, "xdata_nb_high_quality")
+        high_quality["evidence"] = {
+            "verified": True,
+            "faxes": [{"value": "030 HQ", "source_url": "https://hq.example"}],
+        }
+        germany = _metadata("Zusatzkanal GmbH", 12, "xdata_germany")
+        germany["evidence"] = {
+            "verified": True,
+            "faxes": [{"value": "030 DE", "source_url": "https://de.example"}],
+        }
+        germany_repeat = _metadata("Zusatzkanal GmbH", 12, "xdata_germany")
+        germany_repeat["evidence"] = {
+            "verified": True,
+            "faxes": [{"value": "030 HQ", "source_url": "https://de.example/replaced"}],
+        }
+        assert _import(client, high_quality).status_code == 200
+        assert _import(client, germany).status_code == 200
+        assert _import(client, germany_repeat).status_code == 200
+        with factory() as session:
+            company = session.scalar(select(Company))
+            channels = session.scalars(select(DeferredChannel)).all()
+            assert company is not None
+            assert company.data_source == "xdata_nb_high_quality"
+            assert json.loads(company.canonical_fields_json)["faxes"][0]["value"] == "030 HQ"
+            assert {(channel.value, channel.data_source) for channel in channels} == {
+                ("030 HQ", "xdata_nb_high_quality"),
+                ("030 DE", "xdata_germany"),
+            }
+            high_quality_channel = next(
+                channel for channel in channels if channel.value == "030 HQ"
+            )
+            assert high_quality_channel.source_url == "https://hq.example"
+        response = client.get(
+            "/api/v1/deferred-channels?status=waiting_for_x_core&data_source=xdata_germany",
+            headers={"x-service-token": "review-token"},
+        )
+        assert response.status_code == 200
+        assert [row["value"] for row in response.json()] == ["030 DE"]
     finally:
         app.dependency_overrides.clear()
 
