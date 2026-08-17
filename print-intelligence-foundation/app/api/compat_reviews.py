@@ -242,6 +242,9 @@ def _payload(item, occurrence, page, document, company, storage) -> dict[str, An
             "plan_digest": (
                 manifest.get("plan_digest") or artwork_metadata.get("plan_digest")
             ),
+            "content_comparison": manifest.get("content_comparison"),
+            "content_anchors": manifest.get("content_anchors"),
+            "visual_comparison": manifest.get("visual_comparison"),
         },
         "images": {
             "original_available": _image_available(
