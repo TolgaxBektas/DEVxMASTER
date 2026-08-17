@@ -229,16 +229,19 @@ def test_print_batch_preserves_deferred_channels_idempotently(tmp_path):
                         "value": "030 12345",
                         "source_url": "https://example.test/kontakt",
                         "retrieved_at": "2026-01-01T00:00:00Z",
-                    }
+                    },
+                    "030 12345",
                 ],
+                "fax": "030 12345",
                 "social_profiles": [
                     {
-                        "platform": "facebook",
+                        "platform": "Facebook",
                         "value": "https://facebook.example/test",
                         "source_url": "https://example.test/kontakt",
                         "retrieved_at": "2026-01-01T00:00:00Z",
-                    }
+                    },
                 ],
+                "facebook": "https://facebook.example/test",
                 "instagram": {
                     "value": "https://instagram.example/test",
                     "source_url": "https://example.test/kontakt",

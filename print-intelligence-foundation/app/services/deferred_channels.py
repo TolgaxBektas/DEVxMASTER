@@ -51,7 +51,14 @@ def extract_deferred_channels(evidence: dict[str, Any]) -> list[dict[str, Any]]:
         values = social if isinstance(social, list) else [social]
         for item in values:
             platform = item.get("platform") if isinstance(item, dict) else None
-            field_name = platform.lower() if platform in {"facebook", "instagram"} else "social_profiles"
+            normalized_platform = (
+                platform.strip().lower() if isinstance(platform, str) else None
+            )
+            field_name = (
+                normalized_platform
+                if normalized_platform in {"facebook", "instagram"}
+                else "social_profiles"
+            )
             for value, source_url, retrieved_at in _entries(item):
                 channels.append(
                     {
@@ -71,7 +78,18 @@ def extract_deferred_channels(evidence: dict[str, Any]) -> list[dict[str, Any]]:
                     "retrieved_at": retrieved_at,
                 }
             )
-    return channels
+    unique: dict[tuple[str, str], dict[str, Any]] = {}
+    for entry in channels:
+        key = (entry["field_name"], entry["value"])
+        existing = unique.get(key)
+        if existing is None:
+            unique[key] = entry
+            continue
+        if not existing["source_url"] and entry["source_url"]:
+            existing["source_url"] = entry["source_url"]
+        if not existing["retrieved_at"] and entry["retrieved_at"]:
+            existing["retrieved_at"] = entry["retrieved_at"]
+    return list(unique.values())
 
 
 def record_deferred_channels(
