@@ -34,13 +34,13 @@ def test_content_comparison_reports_missing_and_new_contacts():
     assert any(
         finding["category"] == "E-Mail-Adresse"
         and finding["value"] == "alt@example.de"
-        and finding["severity"] == "abweichung"
+        and finding["severity"] == "unsicher"
         for finding in result["findings"]
     )
     assert any(
         finding["category"] == "E-Mail-Adresse"
         and finding["value"] == "neu@example.de"
-        and finding["severity"] == "abweichung"
+        and finding["severity"] == "unsicher"
         for finding in result["findings"]
     )
     assert any(
@@ -93,6 +93,7 @@ def test_phone_normalization_uses_one_canonical_german_form():
     assert _phone("0049 40 123456") == "040123456"
     assert _phone("+49 40 123456") == "040123456"
     assert _phone("040 123456") == "040123456"
+    assert _phone("0043 1 234567") == _phone("+43 1 234567")
 
 
 def test_grid_neighbors_do_not_wrap_between_edge_columns():

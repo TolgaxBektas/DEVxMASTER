@@ -22,6 +22,10 @@ def _phone(value: str) -> str:
     digits = re.sub(r"\D", "", value)
     if digits.startswith("0049") and len(digits) > 10:
         return "0" + digits[4:]
+    if digits.startswith("0043") and len(digits) > 10:
+        return "0" + digits[4:]
+    if value.lstrip().startswith("+43") and len(digits) > 8:
+        return "0" + digits[2:]
     if digits.startswith("49") and len(digits) > 8:
         return "0" + digits[2:]
     return digits
@@ -188,7 +192,11 @@ def _decode_qr(image: Image.Image) -> tuple[list[str], str | None]:
             for left in range(0, image.width, step_x)
         ]
         if len(tiles) > 16:
-            tiles = tiles[:16]
+            last_index = len(tiles) - 1
+            tiles = [
+                tiles[round(index * last_index / 15)]
+                for index in range(16)
+            ]
 
         def variants():
             yield image
@@ -317,15 +325,6 @@ def _qr_presence(image: Image.Image) -> tuple[bool, float]:
                 ]
             ) / (height * width)
 
-        expected = np.array([
-            [
-                row in {0, 6}
-                or column in {0, 6}
-                or (2 <= row <= 4 and 2 <= column <= 4)
-                for column in range(7)
-            ]
-            for row in range(7)
-        ])
         finder_scores = []
         for origin_x, origin_y in (
             (0, 0),
@@ -340,7 +339,7 @@ def _qr_presence(image: Image.Image) -> tuple[bool, float]:
                     x0 = origin_x + round(column * size / 21)
                     x1 = origin_x + round((column + 1) * size / 21)
                     cell = region(y0, x0, y1 - y0, x1 - x0)
-                    matches += ((cell >= 0.5) == expected[row, column])
+                    matches += ((cell >= 0.5) == expected_pattern[row, column])
             finder_scores.append(np.maximum(matches, 49 - matches) / 49)
         candidate_score = np.minimum.reduce(finder_scores)
         for flat_index in np.argpartition(
@@ -352,12 +351,12 @@ def _qr_presence(image: Image.Image) -> tuple[bool, float]:
             )
             pixels = np.asarray(crop, dtype=np.uint8)
             for inverted in (False, True):
-                binary = ((pixels < 128) != inverted)
+                candidate_binary = ((pixels < 128) != inverted)
                 matches = 0
                 for origin_x, origin_y in ((0, 0), (14, 0), (0, 14)):
                     matches += int(
                         (
-                            binary[
+                            candidate_binary[
                                 origin_y:origin_y + 7,
                                 origin_x:origin_x + 7,
                             ]
@@ -640,9 +639,7 @@ def compare_content_anchors(
                 "type": "missing",
                 "severity": (
                     "unsicher"
-                    if ocr_uncertain and (
-                        "ocr_confidence" in original or "ocr_confidence" in restored
-                    )
+                    if ocr_uncertain
                     else "abweichung"
                 ),
                 "category": label,
@@ -653,9 +650,7 @@ def compare_content_anchors(
                 "type": "new",
                 "severity": (
                     "unsicher"
-                    if ocr_uncertain and (
-                        "ocr_confidence" in original or "ocr_confidence" in restored
-                    )
+                    if ocr_uncertain
                     else "abweichung"
                 ),
                 "category": label,
