@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { DerivedClassification, DocumentClassification } from "./classification.js";
+import type { ActualityStatus } from "./actuality.js";
 
 export class IngestionSourceNotFoundError extends Error {
   constructor() {
@@ -19,6 +20,7 @@ export type IngestionSource = {
   approvedAt: Date | null;
   lastFetchedAt: Date | null;
   lastError: string | null;
+  actualityHint?: ActualityStatus | null;
 };
 
 function normalizeOccurrenceText(value: string): string {
@@ -63,12 +65,17 @@ export type IngestionDocument = {
   state: string;
   error: string | null;
   classification: DocumentClassification | null;
+  actualityStatus: ActualityStatus;
+  actualitySource: "derived" | "manual";
+  actualityDecidedAt: Date | null;
+  actualityDecidedBy: string | null;
 };
 export type DocumentListFilters = {
   type?: string;
   regionState?: string;
   regionDistrict?: string;
   periodYear?: number;
+  actualityStatus?: ActualityStatus;
 };
 
 export function periodIncludesYear(
@@ -119,6 +126,12 @@ export type IngestionRepository = {
     value: Partial<DerivedClassification>,
     actor: string,
   ): Promise<DocumentClassification>;
+  decideDocumentActuality(
+    tenantId: string,
+    documentId: number,
+    status: Exclude<ActualityStatus, "unverified">,
+    actor: string,
+  ): Promise<IngestionDocument>;
   listOccurrences(tenantId: string): Promise<IngestionOccurrence[]>;
   getOccurrence(tenantId: string, occurrenceId: number): Promise<IngestionOccurrence>;
   reviewOccurrence(

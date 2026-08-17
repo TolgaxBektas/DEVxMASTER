@@ -8,12 +8,43 @@ import { createDrizzleIngestionRepository } from "./drizzle-repository.js";
 import { classifications, documents, occurrences, pages } from "./schema.js";
 import { classificationCorrectionSchema, createIngestionRouter } from "./router.js";
 import { periodIncludesYear } from "./repository.js";
+import { documentActualityStatus } from "./actuality.js";
 
 const context = (tenantId: string | null, payload: unknown) => ({
   job: { tenantId, payload },
 });
 
 describe("Ingestion-Bestand", () => {
+  it("bewertet Aktualität relativ und lässt das Jahr unbelegt offen", () => {
+    expect(documentActualityStatus({ periodStartYear: 2022, periodEndYear: 2022 }, 2025, 3)).toBe("current");
+    expect(documentActualityStatus({ periodStartYear: 2021, periodEndYear: 2021 }, 2025, 3)).toBe("outdated");
+    expect(documentActualityStatus({ periodStartYear: null, periodEndYear: null }, 2025, 3)).toBe("unverified");
+  });
+
+  it("hält Aktualitätsentscheidung und Jahreskorrektur in der Speicherfassung synchron", async () => {
+    const repository = new MemoryIngestionRepository();
+    const document = await repository.createUploadedDocument("1", {
+      filename: "aktuell.pdf", sha256: "b".repeat(64), storageKey: "aktuell", sizeBytes: 10,
+      mimeType: "application/pdf", origin: "upload",
+    });
+    await repository.upsertDerivedClassification("1", document.document.id, {
+      type: null, typeSource: "first-pages", typeConfidence: null,
+      publicationName: "Test", publicationNameSource: "first-pages", publicationNameConfidence: 0.5,
+      editionLabel: null, editionSource: "first-pages", editionConfidence: null,
+      periodStartYear: 2020, periodEndYear: 2020, periodIssue: null,
+      periodSource: "first-pages", periodConfidence: 0.5,
+      regionPlace: null, regionDistrict: null, regionState: null,
+      regionSource: "first-pages", regionConfidence: null,
+    });
+    expect((await repository.getDocument("1", document.document.id)).actualityStatus).toBe("outdated");
+    await repository.updateClassificationManual("1", document.document.id, {
+      periodStartYear: 2025, periodEndYear: 2025,
+    }, "user-1");
+    expect((await repository.getDocument("1", document.document.id)).actualityStatus).toBe("current");
+    await repository.decideDocumentActuality("1", document.document.id, "outdated", "user-1");
+    expect((await repository.getDocument("1", document.document.id)).actualitySource).toBe("manual");
+    expect((await repository.getDocument("1", document.document.id)).actualityStatus).toBe("outdated");
+  });
   it("leitet Arten, Zeitraum und strukturierte Regionen aus echten Titeltexten ab", () => {
     const result = deriveDocumentClassification({
       filename: "Seniorenwegweiser.pdf",

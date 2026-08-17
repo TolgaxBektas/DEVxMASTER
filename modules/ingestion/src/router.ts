@@ -9,6 +9,7 @@ import {
 import { ZodError, z } from "zod";
 import { IngestionSourceNotFoundError, type IngestionRepository } from "./repository.js";
 import type { PifReviewClient } from "./review-client.js";
+import type { ActualityStatus } from "./actuality.js";
 
 export const classificationCorrectionSchema = z.object({
   id: z.number().int().positive(),
@@ -149,6 +150,7 @@ export function createIngestionRouter(
           regionState: z.string().optional(),
           regionDistrict: z.string().optional(),
           periodYear: z.number().int().optional(),
+          actualityStatus: z.enum(["current", "outdated", "unverified"]).optional(),
         }).optional())
         .query(({ ctx, input }) => repository.listDocuments(
           ctx.auth.tenantId,
@@ -213,6 +215,35 @@ export function createIngestionRouter(
             actorId: ctx.auth.user.id,
             actorName: ctx.auth.user.displayName,
             detailsJson: JSON.stringify(value),
+          });
+          return result;
+        }),
+      actuality: permissionProcedure("ingestion.document.classify")
+        .input(z.object({
+          id: z.number().int().positive(),
+          status: z.enum(["current", "outdated"]),
+        }))
+        .mutation(async ({ ctx, input }) => {
+          if (!effectiveAudit) throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "Audit ist nicht konfiguriert.",
+          });
+          const current = await repository.getDocument(ctx.auth.tenantId, input.id);
+          if (current.actualityStatus === input.status) return current;
+          const result = await repository.decideDocumentActuality(
+            ctx.auth.tenantId,
+            input.id,
+            input.status as Exclude<ActualityStatus, "unverified">,
+            ctx.auth.user.id,
+          );
+          await appendAudit(effectiveAudit, {
+            tenantId: ctx.auth.tenantId,
+            action: "ingestion.document.actuality.decided",
+            entityType: "ingestion_document",
+            entityId: input.id,
+            actorId: ctx.auth.user.id,
+            actorName: ctx.auth.user.displayName,
+            detailsJson: JSON.stringify({ status: input.status }),
           });
           return result;
         }),

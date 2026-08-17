@@ -135,8 +135,10 @@ export function createCrmModule(deps: {
               documentId: number;
               company: string;
               preview: string;
+              actualityStatus?: "current" | "outdated" | "unverified";
             };
           };
+          if (input.payload.actualityStatus !== "current") return;
           try {
             await deps.db.transaction(async (db: unknown) => {
             const repository = createDrizzleCrmRepository(db);

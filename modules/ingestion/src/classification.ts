@@ -28,6 +28,9 @@ export type DocumentClassification = {
   derivedAt: Date | null;
   correctedAt: Date | null;
   correctedBy: string | null;
+  actualityStatus: "current" | "outdated" | "unverified" | null;
+  actualityDecidedAt: Date | null;
+  actualityDecidedBy: string | null;
 };
 
 export type DerivedClassification = Pick<
