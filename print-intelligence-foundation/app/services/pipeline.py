@@ -681,19 +681,32 @@ class Pipeline:
             original_image = Image.open(artwork_output).convert("RGB")
             fields = json.loads(occurrence.fields_json or "{}").get("fields", {})
             company_name = fields.get("company") or fields.get("company_name")
+            ocr_size = (
+                max(original_image.width, proposal_image.width),
+                max(original_image.height, proposal_image.height),
+            )
             original_anchors = extract_content_anchors(
                 original_image,
                 company_name=company_name,
+                ocr_size=ocr_size,
             )
             restored_anchors = extract_content_anchors(
                 proposal_image,
                 company_name=company_name,
+                ocr_size=ocr_size,
             )
             comparison = compare_content_anchors(original_anchors, restored_anchors)
             visual_comparison = compare_visual_motifs(original_image, proposal_image)
             comparison["findings"].extend(visual_comparison["findings"])
-            comparison["status"] = (
-                "findings" if comparison["findings"] else "passed"
+            comparison["status"] = comparison["severity"] = (
+                "abweichung"
+                if any(
+                    finding.get("severity") == "abweichung"
+                    for finding in comparison["findings"]
+                )
+                else "unsicher"
+                if comparison["findings"]
+                else "passed"
             )
             result.manifest["content_anchors"] = {
                 "original": original_anchors,

@@ -32,7 +32,8 @@ type Review = {
     plan_digest: string | null;
     content_comparison?: {
       status: string;
-      findings: Array<{ type: string; category: string; value: string }>;
+      severity?: string;
+      findings: Array<{ type: string; severity?: string; category: string; value: string }>;
     } | null;
     visual_comparison?: {
       alignment?: { class?: string; score?: number };
@@ -343,13 +344,16 @@ export function ReviewPage({ api }: ModulePageProps) {
             ) : review.restoration.content_comparison.findings.length === 0 ? (
               <p className="form-message">Keine Abweichungen erkannt.</p>
             ) : (
-              <ul>
+              <div className="form-message">
+                Schweregrad: {review.restoration.content_comparison.severity ?? review.restoration.content_comparison.status}
+                <ul>
                 {review.restoration.content_comparison.findings.map((finding, index) => (
                   <li key={`${finding.type}-${finding.category}-${index}`}>
-                    {finding.type === "missing" ? "Fehlt" : finding.type === "new" ? "Neu" : "Warnung"} · {finding.category}: {finding.value}
+                    {finding.severity ?? "unsicher"} · {finding.type === "missing" ? "Fehlt" : finding.type === "new" ? "Neu" : "Unsicher"} · {finding.category}: {finding.value}
                   </li>
                 ))}
-              </ul>
+                </ul>
+              </div>
             )}
             {review.restoration.visual_comparison?.alignment && (
               <p className="form-message">

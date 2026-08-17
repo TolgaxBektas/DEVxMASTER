@@ -18,9 +18,21 @@ def main() -> int:
         original = next(directory.glob("01_original.*"))
         restored = next(directory.glob("02_restauriert_*"))
         with Image.open(original) as image:
-            original_anchors = extract_content_anchors(image.convert("RGB"))
+            original_size = image.size
         with Image.open(restored) as image:
-            restored_anchors = extract_content_anchors(image.convert("RGB"))
+            restored_size = image.size
+        ocr_size = (
+            max(original_size[0], restored_size[0]),
+            max(original_size[1], restored_size[1]),
+        )
+        with Image.open(original) as image:
+            original_anchors = extract_content_anchors(
+                image.convert("RGB"), ocr_size=ocr_size
+            )
+        with Image.open(restored) as image:
+            restored_anchors = extract_content_anchors(
+                image.convert("RGB"), ocr_size=ocr_size
+            )
         visual_comparison = compare_visual_motifs(
             Image.open(original).convert("RGB"),
             Image.open(restored).convert("RGB"),
@@ -29,7 +41,16 @@ def main() -> int:
             original_anchors, restored_anchors
         )
         comparison["findings"].extend(visual_comparison["findings"])
-        comparison["status"] = "findings" if comparison["findings"] else "passed"
+        comparison["status"] = comparison["severity"] = (
+            "abweichung"
+            if any(
+                finding.get("severity") == "abweichung"
+                for finding in comparison["findings"]
+            )
+            else "unsicher"
+            if comparison["findings"]
+            else "passed"
+        )
         results.append({
             "pair": directory.name,
             "original": original_anchors,

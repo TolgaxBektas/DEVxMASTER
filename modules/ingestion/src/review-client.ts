@@ -26,7 +26,8 @@ export type PifReview = {
     plan_digest: string | null;
     content_comparison?: {
       status: string;
-      findings: Array<{ type: string; category: string; value: string }>;
+      severity?: string;
+      findings: Array<{ type: string; severity?: string; category: string; value: string }>;
     } | null;
     visual_comparison?: {
       alignment?: {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from difflib import SequenceMatcher
 from typing import Any
 
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
@@ -9,7 +10,7 @@ from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 PHONE_RE = re.compile(r"(?:\+49|0049|0)\s*(?:\(?\d{2,5}\)?[\s./-]*)\d[\d\s./-]{4,}")
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", re.I)
 DOMAIN_RE = re.compile(
-    r"(?:https?://)?(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+", re.I
+    r"(?:https?://)?(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}", re.I
 )
 
 
@@ -40,6 +41,126 @@ def _phone_equivalent(first: str, second: str) -> bool:
             ))
         previous = current
     return previous[-1] <= 1
+
+
+def _words(lines: list[str]) -> list[str]:
+    return re.findall(r"[a-z0-9äöüß]+", " ".join(lines).casefold())
+
+
+def _ocr_text(image: Image.Image) -> tuple[str, float]:
+    import pytesseract
+
+    candidates = []
+    for angle in (0, 90, 180, 270):
+        rotated = image.rotate(angle, expand=True) if angle else image
+        text = pytesseract.image_to_string(rotated, lang="deu")
+        words = _words(text.splitlines())
+        score = sum(len(word) for word in words) + len(words) * 8
+        confidence = 0.0
+        try:
+            from pytesseract import Output
+
+            data = pytesseract.image_to_data(
+                rotated,
+                lang="deu",
+                output_type=Output.DICT,
+            )
+            confidences = [
+                float(value)
+                for value, item in zip(data["conf"], data["text"])
+                if item.strip() and float(value) >= 0
+            ]
+            if confidences:
+                confidence = sum(confidences) / len(confidences)
+                score = confidence * 20 + len(words) * 8
+        except (AttributeError, KeyError, TypeError, ValueError):
+            pass
+        candidates.append((score, text, confidence))
+    best = max(candidates, key=lambda item: item[0])
+    return best[1], best[2]
+
+
+def _text_findings(
+    original: dict[str, Any],
+    restored: dict[str, Any],
+) -> list[dict[str, str]]:
+    before = _words(original.get("text_lines") or [])
+    after = _words(restored.get("text_lines") or [])
+    if not before and not after:
+        return []
+    matcher = SequenceMatcher(None, before, after, autojunk=False)
+    ratio = matcher.ratio()
+    uncertain = (
+        min(len(before), len(after)) < 5
+        or ratio < 0.45
+        or any(
+            confidence is not None and confidence < 85
+            for confidence in (
+                original.get("ocr_confidence"),
+                restored.get("ocr_confidence"),
+            )
+        )
+    )
+    if ratio < 0.35:
+        return [{
+            "type": "uncertain",
+            "severity": "unsicher",
+            "category": "Text",
+            "value": "OCR-Text ist zwischen Original und Restaurat nicht eindeutig vergleichbar.",
+        }]
+    findings: list[dict[str, str]] = []
+    for tag, first, last, second, end in matcher.get_opcodes():
+        if tag not in {"delete", "replace", "insert"}:
+            continue
+        missing = before[first:last]
+        added = after[second:end]
+        meaningful = {
+            "als", "an", "bei", "der", "die", "dich", "ein", "für",
+            "im", "ist", "mich", "noch", "und", "von", "wir", "zu",
+            "fragen", "interessiert", "melde",
+        }
+        substantial_missing = (
+            len(missing) >= 3
+            and len(set(missing) & meaningful) >= 2
+        )
+        substantial_added = (
+            len(added) >= 3
+            and len(set(added) & meaningful) >= 2
+        )
+        if substantial_missing:
+            findings.append({
+                "type": "missing",
+                "severity": "unsicher" if uncertain else "abweichung",
+                "category": "Text",
+                "value": " ".join(missing),
+            })
+        if substantial_added:
+            findings.append({
+                "type": "new",
+                "severity": "unsicher" if uncertain else "abweichung",
+                "category": "Text",
+                "value": " ".join(added),
+            })
+    return findings
+
+
+def _ocr_is_uncertain(
+    original: dict[str, Any],
+    restored: dict[str, Any],
+) -> bool:
+    before = _words(original.get("text_lines") or [])
+    after = _words(restored.get("text_lines") or [])
+    return (
+        min(len(before), len(after)) < 5
+        or SequenceMatcher(None, before, after, autojunk=False).ratio() < 0.35
+        or any(
+            confidence is not None and confidence < 85
+            for confidence in (
+                original.get("ocr_confidence"),
+                restored.get("ocr_confidence"),
+            )
+        )
+    )
 
 
 def _decode_qr(image: Image.Image) -> tuple[list[str], str | None]:
@@ -284,7 +405,8 @@ def compare_visual_motifs(
     }
     if not aligned:
         result["findings"].append({
-            "type": "warning",
+            "type": "uncertain",
+            "severity": "unsicher",
             "category": "Bildmotive",
             "value": "Layout neu aufgebaut — Bildmotive sind nur von Hand prüfbar.",
         })
@@ -328,6 +450,7 @@ def compare_visual_motifs(
         for part in parts:
             result["findings"].append({
                 "type": "missing" if category == "verloren" else "new",
+                "severity": "abweichung",
                 "category": "Bildmotivfläche",
                 "value": f"{category}e zusammenhängende Rasterfläche ({len(part)} Zellen)",
             })
@@ -339,15 +462,20 @@ def extract_content_anchors(
     *,
     text: str | None = None,
     company_name: str | None = None,
+    ocr_size: tuple[int, int] | None = None,
 ) -> dict[str, Any]:
     ocr_text = text
     if ocr_text is None:
         try:
-            import pytesseract
-
-            ocr_text = pytesseract.image_to_string(image, lang="deu+eng")
+            ocr_image = image
+            if ocr_size and ocr_image.size != ocr_size:
+                ocr_image = ocr_image.resize(ocr_size, Image.Resampling.LANCZOS)
+            ocr_text, ocr_confidence = _ocr_text(ocr_image)
         except (ImportError, OSError, RuntimeError, ValueError):
             ocr_text = ""
+            ocr_confidence = 0.0
+    else:
+        ocr_confidence = None
     lines = [_normalize(line) for line in (ocr_text or "").splitlines() if _normalize(line)]
     phones = sorted({_phone(value) for value in PHONE_RE.findall(ocr_text or "")})
     emails = sorted({_normalize(value) for value in EMAIL_RE.findall(ocr_text or "")})
@@ -368,6 +496,8 @@ def extract_content_anchors(
         "qr_present": qr_present,
         "qr_presence_score": round(qr_score, 4),
         "qr_detection": "available" if qr_finding is None else "unavailable",
+        "ocr_token_count": len(_words(lines)),
+        "ocr_confidence": ocr_confidence,
     }
 
 
@@ -376,6 +506,7 @@ def compare_content_anchors(
     restored: dict[str, Any],
 ) -> dict[str, Any]:
     findings: list[dict[str, str]] = []
+    ocr_uncertain = _ocr_is_uncertain(original, restored)
 
     for category, label in (
         ("phones", "Telefonnummer"),
@@ -386,35 +517,58 @@ def compare_content_anchors(
         before = set(original.get(category) or [])
         after = set(restored.get(category) or [])
         if category == "phones":
-            matched_before = set()
-            matched_after = set()
-            for value in before:
-                candidate = next(
-                    (
-                        item for item in after
-                        if _phone_equivalent(value, item)
-                    ),
-                    None,
-                )
-                if candidate is not None:
-                    matched_before.add(value)
-                    matched_after.add(candidate)
-            before -= matched_before
-            after -= matched_after
+            exact_before = {_phone(value) for value in before}
+            exact_after = {_phone(value) for value in after}
+            near_pairs = [
+                (left, right)
+                for left in exact_before - exact_after
+                for right in exact_after - exact_before
+                if _phone_equivalent(left, right)
+            ]
+            for left, right in near_pairs:
+                findings.append({
+                    "type": "uncertain",
+                    "severity": "unsicher",
+                    "category": label,
+                    "value": f"Nicht eindeutig lesbar: {left} / {right}",
+                })
+            exact_before -= {left for left, _ in near_pairs}
+            exact_after -= {right for _, right in near_pairs}
+            before, after = exact_before, exact_after
         for value in sorted(before - after):
-            findings.append({"type": "missing", "category": label, "value": value})
+            findings.append({
+                "type": "missing",
+                "severity": (
+                    "unsicher"
+                    if ocr_uncertain
+                    else "abweichung"
+                ),
+                "category": label,
+                "value": value,
+            })
         for value in sorted(after - before):
-            findings.append({"type": "new", "category": label, "value": value})
+            findings.append({
+                "type": "new",
+                "severity": (
+                    "unsicher"
+                    if ocr_uncertain
+                    else "abweichung"
+                ),
+                "category": label,
+                "value": value,
+            })
 
     if original.get("qr_present") and not restored.get("qr_present"):
         findings.append({
             "type": "missing",
+            "severity": "abweichung",
             "category": "QR-Code-Anwesenheit",
             "value": "Quadratischer QR-Code-Bereich im Original",
         })
     elif restored.get("qr_present") and not original.get("qr_present"):
         findings.append({
             "type": "new",
+            "severity": "abweichung",
             "category": "QR-Code-Anwesenheit",
             "value": "Quadratischer QR-Code-Bereich im Restaurat",
         })
@@ -423,11 +577,13 @@ def compare_content_anchors(
         if original["company_name"] != restored["company_name"]:
             findings.append({
                 "type": "missing",
+                "severity": "abweichung",
                 "category": "Firmenname",
                 "value": original["company_name"],
             })
             findings.append({
                 "type": "new",
+                "severity": "abweichung",
                 "category": "Firmenname",
                 "value": restored["company_name"],
             })
@@ -437,12 +593,22 @@ def compare_content_anchors(
         or restored.get("qr_detection") == "unavailable"
     ):
         findings.append({
-            "type": "warning",
+            "type": "uncertain",
+            "severity": "unsicher",
             "category": "QR-Code",
             "value": "QR-Code-Prüfung nicht verfügbar.",
         })
+    findings.extend(_text_findings(original, restored))
+    severity = (
+        "abweichung"
+        if any(item["severity"] == "abweichung" for item in findings)
+        else "unsicher"
+        if findings
+        else "passed"
+    )
     return {
-        "status": "findings" if findings else "passed",
+        "status": severity,
+        "severity": severity,
         "findings": findings,
     }
 
@@ -450,14 +616,17 @@ def compare_content_anchors(
 def finding_messages(comparison: dict[str, Any]) -> list[str]:
     messages = []
     for finding in comparison.get("findings", []):
+        severity = finding.get("severity", "unsicher")
         if finding.get("type") == "missing":
             messages.append(
-                f"Fehlender Inhaltsanker ({finding['category']}): {finding['value']}"
+                f"[{severity}] Fehlender Inhaltsanker ({finding['category']}): {finding['value']}"
             )
         elif finding.get("type") == "new":
             messages.append(
-                f"Neuer Inhaltsanker ({finding['category']}): {finding['value']}"
+                f"[{severity}] Neuer Inhaltsanker ({finding['category']}): {finding['value']}"
             )
         else:
-            messages.append(str(finding.get("value", "Inhaltsabgleich nicht vollständig")))
+            messages.append(
+                f"[{severity}] {finding.get('value', 'Inhaltsabgleich nicht vollständig')}"
+            )
     return messages
