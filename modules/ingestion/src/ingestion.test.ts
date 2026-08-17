@@ -895,6 +895,55 @@ describe("Ingestion-Bestand", () => {
     expect(publishedKeys[0]).toBe(publishedKeys[1]);
   });
 
+  it("spielt beim erneuten Lauf den Übergang nach current je Fundstelle wieder ein", async () => {
+    const repository = new MemoryIngestionRepository();
+    const document = await repository.createUploadedDocument("1", {
+      filename: "replay.pdf",
+      sha256: "p".repeat(64),
+      storageKey: "tenants/1/originals/p/replay.pdf",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "upload",
+    });
+    const page = {
+      pageNumber: 1,
+      text: `Ausgabe ${new Date().getFullYear()}\nMuster GmbH Werbung Telefon`,
+      imageKey: "page.png",
+      classification: "MIXED_CONTENT",
+      adProbability: 0.5,
+      occurrences: [{
+        bbox: { x: 0, y: 0, width: 1, height: 1, confidence: 0.8 },
+        imageKey: "ad.png",
+        confidence: 0.8,
+        evidence: ["geometry"],
+        company: "Muster GmbH",
+        preview: "Muster GmbH Werbung Telefon",
+      }],
+    };
+    await repository.replaceProcessedDocument("1", document.document.id, [page]);
+    document.document.state = "uploaded";
+    const publishedKeys: string[] = [];
+    const module = createIngestionModule({
+      repository,
+      repositoryForTransaction: () => repository,
+      transaction: async (callback) => callback({}),
+      processDocument: async () => [page],
+      publish: async (event) => {
+        publishedKeys.push(event.idempotencyKey);
+      },
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.processing.run");
+    if (!job) throw new Error("Verarbeitungsjob fehlt");
+    await job.handle(
+      { documentId: document.document.id },
+      context("1", { documentId: document.document.id }),
+    );
+    expect(publishedKeys).toHaveLength(2);
+    expect(
+      publishedKeys.filter((key) => key.includes("actuality-transition")),
+    ).toHaveLength(1);
+  });
+
   it("speichert Evidenz, erhält Entscheidungen bei der erneuten Verarbeitung und auditert keine Wiederholung", async () => {
     const repository = new MemoryIngestionRepository();
     const audit = new MemoryAuditRepository();
