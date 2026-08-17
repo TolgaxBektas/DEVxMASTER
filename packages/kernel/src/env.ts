@@ -18,6 +18,7 @@ export const envSchema = z.object({
   S3_BUCKET: z.string().optional(),
   PIF_BASE_URL: z.string().url().default("http://127.0.0.1:8010"),
   PIF_SERVICE_TOKEN: z.string().optional(),
+  PIF_REVIEW_TENANT_ID: z.string().min(1).optional(),
   INGESTION_MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(25 * 1024 * 1024),
   OPENAI_API_KEY: z.string().optional(),
   GEMINI_API_KEY: z.string().optional(),

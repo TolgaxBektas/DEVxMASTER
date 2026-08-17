@@ -121,7 +121,15 @@ and digest, image hashes, attempt, and cost. A missing provider leaves the
 existing pixel-only behavior unchanged. Calls are reserved against
 `IMAGE_EDIT_HARD_STOP_CENTS` before execution and fail closed when the next
 upper bound would exceed it. The hard stop applies per document run and is
-reset when ingestion of a document begins.
+reset when ingestion of a document begins. The OpenAI-compatible
+`gpt-image-1` path sends an explicit supported size (`1024x1024`,
+`1536x1024`, or `1024x1536`) selected by aspect ratio. The approved crop is
+proportionally fitted with neutral padding, and the matching region is cropped
+and resampled back to the original crop dimensions before composition. The
+requested size, fitted region, source and normalized dimensions, resampling
+method, and lower-resolution indicator are recorded in the manifest. A
+provider response with any other dimensions is refused; the provider requires
+`IMAGE_EDIT_API_KEY` and HTTPS.
 Restoration does not upscale source detail, remove backgrounds, sharpen, or add
 transparency. Order-form artwork is only exported when the framed advert has
 sufficient detector confidence and passes a cheap geometric plausibility check.

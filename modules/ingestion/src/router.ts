@@ -8,6 +8,7 @@ import {
 } from "@xmaster-center/kernel";
 import { ZodError, z } from "zod";
 import { IngestionSourceNotFoundError, type IngestionRepository } from "./repository.js";
+import type { PifReviewClient } from "./review-client.js";
 
 export const classificationCorrectionSchema = z.object({
   id: z.number().int().positive(),
@@ -45,8 +46,18 @@ export function createIngestionRouter(
   discover?: (input: { seedPages: string[]; searchTerms: string[]; maxResults: number }) => Promise<Array<{
     url: string; score: number; metadata: Record<string, unknown>;
   }>>,
+  reviewClientOrAudit?: PifReviewClient | AuditRepository,
+  reviewTenantId?: string,
   audit?: AuditRepository,
 ) {
+  const reviewClient = reviewClientOrAudit && "listOpen" in reviewClientOrAudit
+    ? reviewClientOrAudit as PifReviewClient
+    : undefined;
+  const effectiveAudit = audit ?? (
+    reviewClientOrAudit && !("listOpen" in reviewClientOrAudit)
+      ? reviewClientOrAudit as AuditRepository
+      : undefined
+  );
   return router({
     sources: router({
       capabilities: protectedProcedure.query(({ ctx }) => ({
@@ -148,7 +159,7 @@ export function createIngestionRouter(
       correct: permissionProcedure("ingestion.document.classify")
         .input(classificationCorrectionSchema)
         .mutation(async ({ ctx, input }) => {
-          if (!audit) throw new Error("Audit ist nicht konfiguriert");
+          if (!effectiveAudit) throw new Error("Audit ist nicht konfiguriert");
           const { id, ...rawValue } = input;
           try {
             await repository.getDocument(ctx.auth.tenantId, id);
@@ -194,7 +205,7 @@ export function createIngestionRouter(
             value,
             ctx.auth.user.id,
           );
-          await appendAudit(audit, {
+          await appendAudit(effectiveAudit, {
             tenantId: ctx.auth.tenantId,
             action: "ingestion.document.classification.corrected",
             entityType: "ingestion_document",
@@ -219,7 +230,7 @@ export function createIngestionRouter(
           decision: z.enum(["approved", "rejected"]),
         }))
         .mutation(async ({ ctx, input }) => {
-          if (!audit) throw new TRPCError({
+          if (!effectiveAudit) throw new TRPCError({
             code: "PRECONDITION_FAILED",
             message: "Audit ist nicht konfiguriert.",
           });
@@ -240,7 +251,7 @@ export function createIngestionRouter(
             throw error;
           }
           if (result.changed) {
-            await appendAudit(audit, {
+            await appendAudit(effectiveAudit, {
               tenantId: ctx.auth.tenantId,
               action: `ingestion.occurrence.${input.decision}`,
               entityType: "ingestion_occurrence",
@@ -251,6 +262,58 @@ export function createIngestionRouter(
             });
           }
           return result.occurrence;
+        }),
+    }),
+    review: router({
+      list: permissionProcedure("ingestion.review.read").query(async ({ ctx }) => {
+        if (!reviewClient || !reviewTenantId) {
+          return {
+            enabled: false,
+            message: "Die Prüfung ist für diesen Dienst nicht konfiguriert.",
+            items: [],
+          };
+        }
+        if (ctx.auth.tenantId !== reviewTenantId) {
+          return {
+            enabled: true,
+            message: "Für diesen Mandanten sind keine Data-Factory-Prüffälle konfiguriert.",
+            items: [],
+          };
+        }
+        return { enabled: true, items: await reviewClient.listOpen() };
+      }),
+      get: permissionProcedure("ingestion.review.read")
+        .input(z.object({ id: z.number().int().positive() }))
+        .query(async ({ ctx, input }) => {
+          if (!reviewClient || !reviewTenantId) throw new Error("Die Prüfung ist nicht konfiguriert");
+          if (ctx.auth.tenantId !== reviewTenantId) throw new Error("Prüffall gehört zu einem anderen Mandanten");
+          return reviewClient.get(input.id);
+        }),
+      decide: permissionProcedure("ingestion.review.decide")
+        .input(z.object({
+          id: z.number().int().positive(),
+          decision: z.enum(["approve", "reject"]),
+          note: z.string().max(5000).optional(),
+        }))
+        .mutation(async ({ ctx, input }) => {
+          if (!reviewClient || !reviewTenantId) throw new Error("Die Prüfung ist nicht konfiguriert");
+          if (ctx.auth.tenantId !== reviewTenantId) throw new Error("Prüffall gehört zu einem anderen Mandanten");
+          const result = await reviewClient.decide(input.id, input.decision, input.note);
+          if (effectiveAudit) {
+            await appendAudit(effectiveAudit, {
+              tenantId: ctx.auth.tenantId,
+              action: "ingestion.review.decided",
+              entityType: "ingestion_review",
+              entityId: input.id,
+              actorId: ctx.auth.user.id,
+              actorName: ctx.auth.user.displayName,
+              detailsJson: JSON.stringify({
+                decision: input.decision,
+                note: input.note ?? null,
+              }),
+            });
+          }
+          return result;
         }),
     }),
   });

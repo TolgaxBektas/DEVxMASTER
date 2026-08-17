@@ -1,6 +1,15 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
-from app.api import compat, discovery, documents, health, queue, reviews
+from app.api import (
+    compat,
+    compat_reviews,
+    discovery,
+    documents,
+    health,
+    imports,
+    queue,
+    reviews,
+)
 from app.core.config import get_settings
 from app.core.config import validate_auth_config
 from app.db.base import Base
@@ -22,3 +31,5 @@ app.include_router(reviews.router)
 app.include_router(discovery.router)
 app.include_router(queue.router)
 app.include_router(compat.router)
+app.include_router(compat_reviews.router)
+app.include_router(imports.router)

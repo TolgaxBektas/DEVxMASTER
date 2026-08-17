@@ -10,6 +10,24 @@ router = APIRouter(
 )
 
 
+def apply_review_decision(
+    session,
+    item_id: int,
+    decision: str,
+    note: str | None = None,
+):
+    if decision not in {"approve", "reject"}:
+        raise HTTPException(400, "decision must be approve or reject")
+    item = session.get(ReviewItem, item_id)
+    if not item:
+        raise HTTPException(404)
+    item.status = "approved" if decision == "approve" else "rejected"
+    if note is not None:
+        item.review_note = note
+    item.reviewed_at = datetime.now(timezone.utc)
+    return item
+
+
 @router.get("")
 def queue(session=Depends(session_dependency)):
     return [
@@ -28,12 +46,6 @@ def queue(session=Depends(session_dependency)):
 
 @router.post("/{item_id}/{decision}")
 def review(item_id: int, decision: str, session=Depends(session_dependency)):
-    if decision not in {"approve", "reject"}:
-        raise HTTPException(400, "decision must be approve or reject")
-    item = session.get(ReviewItem, item_id)
-    if not item:
-        raise HTTPException(404)
-    item.status = "approved" if decision == "approve" else "rejected"
-    item.reviewed_at = datetime.now(timezone.utc)
+    item = apply_review_decision(session, item_id, decision)
     session.commit()
     return {"id": item.id, "status": item.status}
