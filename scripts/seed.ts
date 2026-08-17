@@ -29,6 +29,7 @@ const permissions = [
   "ingestion.source.read", "ingestion.document.read", "ingestion.document.write",
   "ingestion.document.upload", "ingestion.document.classify",
   "ingestion.occurrence.read", "ingestion.occurrence.review",
+  "ingestion.review.read", "ingestion.review.decide",
   "assistant.briefing.read", "assistant.chat", "assistant.proposal.read",
   "assistant.proposal.approve", "assistant.proposal.execute",
 ];

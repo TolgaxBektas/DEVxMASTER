@@ -1,6 +1,7 @@
 import json
 from collections import Counter
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -22,6 +23,9 @@ from app.services.vision.image_edit import (
     OpenAIImageEditProvider,
     RecordedImageEditProvider,
     image_sha256,
+    prepare_image_edit_input,
+    restore_image_edit_output,
+    select_image_edit_size,
 )
 from app.services.storage import LocalStorage
 from app.services.vision.recorded import RecordedVisionProvider
@@ -484,6 +488,21 @@ def test_recorded_image_edit_provider_is_keyed_by_input_digest(tmp_path):
     assert result.reported_cost == 0.25
 
 
+def test_image_edit_size_selection_and_round_trip_preserve_aspect_ratio():
+    assert select_image_edit_size((100, 100))[0] == "1024x1024"
+    assert select_image_edit_size((150, 100))[0] == "1536x1024"
+    assert select_image_edit_size((100, 150))[0] == "1024x1536"
+
+    source = Image.new("RGB", (417, 263), (12, 34, 56))
+    prepared, fitted_region = prepare_image_edit_input(source, (1536, 1024))
+    assert prepared.size == (1536, 1024)
+    assert fitted_region == (0, 27, 1536, 996)
+    assert prepared.getpixel((0, 0)) == (255, 255, 255)
+    restored = restore_image_edit_output(prepared, fitted_region, source.size)
+    assert restored.size == source.size
+    assert restored.getpixel((200, 100)) == source.getpixel((200, 100))
+
+
 def test_generative_fallback_composites_crop_and_records_pending_review(
     tmp_path, monkeypatch
 ):
@@ -491,9 +510,10 @@ def test_generative_fallback_composites_crop_and_records_pending_review(
         def __init__(self):
             self.calls = 0
 
-        def edit(self, image, prompt, rejection_reasons=None):
+        def edit(self, image, prompt, rejection_reasons=None, size=None):
             del prompt, rejection_reasons
             self.calls += 1
+            assert size in {"1024x1024", "1536x1024", "1024x1536"}
             return ImageEditResult(image.copy(), "stub-image-model", 250)
 
         def available(self):
@@ -552,9 +572,81 @@ def test_generative_fallback_composites_crop_and_records_pending_review(
         assert manifest["generative"]["document_cost_cents"] == 250
         assert manifest["ad_boundary"]
         assert "passed independent verification" in manifest["cascade_justification"]
+        assert manifest["generative"]["normalization"]["requested_format"] in {
+            "1024x1024",
+            "1536x1024",
+            "1024x1536",
+        }
+        assert manifest["generative"]["normalization"]["source_size"]
+        assert manifest["generative"]["normalization"]["normalized_size"]
+        assert (
+            manifest["generative"]["normalization"]["normalized_size"]
+            != manifest["generative"]["normalization"]["source_size"]
+        )
+        assert manifest["generative"]["normalization"]["resampling"] == "LANCZOS"
         assert manifest["verification"]["status"] == "passed"
         assert manifest["review_status"] == "pending"
         assert session.scalar(select(ReviewItem).where(ReviewItem.ad_id == ad.id))
+
+
+def test_generative_provider_format_mismatch_is_refused(tmp_path, monkeypatch):
+    class _WrongSizeProvider:
+        def edit(self, image, prompt, rejection_reasons=None, size=None):
+            del image, prompt, rejection_reasons
+            assert size == "1536x1024"
+            return ImageEditResult(
+                Image.new("RGB", (1024, 1024), "white"),
+                "stub-image-model",
+                100,
+            )
+
+        def available(self):
+            return True
+
+    import app.services.pipeline as pipeline_module
+
+    monkeypatch.setattr(
+        pipeline_module,
+        "approved_artwork_box",
+        lambda *_args: Box(10, 10, 110, 60),
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "communication_lines_for_box",
+        lambda *_args: [],
+    )
+    artwork_path = tmp_path / "artwork.png"
+    Image.new("RGB", (200, 100), "white").save(artwork_path)
+    pipeline = Pipeline(
+        None,
+        RecordedVisionProvider("tests/fixtures/qwen"),
+        LocalStorage(tmp_path / "storage"),
+        render_dpi=120,
+        local_work_dir=tmp_path / "work",
+        restoration_enabled=True,
+        image_edit_provider=_WrongSizeProvider(),
+        image_edit_hard_stop_cents=100,
+    )
+    pixel_result = SimpleNamespace(
+        manifest={"edit_status": "refused"},
+        review_reason="pixel stage refused",
+    )
+    occurrence = SimpleNamespace(fields_json="{}")
+    result, reason = pipeline._try_generative_restoration(
+        pixel_result,
+        FIXTURE,
+        11,
+        Box(0, 0, 100, 50),
+        artwork_path,
+        Box(0, 0, 100, 50),
+        occurrence,
+    )
+    assert result is None
+    assert "generative verification failed" in reason
+    assert pixel_result.manifest["generative"]["status"] == "failed"
+    assert pixel_result.manifest["generative"]["verification"]["checks"][0][
+        "name"
+    ] == "dimensions"
 
 
 def test_image_edit_provider_rejects_invalid_url_and_empty_data(monkeypatch):
@@ -586,9 +678,10 @@ def test_non_numeric_reported_cost_uses_upper_bound_and_completes_document(
         def __init__(self):
             self.calls = 0
 
-        def edit(self, image, prompt, rejection_reasons=None):
+        def edit(self, image, prompt, rejection_reasons=None, size=None):
             del prompt, rejection_reasons
             self.calls += 1
+            assert size in {"1024x1024", "1536x1024", "1024x1536"}
             return ImageEditResult(image.copy(), "stub-image-model", "unknown")
 
         def available(self):

@@ -94,6 +94,7 @@ class ReviewItem(Base):
     page_id: Mapped[int | None] = mapped_column(ForeignKey("pages.id"), index=True)
     status: Mapped[str] = mapped_column(String(20), default="pending")
     reason: Mapped[str] = mapped_column(Text, default="")
+    review_note: Mapped[str | None] = mapped_column(Text)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 

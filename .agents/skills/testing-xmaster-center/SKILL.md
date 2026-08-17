@@ -74,6 +74,37 @@ document stuck in `uploaded`. `advertisement.detected` idempotency keys must con
 (`advertisement.detected:<tenant>:<sha256>:<firma>`), otherwise the same PDF in tenant 1 suppresses
 the occurrence AND the lead in tenant 2 — always upload identical bytes in BOTH orders.
 
+## Document classification (Einordnung, `/ingestion`)
+- Derived fields live in `ingestion_document_classifications` (unique on `(tenant_id, document_id)`),
+  five field groups each with its own `*_source` (`filename`, `pdf-metadata`, `title-page`,
+  `first-pages`, `manual`) and `*_confidence`. Derivation: `modules/ingestion/src/classification.ts`,
+  invoked from `modules/ingestion/src/module.ts` during `ingestion.processing.run`.
+- Manual precedence is per field GROUP: `upsertDerivedClassification` skips a group whose
+  `*_source === 'manual'`. Beware: the UI form (`ui/IngestionPage.tsx`) always submits **all** fields,
+  so one UI correction marks every group `manual`. A genuinely mixed state (one group manual, the rest
+  derived) is only reachable via a tRPC call that sends a single field.
+- Correcting needs `ingestion.document.classify` (in the `admin` role via migration
+  `drizzle/0011_...sql`; `operator` does NOT have it). `documents.capabilities` returns
+  `{correct: boolean}` and gates the form. Audit action: `ingestion.document.classification.corrected`.
+- Filters (`documents.list` input `type`, `regionState`, `regionDistrict`, `periodYear`) are applied
+  in JS in the repository, exact-match and case-sensitive; documents without a classification row are
+  excluded from any active filter. `periodYear` needs BOTH `period_start_year` and `period_end_year`.
+- Correction validation is thin: the zod schema accepts any int year (e.g. `12345`, `-1`) and any
+  string for `regionState`; MySQL runs with `STRICT_TRANS_TABLES`, so strings longer than the column
+  (`type` 64, `edition_label` 128, `publication_name`/region 255) are likely to surface a raw
+  `Data too long for column` error — check whether that reaches the UI verbatim.
+- To trigger a RE-processing of an existing document (needed to prove manual precedence): find its
+  `ingestion.processing.run` job in `jobs`, set it to `status='dead'`, then click „Erneut einreihen“ on
+  `/system/jobs` — there is no reprocess button on `/ingestion`.
+- print-ingest now also returns `metadata` (PDF title/subject/creationDate) and per-page
+  `title_candidates` with font size; the pif client attaches them as a NON-enumerable `pdfMetadata`
+  property on the pages array.
+- Real test issues live in the dev DB (`ingestion_documents` ids ~1104–1107, tenant 1, origin
+  `source`); real PDFs for a fresh upload are in `/home/ubuntu/classification-evidence/`
+  (`starnberg-amtsblatt.pdf` 142 KB, `paderborn-messekatalog.pdf` 4 MB, `goerlitz-magazin.pdf` 10 MB).
+  Do NOT set `INGESTION_MAX_UPLOAD_BYTES=102400` when testing with these — the default is 25 MB.
+- `docker compose up -d` now also starts SearXNG (`127.0.0.1:8081`, health `/healthz` via compose).
+
 ## Login
 Local provider, user `admin`, PIN from `ADMIN_PIN` (dev value `1907`). Browser login form at
 `/`; API endpoint is `POST /api/auth/local` with `{"externalId":"admin","secret":"1907"}`
