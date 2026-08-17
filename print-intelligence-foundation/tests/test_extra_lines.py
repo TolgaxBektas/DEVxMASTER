@@ -239,3 +239,59 @@ def test_appended_strip_is_near_content_not_bottom_margin(monkeypatch):
     assert result.image.getpixel((0, image.height - 1 + added)) == image.getpixel(
         (0, image.height - 1)
     )
+
+
+def test_band_ocr_rejects_value_read_only_from_content_band(monkeypatch):
+    image = Image.new("RGB", (240, 100), "white")
+    ImageDraw.Draw(image).rectangle((0, 40, 239, 59), fill=(40, 40, 40))
+
+    def band_lines(candidate, *, config="", offset=(0, 0)):
+        if config != "--psm 6":
+            return []
+        return [
+            {
+                "text": "www.example.de",
+                "heights": [("www.example.de", 10)],
+                "left": 20 + offset[0],
+                "top": 44 + offset[1],
+                "right": 170 + offset[0],
+                "bottom": 54 + offset[1],
+            }
+        ]
+
+    monkeypatch.setattr(extra_lines, "_lines", band_lines)
+
+    result = compose_extra_lines(image, [("website", "https://www.example.de")])
+
+    assert result.manifest["status"] == "skipped"
+    assert result.manifest["reason"] == "all_lines_already_present"
+    assert result.manifest["discarded"][0]["reason"] == "already_present"
+    assert result.manifest["ocr"]["bands_used"] == 1
+
+
+def test_digits_are_compared_as_contained_sequence(monkeypatch):
+    image = Image.new("RGB", (240, 100), "white")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((0, 40, 239, 99), fill=(230, 230, 230))
+    anchor = _anchor()
+    anchor["ocr_lines"] = [{**anchor, "text": "Straße 12 | 35578 Wetzlar | Telefon 06441 / 905-11"}]
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: anchor)
+
+    result = compose_extra_lines(image, [("fax", "06441-905-11")])
+
+    assert result.manifest["status"] == "skipped"
+    assert result.manifest["discarded"][0]["reason"] == "already_present"
+
+
+def test_short_postal_or_house_number_does_not_count_as_duplicate(monkeypatch):
+    image = Image.new("RGB", (240, 100), "white")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((0, 40, 239, 99), fill=(230, 230, 230))
+    anchor = _anchor()
+    anchor["ocr_lines"] = [{**anchor, "text": "Straße 12 | 35578 Wetzlar"}]
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: anchor)
+
+    result = compose_extra_lines(image, [("fax", "35578")])
+
+    assert result.manifest["status"] == "composed"
+    assert result.manifest.get("discarded", []) == []

@@ -29,9 +29,14 @@ class ExtraLineComposition:
     manifest: dict[str, Any]
 
 
-def _lines(image: Image.Image) -> list[dict[str, Any]]:
+def _lines(
+    image: Image.Image,
+    *,
+    config: str = "",
+    offset: tuple[int, int] = (0, 0),
+) -> list[dict[str, Any]]:
     data = pytesseract.image_to_data(
-        image, lang="deu", output_type=pytesseract.Output.DICT
+        image, lang="deu", config=config, output_type=pytesseract.Output.DICT
     )
     grouped: dict[tuple[int, int, int], dict[str, Any]] = {}
     for index, text in enumerate(data["text"]):
@@ -42,7 +47,8 @@ def _lines(image: Image.Image) -> list[dict[str, Any]]:
             data["par_num"][index],
             data["line_num"][index],
         )
-        left, top = data["left"][index], data["top"][index]
+        left = data["left"][index] + offset[0]
+        top = data["top"][index] + offset[1]
         line = grouped.setdefault(
             key,
             {
@@ -65,7 +71,47 @@ def _lines(image: Image.Image) -> list[dict[str, Any]]:
     return sorted(grouped.values(), key=lambda line: line["top"])
 
 
-def _anchor(image: Image.Image) -> dict[str, Any] | None:
+def _edge_colour(image: Image.Image) -> tuple[int, int, int]:
+    rows = list(
+        image.convert("RGB")
+        .crop((0, max(0, image.height - 3), image.width, image.height))
+        .getdata()
+    )
+    return max(set(rows), key=rows.count) if rows else (255, 255, 255)
+
+
+def _content_bands(
+    image: Image.Image,
+    background: tuple[int, int, int],
+    limit: int = 24,
+) -> tuple[list[tuple[int, int]], dict[str, Any]]:
+    active = [
+        y for y in range(image.height) if not _row_uniform(image, y, background)
+    ]
+    runs: list[list[int]] = []
+    for y in active:
+        if not runs or y - runs[-1][-1] > 2:
+            runs.append([y])
+        else:
+            runs[-1].append(y)
+    original_count = len(runs)
+    limited = original_count > limit
+    if limited:
+        runs = sorted(runs, key=len, reverse=True)[:limit]
+    bands = []
+    for run in sorted(runs, key=lambda item: item[0]):
+        height = run[-1] - run[0] + 1
+        padding = max(1, int(round(height * 0.25)))
+        bands.append((max(0, run[0] - padding), min(image.height, run[-1] + padding + 1)))
+    return bands, {
+        "band_count": original_count,
+        "bands_used": len(bands),
+        "band_limit": limit,
+        "band_limit_applied": limited,
+    }
+
+
+def _ocr_lines(image: Image.Image) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     ocr_lines = []
     for candidate in (
         image,
@@ -73,11 +119,23 @@ def _anchor(image: Image.Image) -> dict[str, Any] | None:
         ImageOps.invert(image.convert("RGB")),
     ):
         ocr_lines.extend(_lines(candidate))
+    bands, metadata = _content_bands(image, _edge_colour(image))
+    for top, bottom in bands:
+        band = image.crop((0, top, image.width, bottom))
+        ocr_lines.extend(
+            _lines(band, config="--psm 6", offset=(0, top))
+        )
+    return ocr_lines, metadata
+
+
+def _anchor(image: Image.Image) -> dict[str, Any] | None:
+    ocr_lines, metadata = _ocr_lines(image)
     contacts = [line for line in ocr_lines if CONTACT_RE.search(line["text"])]
     if not contacts:
         return None
     anchor = dict(max(contacts, key=lambda line: line["bottom"]))
     anchor["ocr_lines"] = ocr_lines
+    anchor["ocr_metadata"] = metadata
     return anchor
 
 
@@ -106,7 +164,7 @@ def _present_keys(lines: list[dict[str, Any]]) -> set[tuple[str, str]]:
             keys.add(_normal_key("website", address))
         digits = "".join(re.findall(r"\d", text))
         if digits:
-            keys.add(("digits", digits))
+            keys.add(("digits_line", digits))
     return keys
 
 
@@ -117,7 +175,14 @@ def _filter_existing(
     present = _present_keys(lines)
     kept, discarded = [], []
     for channel, value in channels:
-        if _normal_key(channel, value) in present:
+        key_type, key_value = _normal_key(channel, value)
+        duplicate = (key_type, key_value) in present
+        if key_type == "digits":
+            duplicate = len(key_value) >= 6 and any(
+                kind == "digits_line" and key_value in line_value
+                for kind, line_value in present
+            )
+        if duplicate:
             discarded.append(
                 {"channel": channel, "value": value, "reason": "already_present"}
             )
@@ -416,6 +481,7 @@ def compose_extra_lines(
                 "reason": "all_lines_already_present",
                 "lines": [],
                 "discarded": discarded,
+                "ocr": anchor.get("ocr_metadata", {}),
             },
         )
     colours = _colours(source, anchor)
@@ -594,6 +660,7 @@ def compose_extra_lines(
             "lines": line_values,
             "discarded": discarded,
             "blocks": manifest_blocks,
+            "ocr": anchor.get("ocr_metadata", {}),
             "output_size": list(grown.size),
         },
     )
