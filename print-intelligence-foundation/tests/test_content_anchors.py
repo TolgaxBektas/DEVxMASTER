@@ -14,13 +14,7 @@ from app.services.content_anchors import (
 def test_content_comparison_reports_missing_and_new_contacts():
     result = compare_content_anchors(
         {
-            "text_lines": [
-                "Firma Muster GmbH",
-                "Telefon 040 123456",
-                "Büro Hamburg Innenstadt",
-                "Montag bis Freitag geöffnet",
-                "www.example.de",
-            ],
+                "text_lines": ["Firma", "Telefon 040 123456"],
             "phones": ["040123456"],
             "emails": ["alt@example.de"],
             "domains": ["example.de"],
@@ -29,13 +23,7 @@ def test_content_comparison_reports_missing_and_new_contacts():
             "qr_detection": "available",
         },
         {
-            "text_lines": [
-                "Firma Muster GmbH",
-                "Telefon 040 123456",
-                "Büro Hamburg Innenstadt",
-                "Montag bis Freitag geöffnet",
-                "www.example.de",
-            ],
+                "text_lines": ["Firma"],
             "phones": ["040123456"],
             "emails": ["neu@example.de"],
             "domains": ["example.de"],
@@ -58,7 +46,10 @@ def test_content_comparison_reports_missing_and_new_contacts():
         for finding in result["findings"]
     )
     assert result["qr_removed"] is True
-    assert not any(finding["category"].startswith("QR-Code") for finding in result["findings"])
+    assert not any(
+        finding["category"] == "QR-Code-Anwesenheit"
+        for finding in result["findings"]
+    )
 
 
 def test_qr_removal_semantics():

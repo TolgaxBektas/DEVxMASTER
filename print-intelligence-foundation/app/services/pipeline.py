@@ -264,19 +264,25 @@ class Pipeline:
             boxes = deduplicate_boxes(
                 [box for box, _ in candidates], self.bbox_iou_threshold
             )
-            watermark_evidence = {
-                f"{box.left},{box.top},{box.right},{box.bottom}": evidence
-                for box, evidence in zip(
-                    boxes,
-                    watermark_markers_in_boxes(
-                        source,
-                        number,
+            watermark_evidence = {}
+            if (
+                self.restoration_enabled
+                and self.watermark_markers
+                and boxes
+            ):
+                watermark_evidence = {
+                    f"{box.left},{box.top},{box.right},{box.bottom}": evidence
+                    for box, evidence in zip(
                         boxes,
-                        self.render_dpi,
-                        self.watermark_markers,
-                    ),
-                )
-            }
+                        watermark_markers_in_boxes(
+                            source,
+                            number,
+                            boxes,
+                            self.render_dpi,
+                            self.watermark_markers,
+                        ),
+                    )
+                }
             for index, box in enumerate(boxes):
                 self._check_deadline(deadline)
                 advert = next(ad for candidate, ad in candidates if candidate == box)
@@ -678,7 +684,14 @@ class Pipeline:
                         "status": "refused",
                         "reason": reason,
                     },
+                    "geometry_quality": {
+                        "status": "not_assessed",
+                        "text_characters": None,
+                        "invalid_ratio": None,
+                        "overlap_ratio": None,
+                    },
                     "findings": [],
+                    "verification": {"status": "not_assessed", "checks": []},
                     "review_status": "pending",
                     "edit_status": "refused",
                 },
@@ -749,14 +762,21 @@ class Pipeline:
             if proposal_image is None:
                 result.manifest["edit_status"] = "refused"
                 result.manifest["review_status"] = "pending"
+                if self.image_edit_provider is None:
+                    generative_reason = (
+                        "watermark detected; generative restoration is not configured"
+                    )
+                else:
+                    generative_reason = (
+                        review_reason
+                        or "restoration refused: generative restoration failed"
+                    )
                 result.manifest["cascade_justification"] = (
                     "Refused deterministic restoration because the PDF text layer "
-                    "marks this advertisement with a watermark; generative "
-                    "restoration is not configured."
+                    "marks this advertisement with a watermark; "
+                    f"{generative_reason}."
                 )
-                review_reason = (
-                    "watermark detected; generative restoration is not configured"
-                )
+                review_reason = generative_reason
         if proposal_image is not None:
             original_image = Image.open(artwork_output).convert("RGB")
             fields = json.loads(occurrence.fields_json or "{}").get("fields", {})

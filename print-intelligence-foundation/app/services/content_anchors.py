@@ -288,72 +288,132 @@ def _decode_qr(image: Image.Image) -> tuple[list[str], str | None]:
 def _qr_presence(
     image: Image.Image,
 ) -> tuple[bool, float, dict[str, float] | None]:
-    gray = ImageOps.autocontrast(image.convert("L"))
-    width, height = gray.size
-    pixels = list(gray.resize((min(width, 256), min(height, 256))).getdata())
-    scan_width = min(width, 256)
-    scan_height = min(height, 256)
+    import numpy as np
+
+    width, height = image.size
+    gray = np.asarray(
+        ImageOps.autocontrast(image.convert("L")).resize(
+            (min(width, 256), min(height, 256)),
+            Image.Resampling.BILINEAR,
+        ),
+        dtype=np.float32,
+    )
+    binary = gray < gray.mean()
+    horizontal = binary[:, 1:] != binary[:, :-1]
+    vertical = binary[1:, :] != binary[:-1, :]
+
+    def integral(values):
+        return np.pad(
+            values.astype(np.int32).cumsum(0).cumsum(1),
+            ((1, 0), (1, 0)),
+        )
+
+    gray_integral = integral(binary)
+    horizontal_integral = integral(horizontal)
+    vertical_integral = integral(vertical)
+
+    def windows(values, window_height, window_width):
+        return (
+            values[window_height:, window_width:]
+            - values[:-window_height, window_width:]
+            - values[window_height:, :-window_width]
+            + values[:-window_height, :-window_width]
+        )
+
     best = 0.0
     finder_best = 0.0
     finder_region = None
-    for size in range(20, min(scan_width, scan_height) // 2 + 1, 4):
-        for top in range(0, scan_height - size + 1, max(2, size // 6)):
-            for left in range(0, scan_width - size + 1, max(2, size // 6)):
-                values = [
-                    pixels[row * scan_width + column]
-                    for row in range(top, top + size)
-                    for column in range(left, left + size)
+    gray_image = Image.fromarray(gray.astype(np.uint8), mode="L")
+    expected_pattern = np.array([
+        [
+            row in {0, 6}
+            or column in {0, 6}
+            or (2 <= row <= 4 and 2 <= column <= 4)
+            for column in range(7)
+        ]
+        for row in range(7)
+    ])
+    for size in range(21, min(gray.shape) // 2 + 1, 3):
+        dark = windows(gray_integral, size, size) / (size * size)
+        if not dark.size:
+            continue
+        horizontal_score = windows(
+            horizontal_integral, size, size - 1
+        ) / (size * (size - 1))
+        vertical_score = windows(
+            vertical_integral, size - 1, size
+        ) / (size * (size - 1))
+        score = np.minimum(horizontal_score, vertical_score) * (
+            1 - np.abs(0.5 - dark)
+        )
+        best = max(best, float(score.max()))
+        output_height = gray.shape[0] - size + 1
+        output_width = gray.shape[1] - size + 1
+
+        def region(top, left, region_height, region_width):
+            return (
+                gray_integral[
+                    region_height + top:region_height + top + output_height,
+                    region_width + left:region_width + left + output_width,
                 ]
-                mean = sum(values) / len(values)
-                dark = sum(value < mean for value in values) / len(values)
-                if not 0.28 <= dark <= 0.72:
-                    continue
-                horizontal = sum(
-                    (values[index] < mean) != (values[index + 1] < mean)
-                    for index in range(len(values) - 1)
-                    if (index + 1) % size
-                ) / (size * (size - 1))
-                vertical = sum(
-                    (values[index] < mean) != (values[index + size] < mean)
-                    for index in range(size * (size - 1))
-                ) / (size * (size - 1))
-                score = min(horizontal, vertical) * (1 - abs(0.5 - dark))
-                best = max(best, score)
-    for size in range(21, min(scan_width, scan_height) // 2 + 1, 3):
-        for top in range(0, scan_height - size + 1, max(2, size // 8)):
-            for left in range(0, scan_width - size + 1, max(2, size // 8)):
-                crop = gray.crop((left, top, left + size, top + size)).resize(
-                    (21, 21), Image.Resampling.BILINEAR
-                )
-                values = list(crop.getdata())
-                for inverted in (False, True):
-                    dark = [
-                        (value < 128) != inverted
-                        for value in values
-                    ]
-                    matches = 0
-                    total = 0
-                    for origin_x, origin_y in ((0, 0), (14, 0), (0, 14)):
-                        for row in range(7):
-                            for column in range(7):
-                                expected = (
-                                    row in {0, 6}
-                                    or column in {0, 6}
-                                    or (2 <= row <= 4 and 2 <= column <= 4)
-                                )
-                                matches += dark[
-                                    (origin_y + row) * 21 + origin_x + column
-                                ] == expected
-                                total += 1
-                    score = matches / total
-                    if score > finder_best:
-                        finder_best = score
-                        finder_region = {
-                            "x": left * width / scan_width,
-                            "y": top * height / scan_height,
-                            "width": size * width / scan_width,
-                            "height": size * height / scan_height,
-                        }
+                - gray_integral[
+                    top:top + output_height,
+                    region_width + left:region_width + left + output_width,
+                ]
+                - gray_integral[
+                    region_height + top:region_height + top + output_height,
+                    left:left + output_width,
+                ]
+                + gray_integral[
+                    top:top + output_height,
+                    left:left + output_width,
+                ]
+            ) / (region_height * region_width)
+
+        finder_scores = []
+        for origin_x, origin_y in (
+            (0, 0),
+            (size - round(size / 3), 0),
+            (0, size - round(size / 3)),
+        ):
+            matches = np.zeros((output_height, output_width), dtype=np.int16)
+            for row in range(7):
+                for column in range(7):
+                    y0 = origin_y + round(row * size / 21)
+                    y1 = origin_y + round((row + 1) * size / 21)
+                    x0 = origin_x + round(column * size / 21)
+                    x1 = origin_x + round((column + 1) * size / 21)
+                    cell = region(y0, x0, y1 - y0, x1 - x0)
+                    matches += ((cell >= 0.5) == expected_pattern[row, column])
+            finder_scores.append(np.maximum(matches, 49 - matches) / 49)
+        candidate_score = np.minimum.reduce(finder_scores)
+        for flat_index in np.argpartition(
+            candidate_score.ravel(), -16
+        )[-16:]:
+            top, left = np.unravel_index(flat_index, candidate_score.shape)
+            crop = gray_image.crop((left, top, left + size, top + size)).resize(
+                (21, 21), Image.Resampling.BILINEAR
+            )
+            pixels = np.asarray(crop, dtype=np.uint8)
+            for inverted in (False, True):
+                candidate_binary = (pixels < 128) != inverted
+                matches = 0
+                for origin_x, origin_y in ((0, 0), (14, 0), (0, 14)):
+                    matches += int((
+                        candidate_binary[
+                            origin_y:origin_y + 7,
+                            origin_x:origin_x + 7,
+                        ] == expected_pattern
+                    ).sum())
+                score = matches / 147
+                if score > finder_best:
+                    finder_best = score
+                    finder_region = {
+                        "x": float(left * width / gray.shape[1]),
+                        "y": float(top * height / gray.shape[0]),
+                        "width": float(size * width / gray.shape[1]),
+                        "height": float(size * height / gray.shape[0]),
+                    }
     return (
         finder_best >= 0.78,
         finder_best if finder_best else best,
@@ -668,6 +728,7 @@ def compare_content_anchors(
         ("phones", "Telefonnummer"),
         ("emails", "E-Mail-Adresse"),
         ("domains", "Web-Adresse"),
+        ("qr_codes", "QR-Code-Inhalt"),
     ):
         before = set(original.get(category) or [])
         after = set(restored.get(category) or [])
@@ -694,6 +755,9 @@ def compare_content_anchors(
             findings.append({
                 "type": "missing",
                 "severity": (
+                    "abweichung"
+                    if category == "qr_codes"
+                    else
                     "unsicher"
                     if ocr_uncertain
                     else "abweichung"
@@ -705,6 +769,9 @@ def compare_content_anchors(
             findings.append({
                 "type": "new",
                 "severity": (
+                    "abweichung"
+                    if category == "qr_codes"
+                    else
                     "unsicher"
                     if ocr_uncertain
                     else "abweichung"

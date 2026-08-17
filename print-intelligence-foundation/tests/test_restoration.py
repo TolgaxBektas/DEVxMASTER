@@ -219,6 +219,55 @@ def test_watermarked_ad_skips_pixel_stage_and_requires_generating_review(
         assert session.scalar(select(ReviewItem).where(ReviewItem.ad_id == occurrence.id))
 
 
+def test_watermarked_generative_failure_keeps_provider_reason(tmp_path, monkeypatch):
+    engine = create_engine(f"sqlite:///{tmp_path / 'watermark-provider-failure.db'}")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with factory() as session:
+        pipeline = Pipeline(
+            session,
+            RecordedVisionProvider("tests/fixtures/qwen"),
+            LocalStorage(tmp_path / "storage"),
+            restoration_enabled=True,
+            image_edit_provider=object(),
+            local_work_dir=tmp_path / "work",
+        )
+        occurrence = AdOccurrence(
+            page_id=1,
+            occurrence_key="1,1,10,10",
+            bbox="1,1,10,10",
+            fields_json=json.dumps({"fields": {}}),
+        )
+        session.add(occurrence)
+        session.flush()
+        artwork = tmp_path / "artwork.png"
+        Image.new("RGB", (40, 40), "white").save(artwork)
+        reason = "restoration refused: image edit cost hard stop"
+        monkeypatch.setattr(
+            pipeline,
+            "_try_generative_restoration",
+            lambda *_args: (None, reason),
+        )
+        pipeline._maybe_write_restoration(
+            occurrence,
+            tmp_path / "source.pdf",
+            1,
+            Box(0, 0, 40, 40),
+            (40, 40),
+            artwork,
+            Box(0, 0, 40, 40),
+            "digest",
+            None,
+            [{"marker": "inixmedia"}],
+        )
+        manifest = json.loads(occurrence.restoration_manifest_json)
+        assert reason in manifest["cascade_justification"]
+        review = session.scalar(
+            select(ReviewItem).where(ReviewItem.ad_id == occurrence.id)
+        )
+        assert review.reason == reason
+
+
 def test_watermarked_ad_without_generative_stage_is_refused_for_review(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'watermark-no-provider.db'}")
     Base.metadata.create_all(engine)
@@ -265,6 +314,8 @@ def test_watermarked_ad_without_generative_stage_is_refused_for_review(tmp_path)
         assert occurrence.restoration_path is None
         assert manifest["edit_status"] == "refused"
         assert manifest["watermark"]["detected"] is True
+        assert manifest["geometry_quality"]["status"] == "not_assessed"
+        assert manifest["verification"]["status"] == "not_assessed"
         assert "generative restoration is not configured" in (
             session.scalar(
                 select(ReviewItem).where(ReviewItem.ad_id == occurrence.id)
@@ -308,6 +359,20 @@ def test_unrelated_refusal_keeps_watermark_as_evidence_not_cause(tmp_path):
             "restoration refused: artwork is unavailable"
         )
         assert manifest["watermark"]["markers"] == evidence
+
+
+def test_watermark_detection_is_skipped_when_restoration_is_disabled(
+    tmp_path, monkeypatch
+):
+    def fail_watermark_detection(*_args, **_kwargs):
+        raise AssertionError("watermark detection must be skipped")
+
+    monkeypatch.setattr(
+        "app.services.pipeline.watermark_markers_in_boxes",
+        fail_watermark_detection,
+    )
+    session, _, _, _ = _run(tmp_path, False)
+    session.close()
 
 
 def test_fixture_restoration_accepts_clean_lines_and_refuses_uncertain_ads(tmp_path):
