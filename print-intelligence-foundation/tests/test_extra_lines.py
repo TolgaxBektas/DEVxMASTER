@@ -456,3 +456,21 @@ def test_blocks_use_inner_frame_bounds_instead_of_image_edges(monkeypatch):
     row = result.manifest["blocks"][0]["rows"][0]
     assert row["position"][0] >= content_left + margin
     assert row["position"][0] + row["width"] <= content_right - margin
+
+
+def test_appended_strip_fits_font_after_final_centering(monkeypatch):
+    image = Image.new("RGB", (500, 140), "white")
+    ImageDraw.Draw(image).rectangle((0, 30, 499, 60), fill=(20, 80, 140))
+    anchor = _anchor(left=440, right=490, bottom=60)
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: anchor)
+
+    result = compose_extra_lines(image, [("website", "www.example.de")])
+
+    assert result.manifest["status"] == "composed"
+    assert result.manifest["placement"] == "appended_strip"
+    assert result.manifest["centred"] is True
+    probe = extra_lines._fit_font(
+        "X", result.manifest["cap_height"], result.manifest["bold"]
+    )
+    assert probe is not None
+    assert result.manifest["font_size"] == probe.size

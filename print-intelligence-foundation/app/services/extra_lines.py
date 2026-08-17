@@ -579,11 +579,46 @@ def compose_extra_lines(
             line_heights = [height for _word, height in line.get("heights", [])]
         contact_heights.extend(line_heights)
     reference_heights = sorted(contact_heights or anchor_heights)
-    anchor_height = max(1, anchor_heights[len(anchor_heights) // 2])
-    cap_height = max(1, reference_heights[len(reference_heights) // 2])
+    anchor_height = anchor_heights[len(anchor_heights) // 2]
+    reference_height = reference_heights[len(reference_heights) // 2]
+    cap_height = max(1, reference_height)
     bold = _is_bold(source, anchor, text_colour, background)
+    line_height = max(1, int(round(cap_height * 1.75)))
+    block_gap = max(1, int(round(cap_height * 0.9)))
+    bottom_air = max(1, int(round(cap_height * 0.35)))
+    band_end = _band_end(source, anchor, background)
+    band_fits = band_end - anchor["bottom"] >= line_height * 0.4 and _row_uniform(
+        source, band_end - 1, background
+    )
+    content_end_value = None
+    insertion_gap = None
+    if not band_fits:
+        bottom = list(
+            source.crop(
+                (0, max(0, source.height - 3), source.width, source.height)
+            ).getdata()
+        )
+        if not bottom:
+            return ExtraLineComposition(
+                source.copy(),
+                {
+                    "status": "skipped",
+                    "reason": "no_colour_measurement",
+                    "lines": line_values,
+                    "discarded": discarded,
+                },
+            )
+        background = max(set(bottom), key=bottom.count)
+        text_colour = (0, 0, 0) if sum(background) > 381 else (255, 255, 255)
+        content_end = _content_end(source, background)
+        gap = max(1, int(round(line_height / 2)))
+        content_end_value = content_end
+        insertion_gap = gap
+        band_end = content_end + gap
     centred = (
-        abs((anchor["left"] + anchor["right"]) / 2 - source.width / 2)
+        True
+        if not band_fits
+        else abs((anchor["left"] + anchor["right"]) / 2 - source.width / 2)
         < source.width * 0.06
     )
     content_bounds = _content_bounds(source, _edge_colour(source)) or (
@@ -662,39 +697,6 @@ def compose_extra_lines(
                 "discarded": discarded,
             },
         )
-    line_height = max(1, int(round(cap_height * 1.75)))
-    block_gap = max(1, int(round(cap_height * 0.9)))
-    bottom_air = max(1, int(round(cap_height * 0.35)))
-    band_end = _band_end(source, anchor, background)
-    band_fits = band_end - anchor["bottom"] >= line_height * 0.4 and _row_uniform(
-        source, band_end - 1, background
-    )
-    content_end_value = None
-    insertion_gap = None
-    if not band_fits:
-        centred = True
-        bottom = list(
-            source.crop(
-                (0, max(0, source.height - 3), source.width, source.height)
-            ).getdata()
-        )
-        if not bottom:
-            return ExtraLineComposition(
-                source.copy(),
-                {
-                    "status": "skipped",
-                    "reason": "no_colour_measurement",
-                    "lines": line_values,
-                    "discarded": discarded,
-                },
-            )
-        background = max(set(bottom), key=bottom.count)
-        text_colour = (0, 0, 0) if sum(background) > 381 else (255, 255, 255)
-        content_end = _content_end(source, background)
-        gap = max(1, int(round(line_height / 2)))
-        content_end_value = content_end
-        insertion_gap = gap
-        band_end = content_end + gap
     content_height, glyph_bottom = _layout_height(
         blocks, line_height, block_gap, font, cap_height, bottom_air
     )
@@ -802,7 +804,7 @@ def compose_extra_lines(
             "centred": centred,
             "anchor_height": anchor_height,
             "cap_height": cap_height,
-            "reference_height": cap_height,
+            "reference_height": reference_height,
             "line_height": line_height,
             "block_gap": block_gap,
             "lines": line_values,
