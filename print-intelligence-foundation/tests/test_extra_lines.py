@@ -1,4 +1,4 @@
-from PIL import Image, ImageChops, ImageDraw
+from PIL import Image, ImageChops, ImageDraw, ImageFont
 
 from app.services import extra_lines
 from app.services.extra_lines import compose_extra_lines
@@ -417,3 +417,42 @@ def test_right_aligned_anchor_shrinks_social_line_inside_right_margin(monkeypatc
             assert margin <= row["position"][0]
             assert row["position"][0] + row["width"] <= image.width - margin
     assert any(block["shifted"] for block in result.manifest["blocks"])
+
+
+def test_descender_on_last_line_has_full_glyph_clearance(monkeypatch):
+    image = Image.new("RGB", (220, 80), "white")
+    ImageDraw.Draw(image).rectangle((20, 30, 199, 45), fill=(20, 80, 140))
+    anchor = _anchor(bottom=45)
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: anchor)
+
+    result = compose_extra_lines(image, [("fax", "ggg")])
+
+    assert result.manifest["status"] == "composed"
+    part = result.manifest["blocks"][-1]["rows"][-1]["parts"][0]
+    font_path = extra_lines._font_path(result.manifest["bold"])
+    assert font_path is not None
+    font = ImageFont.truetype(font_path, result.manifest["font_size"])
+    glyph_bottom = part["position"][1] + font.getbbox(part["value"])[3]
+    assert glyph_bottom + result.manifest["bottom_air"] <= result.image.height
+
+
+def test_blocks_use_inner_frame_bounds_instead_of_image_edges(monkeypatch):
+    image = Image.new("RGB", (400, 150), "white")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((60, 30, 339, 120), outline=(20, 80, 140), width=3)
+    anchor = _anchor(left=305, right=335)
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: anchor)
+
+    result = compose_extra_lines(
+        image,
+        [("instagram", "instagram.com/x")],
+    )
+
+    assert result.manifest["status"] == "composed"
+    content_left, content_right = result.manifest["content_bounds"]
+    assert content_left <= 60
+    assert content_right >= 339
+    margin = max(round(image.width * 0.04), result.manifest["cap_height"])
+    row = result.manifest["blocks"][0]["rows"][0]
+    assert row["position"][0] >= content_left + margin
+    assert row["position"][0] + row["width"] <= content_right - margin

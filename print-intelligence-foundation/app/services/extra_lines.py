@@ -209,6 +209,62 @@ def _uniform_rows(
     )
 
 
+def _column_uniform(
+    image: Image.Image,
+    x: int,
+    background: tuple[int, int, int],
+    tolerance: int = 18,
+    coverage: float = 0.90,
+) -> bool:
+    if x < 0 or x >= image.width:
+        return False
+    column = list(image.convert("RGB").crop((x, 0, x + 1, image.height)).getdata())
+    if not column:
+        return False
+    matching = sum(
+        all(
+            abs(channel - background[index]) <= tolerance
+            for index, channel in enumerate(pixel)
+        )
+        for pixel in column
+    )
+    return matching / len(column) >= coverage
+
+
+def _content_bounds(
+    image: Image.Image,
+    background: tuple[int, int, int],
+) -> tuple[int, int] | None:
+    active = [
+        x for x in range(image.width) if not _column_uniform(image, x, background)
+    ]
+    if not active:
+        return None
+    return min(active), max(active) + 1
+
+
+def _layout_height(
+    blocks: list[dict[str, Any]],
+    line_height: int,
+    block_gap: int,
+    font: ImageFont.FreeTypeFont,
+    cap_height: int,
+    bottom_air: int,
+) -> tuple[int, int]:
+    offset = 0
+    glyph_bottom = 0
+    for block in blocks:
+        for row in block["rows"]:
+            row_bottom = max(
+                [font.getbbox(part["value"])[3] for part in row["parts"]]
+                + [cap_height]
+            )
+            glyph_bottom = max(glyph_bottom, offset + row_bottom)
+            offset += line_height
+        offset += block_gap
+    return glyph_bottom + bottom_air, glyph_bottom
+
+
 def _average(pixels: list[tuple[int, int, int]]) -> tuple[int, int, int]:
     return tuple(
         sum(pixel[index] for pixel in pixels) // len(pixels) for index in range(3)
@@ -530,13 +586,30 @@ def compose_extra_lines(
         abs((anchor["left"] + anchor["right"]) / 2 - source.width / 2)
         < source.width * 0.06
     )
+    content_bounds = _content_bounds(source, _edge_colour(source)) or (
+        0,
+        source.width,
+    )
+    content_left, content_right = content_bounds
     margin = max(int(round(source.width * 0.04)), cap_height)
-    max_available = source.width - 2 * margin
-    desired_left = max(margin, anchor["left"])
-    left_available = source.width - margin - desired_left
+    left_limit = content_left + margin
+    right_limit = content_right - margin
+    max_available = right_limit - left_limit
+    desired_left = max(left_limit, anchor["left"])
+    left_available = right_limit - desired_left
     shifted_for_fit = False
+    if max_available <= 0:
+        return ExtraLineComposition(
+            source.copy(),
+            {
+                "status": "skipped",
+                "reason": "no_line_space",
+                "lines": line_values,
+                "discarded": discarded,
+            },
+        )
     if left_available <= 0:
-        desired_left = margin
+        desired_left = left_limit
         left_available = max_available
         shifted_for_fit = True
     probe = _fit_font("X", cap_height, bold)
@@ -564,15 +637,21 @@ def compose_extra_lines(
                 "discarded": discarded,
             },
         )
-    for size in range(probe.size, 0, -1):
-        candidate = ImageFont.truetype(font_path, size)
-        available = max_available if centred else left_available
-        candidate_blocks = _group_lines(
-            channels, draw_probe, candidate, cap_height, available
-        )
-        if all(block["width"] <= available for block in candidate_blocks):
-            font, blocks = candidate, candidate_blocks
-            break
+    def fit_blocks(available: int):
+        for size in range(probe.size, 0, -1):
+            candidate = ImageFont.truetype(font_path, size)
+            candidate_blocks = _group_lines(
+                channels, draw_probe, candidate, cap_height, available
+            )
+            if all(block["width"] <= available for block in candidate_blocks):
+                return candidate, candidate_blocks
+        return None, []
+
+    font, blocks = fit_blocks(max_available if centred else left_available)
+    if font is None and not centred and desired_left != left_limit:
+        desired_left = left_limit
+        shifted_for_fit = True
+        font, blocks = fit_blocks(max_available)
     if font is None:
         return ExtraLineComposition(
             source.copy(),
@@ -616,15 +695,18 @@ def compose_extra_lines(
         content_end_value = content_end
         insertion_gap = gap
         band_end = content_end + gap
-    content_height = sum(len(block["rows"]) * line_height for block in blocks)
-    content_height += block_gap * max(0, len(blocks) - 1) + bottom_air
+    content_height, glyph_bottom = _layout_height(
+        blocks, line_height, block_gap, font, cap_height, bottom_air
+    )
     if not band_fits:
         available = max(0, source.height - band_end)
         fits_margin = available >= content_height and _uniform_rows(
             source, band_end, band_end + content_height, background
         )
-        missing = max(0, content_height - available)
-        output_height = source.height if fits_margin else source.height + missing
+        required_height = band_end + content_height
+        output_height = source.height if fits_margin else max(
+            source.height, required_height
+        )
         grown = source.copy() if fits_margin else Image.new(
             "RGB", (source.width, output_height), background
         )
@@ -647,9 +729,15 @@ def compose_extra_lines(
     for block in blocks:
         block_start = y
         desired_x = (
-            (source.width - block["width"]) / 2 if centred else desired_left
+            (
+                content_left + (content_right - content_left - block["width"]) / 2
+                if centred
+                else desired_left
+            )
         )
-        block_x = max(margin, min(desired_x, source.width - margin - block["width"]))
+        block_x = max(
+            left_limit, min(desired_x, right_limit - block["width"])
+        )
         shifted = shifted_for_fit or (
             not centred and abs(block_x - desired_x) > 0.01
         )
@@ -705,6 +793,7 @@ def compose_extra_lines(
             ],
             "text_colour": list(text_colour),
             "background": list(background),
+            "content_bounds": list(content_bounds),
             "font_size": font.size,
             "bold": bold,
             "band_end": band_end,
@@ -722,5 +811,7 @@ def compose_extra_lines(
             "ocr": anchor.get("ocr_metadata", {}),
             "grew": grown.height > source.height,
             "output_size": list(grown.size),
+            "glyph_bottom": glyph_bottom,
+            "bottom_air": bottom_air,
         },
     )
