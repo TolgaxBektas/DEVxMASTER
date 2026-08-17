@@ -519,10 +519,19 @@ def compose_extra_lines(
     draw_probe = ImageDraw.Draw(source)
     font = None
     blocks = []
+    font_path = _font_path(bold)
+    if font_path is None:
+        return ExtraLineComposition(
+            source.copy(),
+            {
+                "status": "skipped",
+                "reason": "font_not_found",
+                "lines": line_values,
+                "discarded": discarded,
+            },
+        )
     for size in range(probe.size, 0, -1):
-        candidate = _fit_font("X", size, bold, available)
-        if candidate is None:
-            continue
+        candidate = ImageFont.truetype(font_path, size)
         candidate_blocks = _group_lines(
             channels, draw_probe, candidate, cap_height, available
         )

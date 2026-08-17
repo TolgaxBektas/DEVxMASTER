@@ -295,3 +295,45 @@ def test_short_postal_or_house_number_does_not_count_as_duplicate(monkeypatch):
 
     assert result.manifest["status"] == "composed"
     assert result.manifest.get("discarded", []) == []
+
+
+def test_font_size_matches_height_probe_when_width_is_available(monkeypatch):
+    image = Image.new("RGB", (600, 140), "white")
+    ImageDraw.Draw(image).rectangle((0, 40, 599, 139), fill=(20, 80, 140))
+    anchor = _anchor(left=80, right=520)
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: anchor)
+
+    result = compose_extra_lines(image, [("fax", "06441 9876")])
+
+    assert result.manifest["status"] == "composed"
+    probe = extra_lines._fit_font(
+        "X", result.manifest["cap_height"], result.manifest["bold"]
+    )
+    assert probe is not None
+    assert result.manifest["font_size"] == probe.size
+
+
+def test_long_value_uses_smaller_font_and_stays_within_margins(monkeypatch):
+    image = Image.new("RGB", (180, 120), "white")
+    ImageDraw.Draw(image).rectangle((0, 40, 179, 119), fill=(20, 80, 140))
+    anchor = _anchor(left=25, right=155)
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: anchor)
+
+    result = compose_extra_lines(
+        image,
+        [("website", "www.example.de/a-very-long-address-that-needs-fitting")],
+    )
+
+    assert result.manifest["status"] == "composed"
+    probe = extra_lines._fit_font(
+        "X", result.manifest["cap_height"], result.manifest["bold"]
+    )
+    assert probe is not None
+    assert result.manifest["font_size"] < probe.size
+    margin = max(round(image.width * 0.04), result.manifest["cap_height"])
+    assert all(
+        margin <= row["position"][0]
+        and row["position"][0] + row["width"] <= image.width - margin
+        for block in result.manifest["blocks"]
+        for row in block["rows"]
+    )
