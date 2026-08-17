@@ -7,6 +7,7 @@ import {
 } from "@xmaster-center/kernel";
 import type { CrmRepository } from "./repository.js";
 import { createCrmRouter } from "./router.js";
+import { hasIngestionLead, isCurrentForLead } from "./module.js";
 
 function setup() {
   const audit = new MemoryAuditRepository();
@@ -78,6 +79,18 @@ function setup() {
 }
 
 describe("CRM-Modulvertrag", () => {
+  it("erzeugt Leads nur für den aktuell bestätigten Dokumentzustand", () => {
+    expect(isCurrentForLead("current")).toBe(true);
+    expect(isCurrentForLead("outdated")).toBe(false);
+    expect(isCurrentForLead("unverified")).toBe(false);
+    expect(isCurrentForLead(undefined)).toBe(false);
+    expect(hasIngestionLead([
+      { notes: "Quelle Dokument 4, Fundstelle 9: Vorschau", tags: ["lead", "ingestion"] },
+    ], 9)).toBe(true);
+    expect(hasIngestionLead([
+      { notes: "Quelle Dokument 4, Fundstelle 9: Vorschau", tags: ["lead"] },
+    ], 9)).toBe(false);
+  });
   it("setzt Rechte durch und begrenzt den Tenant-Zugriff", async () => {
     const setupResult = setup();
     setupResult.context.permissions = new Set(["crm.customer.read"]);

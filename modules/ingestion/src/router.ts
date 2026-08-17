@@ -7,7 +7,7 @@ import {
   TRPCError,
 } from "@xmaster-center/kernel";
 import { ZodError, z } from "zod";
-import { IngestionSourceNotFoundError, type IngestionRepository } from "./repository.js";
+import { IngestionSourceNotFoundError, occurrenceFingerprint, type IngestionRepository } from "./repository.js";
 import type { PifReviewClient } from "./review-client.js";
 import type { ActualityStatus } from "./actuality.js";
 
@@ -236,6 +236,26 @@ export function createIngestionRouter(
             input.status as Exclude<ActualityStatus, "unverified">,
             ctx.auth.user.id,
           );
+          if (input.status === "current") {
+            const document = await repository.getDocument(ctx.auth.tenantId, input.id);
+            const occurrences = await repository.listOccurrences(ctx.auth.tenantId);
+            for (const occurrence of occurrences.filter((item) => item.documentId === input.id)) {
+              await publish({
+                name: "advertisement.detected",
+                tenantId: ctx.auth.tenantId,
+                aggregateType: "occurrence",
+                aggregateId: String(occurrence.id),
+                payload: {
+                  occurrenceId: occurrence.id,
+                  documentId: input.id,
+                  company: occurrence.company,
+                  preview: occurrence.preview,
+                  actualityStatus: "current",
+                },
+                idempotencyKey: `advertisement.detected:actuality:${ctx.auth.tenantId}:${document.sha256}:${occurrenceFingerprint(occurrence)}`,
+              });
+            }
+          }
           await appendAudit(effectiveAudit, {
             tenantId: ctx.auth.tenantId,
             action: "ingestion.document.actuality.decided",
