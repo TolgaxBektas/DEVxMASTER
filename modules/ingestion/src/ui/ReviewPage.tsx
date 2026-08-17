@@ -12,6 +12,7 @@ import {
 type Review = {
   id: number;
   reason: string;
+  data_source: DataSource;
   page: number | null;
   company: {
     name: string | null;
@@ -39,7 +40,14 @@ type ReviewQueue = {
   items: Review[];
 };
 
+type DataSource = "xdata_nb_high_quality" | "xdata_germany";
+
 type DecisionResult = { next_open_id: number | null };
+
+const SOURCE_LABELS: Record<DataSource, string> = {
+  xdata_nb_high_quality: "xDATA-nB High Quality",
+  xdata_germany: "xDATA Germany",
+};
 
 const FIELD_LABELS: Record<string, string> = {
   company: "Firma",
@@ -140,7 +148,18 @@ function VerificationDetails({
 }
 
 export function ReviewPage({ api }: ModulePageProps) {
-  const queue = useModuleQuery<ReviewQueue>(api, "modules.ingestion.review.list");
+  const [activeSource, setActiveSource] = useState<DataSource>("xdata_nb_high_quality");
+  const highQualityQueue = useModuleQuery<ReviewQueue>(
+    api,
+    "modules.ingestion.review.list",
+    { data_source: "xdata_nb_high_quality" },
+  );
+  const germanyQueue = useModuleQuery<ReviewQueue>(
+    api,
+    "modules.ingestion.review.list",
+    { data_source: "xdata_germany" },
+  );
+  const queue = activeSource === "xdata_nb_high_quality" ? highQualityQueue : germanyQueue;
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [note, setNote] = useState("");
   const [decisionError, setDecisionError] = useState<string | null>(null);
@@ -162,6 +181,12 @@ export function ReviewPage({ api }: ModulePageProps) {
       setSelectedId(queue.data.items[0]?.id ?? null);
     }
   }, [queue.data, selectedId]);
+
+  useEffect(() => {
+    setSelectedId(null);
+    setNote("");
+    setDecisionError(null);
+  }, [activeSource]);
 
   const decide = useCallback(async (decision: "approve" | "reject") => {
     if (selectedId === null || busy) return;
@@ -230,9 +255,26 @@ export function ReviewPage({ api }: ModulePageProps) {
         </div>
         <span className="form-message">A: Freigeben · R: Ablehnen · N: Weiter</span>
       </div>
+      <div className="review-source-tabs" role="tablist" aria-label="Datenquelle">
+        {(Object.keys(SOURCE_LABELS) as DataSource[]).map((source) => {
+          const sourceQueue = source === "xdata_nb_high_quality" ? highQualityQueue : germanyQueue;
+          return (
+            <button
+              className={activeSource === source ? "source-tab active" : "source-tab"}
+              key={source}
+              type="button"
+              role="tab"
+              aria-selected={activeSource === source}
+              onClick={() => setActiveSource(source)}
+            >
+              {SOURCE_LABELS[source]} ({sourceQueue.data?.items.length ?? 0})
+            </button>
+          );
+        })}
+      </div>
       <div className="review-layout">
         <Card>
-          <h2>Offene Fälle</h2>
+          <h2>{SOURCE_LABELS[activeSource]}</h2>
           <div className="stack">
             {queue.data.items.map((item) => (
               <button
@@ -250,6 +292,7 @@ export function ReviewPage({ api }: ModulePageProps) {
         <div className="stack">
           <Card>
             <h2>{review.company.name ?? "Unbekannte Firma"}</h2>
+            <span className="form-message">{SOURCE_LABELS[review.data_source]}</span>
             <p>{review.reason}</p>
             <div className="review-images">
               <figure>

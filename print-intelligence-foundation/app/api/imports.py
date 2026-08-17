@@ -9,8 +9,8 @@ from sqlalchemy import select
 from app.api.auth import require_auth
 from app.api.dependencies import session_dependency, storage_dependency
 from app.core.config import get_settings
-from app.models import AdOccurrence, Company, Document, Page, ReviewItem
-from app.services.dedupe import normalize_name
+from app.models import AdOccurrence, Document, Page, ReviewItem
+from app.services.companies import XDATA_NB_HIGH_QUALITY, resolve_company
 from app.services.ingest import UploadTooLargeError, read_limited
 from app.services.storage import sha256
 
@@ -131,20 +131,12 @@ def import_print_batch(
         )
     session.flush()
 
-    company = session.scalar(
-        select(Company).where(
-            Company.normalized_name == normalize_name(payload.company_name),
-            Company.contact_key == "",
-        )
+    company = resolve_company(
+        session,
+        payload.company_name,
+        {"company": payload.company_name, **payload.evidence},
+        XDATA_NB_HIGH_QUALITY,
     )
-    if company is None:
-        company = Company(
-            name=payload.company_name,
-            normalized_name=normalize_name(payload.company_name),
-            contact_key="",
-        )
-        session.add(company)
-        session.flush()
 
     prefix = f"print-batch/{identity}"
     occurrence.artwork_path = storage.put(original_bytes, f"{prefix}/original.png")

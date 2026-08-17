@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Any
 
 from botocore.exceptions import ClientError
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import or_, select
@@ -12,6 +12,7 @@ from app.api.auth import require_compat_auth
 from app.api.dependencies import session_dependency, storage_dependency
 from app.api.reviews import apply_review_decision
 from app.models import AdOccurrence, Company, Document, Page, ReviewItem
+from app.services.companies import XDATA_GERMANY, XDATA_NB_HIGH_QUALITY
 
 
 router = APIRouter(prefix="/api/v1/reviews", tags=["compatibility-review"])
@@ -20,6 +21,21 @@ router = APIRouter(prefix="/api/v1/reviews", tags=["compatibility-review"])
 class ReviewDecision(BaseModel):
     decision: str
     note: str | None = None
+
+
+def _data_source(
+    occurrence: AdOccurrence | None,
+    document: Document | None,
+    company: Company | None,
+) -> str:
+    if company and company.data_source:
+        return company.data_source
+    if document and (
+        (document.filename or "").startswith("print-batch-")
+        or (document.content_sha256 or "").startswith("print-batch-")
+    ):
+        return XDATA_NB_HIGH_QUALITY
+    return XDATA_GERMANY
 
 
 def _item_query():
@@ -180,6 +196,7 @@ def _payload(item, occurrence, page, document, company, storage) -> dict[str, An
         "reason": item.reason,
         "status": item.status,
         "reviewed_at": item.reviewed_at.isoformat() if item.reviewed_at else None,
+        "data_source": _data_source(occurrence, document, company),
         "document_id": document.id if document else None,
         "ad_id": occurrence.id if occurrence else None,
         "page": page.page_number if page else None,
@@ -232,13 +249,21 @@ def _row(session, item_id: int):
 def open_reviews(
     session=Depends(session_dependency),
     storage=Depends(storage_dependency),
+    data_source: str | None = Query(None),
 ):
+    if data_source not in {None, XDATA_NB_HIGH_QUALITY, XDATA_GERMANY}:
+        raise HTTPException(422, "invalid data source")
     rows = session.execute(
         _item_query()
         .where(ReviewItem.status == "pending")
         .order_by(ReviewItem.id)
     ).all()
-    return [_payload(*row, storage) for row in rows]
+    return [
+        _payload(*row, storage)
+        for row in rows
+        if data_source is None
+        or _data_source(row[1], row[3], row[4]) == data_source
+    ]
 
 
 @router.get("/{item_id}", dependencies=[Depends(require_compat_auth)])
@@ -288,15 +313,24 @@ def decide_review(
     payload: ReviewDecision,
     session=Depends(session_dependency),
 ):
+    if payload.decision not in {"approve", "reject"}:
+        raise HTTPException(400, "decision must be approve or reject")
+    current_row = _row(session, item_id)
+    current_source = _data_source(current_row[1], current_row[3], current_row[4])
     item = apply_review_decision(session, item_id, payload.decision, payload.note)
     session.commit()
-    next_item = session.scalar(
-        select(ReviewItem.id)
-        .where(
-            ReviewItem.status == "pending",
-            ReviewItem.id != item.id,
-        )
+    pending_rows = session.execute(
+        _item_query()
+        .where(ReviewItem.status == "pending", ReviewItem.id != item.id)
         .order_by(ReviewItem.id)
+    ).all()
+    next_item = next(
+        (
+            row[0].id
+            for row in pending_rows
+            if _data_source(row[1], row[3], row[4]) == current_source
+        ),
+        None,
     )
     return {
         "id": item.id,

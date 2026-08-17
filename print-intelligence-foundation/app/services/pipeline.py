@@ -10,11 +10,11 @@ from PIL import Image
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from app.models import AdOccurrence, Company, Document, Page, ReviewItem
+from app.models import AdOccurrence, Document, Page, ReviewItem
 from app.services.bbox import Box, deduplicate_boxes, iou, normalize_bbox
 from app.services.classify import classify_page
 from app.services.crop import crop_ad, restore_artwork
-from app.services.dedupe import contact_key, normalize_name
+from app.services.companies import XDATA_GERMANY, resolve_company
 from app.services.extraction import extract_contact_fields
 from app.services.ingest import content_lock, validate_pdf
 from app.services.jobs import get_or_create, retry, run_stage
@@ -1116,14 +1116,6 @@ class Pipeline:
             review.reason = f"{review.reason}; {reason}"
 
     def _assign_company(self, occurrence, name, fields):
-        normalized, key = normalize_name(name), contact_key(fields)
-        company = self.session.scalar(
-            select(Company).where(
-                Company.normalized_name == normalized, Company.contact_key == key
-            )
+        occurrence.company = resolve_company(
+            self.session, name, fields, XDATA_GERMANY
         )
-        if company is None:
-            company = Company(name=name, normalized_name=normalized, contact_key=key)
-            self.session.add(company)
-            self.session.flush()
-        occurrence.company = company

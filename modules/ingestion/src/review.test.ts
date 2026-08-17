@@ -8,6 +8,7 @@ import { createPifReviewClient } from "./review-client.js";
 const review = {
   id: 7,
   reason: "Generativ erzeugt",
+  data_source: "xdata_nb_high_quality",
   status: "pending",
   reviewed_at: null,
   document_id: 2,
@@ -66,6 +67,12 @@ describe("Ingestion-Prüfung", () => {
     await expect(caller.review.decide({ id: 7, decision: "approve" })).rejects.toMatchObject({
       code: "FORBIDDEN",
     });
+  });
+
+  it("reicht den Quellfilter an die Data Factory weiter", async () => {
+    const { caller, client } = setup();
+    await caller.review.list({ data_source: "xdata_germany" });
+    expect(client.listOpen).toHaveBeenCalledWith("xdata_germany");
   });
 
   it("grenzt fremde Mandanten ab", async () => {

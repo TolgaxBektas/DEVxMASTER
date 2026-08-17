@@ -53,6 +53,12 @@ class Company(Base):
     name: Mapped[str] = mapped_column(String(500))
     normalized_name: Mapped[str] = mapped_column(String(500), index=True)
     contact_key: Mapped[str] = mapped_column(String(500), default="")
+    data_source: Mapped[str] = mapped_column(String(40), default="xdata_germany")
+    canonical_fields_json: Mapped[str] = mapped_column(Text, default="{}")
+    secondary_findings_json: Mapped[str] = mapped_column(Text, default="[]")
+    canonical_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class AdOccurrence(Base):

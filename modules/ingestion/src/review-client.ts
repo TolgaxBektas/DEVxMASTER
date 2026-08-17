@@ -1,6 +1,7 @@
 export type PifReview = {
   id: number;
   reason: string;
+  data_source: "xdata_nb_high_quality" | "xdata_germany";
   status: string;
   reviewed_at: string | null;
   document_id: number | null;
@@ -39,7 +40,7 @@ export type PifReviewDecision = {
 };
 
 export type PifReviewClient = {
-  listOpen(): Promise<PifReview[]>;
+  listOpen(dataSource?: PifReview["data_source"]): Promise<PifReview[]>;
   get(id: number): Promise<PifReview>;
   decide(id: number, decision: "approve" | "reject", note?: string): Promise<PifReviewDecision>;
   image(id: number, kind: "original" | "restored"): Promise<Uint8Array>;
@@ -69,8 +70,9 @@ export function createPifReviewClient(input: {
     return response;
   };
   return {
-    async listOpen() {
-      const response = await request("/api/v1/reviews/open");
+    async listOpen(dataSource) {
+      const query = dataSource ? `?data_source=${encodeURIComponent(dataSource)}` : "";
+      const response = await request(`/api/v1/reviews/open${query}`);
       return (await response.json()) as PifReview[];
     },
     async get(id) {

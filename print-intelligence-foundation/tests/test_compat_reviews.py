@@ -87,6 +87,7 @@ def test_open_review_list_contains_metadata_and_image_availability(tmp_path, mon
         assert item["page"] == 4
         assert item["company"]["name"] == "Review Test GmbH"
         assert item["company"]["verification"] == {"verified": True}
+        assert item["data_source"] == "xdata_nb_high_quality"
         assert item["restoration"]["review_status"] == "pending"
         assert item["restoration"]["geometry_quality_status"] == (
             "external_generated_not_geometrically_measured"
@@ -95,6 +96,29 @@ def test_open_review_list_contains_metadata_and_image_availability(tmp_path, mon
             "original_available": True,
             "restored_available": True,
         }
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_review_source_filter_separates_open_cases(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    try:
+        assert _import(client, _metadata("Filtered Review GmbH", 10)).status_code == 200
+        high_quality = client.get(
+            "/api/v1/reviews/open?data_source=xdata_nb_high_quality",
+            headers={"x-service-token": "review-token"},
+        )
+        germany = client.get(
+            "/api/v1/reviews/open?data_source=xdata_germany",
+            headers={"x-service-token": "review-token"},
+        )
+        invalid = client.get(
+            "/api/v1/reviews/open?data_source=other",
+            headers={"x-service-token": "review-token"},
+        )
+        assert len(high_quality.json()) == 1
+        assert germany.json() == []
+        assert invalid.status_code == 422
     finally:
         app.dependency_overrides.clear()
 
