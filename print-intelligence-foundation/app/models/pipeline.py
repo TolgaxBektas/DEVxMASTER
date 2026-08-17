@@ -53,6 +53,12 @@ class Company(Base):
     name: Mapped[str] = mapped_column(String(500))
     normalized_name: Mapped[str] = mapped_column(String(500), index=True)
     contact_key: Mapped[str] = mapped_column(String(500), default="")
+    data_source: Mapped[str] = mapped_column(String(40), default="xdata_germany")
+    canonical_fields_json: Mapped[str] = mapped_column(Text, default="{}")
+    secondary_findings_json: Mapped[str] = mapped_column(Text, default="[]")
+    canonical_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class AdOccurrence(Base):
@@ -72,6 +78,7 @@ class AdOccurrence(Base):
     company_id: Mapped[int | None] = mapped_column(ForeignKey("companies.id"))
     fields_json: Mapped[str] = mapped_column(Text, default="{}")
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    data_source: Mapped[str] = mapped_column(String(40), default="xdata_germany")
     page: Mapped[Page] = relationship(back_populates="ads")
     company: Mapped[Company | None] = relationship()
 

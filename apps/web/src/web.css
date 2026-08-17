@@ -77,6 +77,23 @@
   gap: 22px;
   align-items: start;
 }
+.review-source-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.source-tab {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 9px 12px;
+  background: #102126;
+  color: var(--muted);
+  cursor: pointer;
+}
+.source-tab.active {
+  border-color: var(--gold);
+  color: var(--gold);
+}
 .review-images {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
