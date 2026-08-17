@@ -3,6 +3,7 @@ import types
 
 import app.services.content_anchors as anchors_module
 from app.services.content_anchors import (
+    _decode_qr,
     _grid_neighbors,
     _phone,
     compare_content_anchors,
@@ -32,7 +33,7 @@ def test_content_comparison_reports_missing_and_new_contacts():
             "qr_detection": "available",
         },
     )
-    assert result["status"] == "abweichung"
+    assert result["status"] == "unsicher"
     assert any(
         finding["category"] == "E-Mail-Adresse"
         and finding["value"] == "alt@example.de"
@@ -50,6 +51,24 @@ def test_content_comparison_reports_missing_and_new_contacts():
         finding["category"] == "QR-Code-Anwesenheit"
         for finding in result["findings"]
     )
+
+
+def test_qr_payload_removal_is_intentional():
+    base = {
+        "text_lines": ["Firma mit ausreichend lesbarem Text"],
+        "phones": [],
+        "emails": [],
+        "domains": [],
+        "qr_detection": "available",
+        "qr_present": True,
+    }
+    result = compare_content_anchors(
+        {**base, "qr_codes": ["https://example.de"]},
+        {**base, "qr_codes": [], "qr_present": False},
+    )
+    assert result["status"] == "passed"
+    assert result["qr_removed"] is True
+    assert result["findings"] == []
 
 
 def test_qr_removal_semantics():
@@ -141,6 +160,34 @@ def test_anchor_extraction_keeps_text_and_is_safe_without_qr(monkeypatch):
         "www.example.de",
     ]
     assert anchors["phones"] == ["040123456"]
+
+
+def test_qr_decoder_region_accounts_for_tile_offset(monkeypatch):
+    calls = []
+
+    class Rect:
+        left = 100
+        top = 50
+        width = 200
+        height = 100
+
+    class Item:
+        data = b"https://example.de"
+        rect = Rect()
+
+    def decode(image):
+        calls.append(image.size)
+        return [Item()] if len(calls) == 7 else []
+
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "pyzbar.pyzbar",
+        types.SimpleNamespace(decode=decode),
+    )
+    values, finding, region = _decode_qr(Image.new("RGB", (2000, 2000), "white"))
+    assert values == ["https://example.de"]
+    assert finding is None
+    assert region == {"x": 660.0, "y": 30.0, "width": 120.0, "height": 60.0}
 
 
 def test_phone_ocr_difference_is_uncertain_not_passed():

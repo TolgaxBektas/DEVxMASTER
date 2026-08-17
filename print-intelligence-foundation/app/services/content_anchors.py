@@ -203,11 +203,13 @@ def _ocr_is_uncertain(
     )
 
 
-def _decode_qr(image: Image.Image) -> tuple[list[str], str | None]:
+def _decode_qr(
+    image: Image.Image,
+) -> tuple[list[str], str | None, dict[str, float] | None]:
     try:
         from pyzbar.pyzbar import decode
     except ImportError:
-        return [], "QR-Code-Prüfung nicht verfügbar (Decoder nicht installiert)."
+        return [], "QR-Code-Prüfung nicht verfügbar (Decoder nicht installiert).", None
     try:
         pixel_budget = 4_000_000
         scale = max(
@@ -236,12 +238,12 @@ def _decode_qr(image: Image.Image) -> tuple[list[str], str | None]:
             ]
 
         def variants():
-            yield image
-            yield enlarged
+            yield image, 1.0, (0, 0)
+            yield enlarged, scale, (0, 0)
             gray = ImageOps.autocontrast(enlarged.convert("L"))
-            yield gray
-            yield ImageEnhance.Contrast(gray).enhance(2.0)
-            yield gray.filter(ImageFilter.SHARPEN)
+            yield gray, scale, (0, 0)
+            yield ImageEnhance.Contrast(gray).enhance(2.0), scale, (0, 0)
+            yield gray.filter(ImageFilter.SHARPEN), scale, (0, 0)
             for left, top in tiles:
                 tile = image.crop((
                     left,
@@ -262,17 +264,24 @@ def _decode_qr(image: Image.Image) -> tuple[list[str], str | None]:
                         max(1, round(tile.height * tile_scale)),
                     ),
                     Image.Resampling.LANCZOS,
-                )
+                ), tile_scale, (left, top)
 
         values = []
-        for variant in variants():
-            values.extend(
-                item.data.decode("utf-8", errors="replace").strip()
-                for item in decode(variant)
-                if item.data
-            )
+        decoder_region = None
+        for variant, variant_scale, (offset_x, offset_y) in variants():
+            for item in decode(variant):
+                if not item.data:
+                    continue
+                values.append(item.data.decode("utf-8", errors="replace").strip())
+                if decoder_region is None and item.rect:
+                    decoder_region = {
+                        "x": float(offset_x + item.rect.left / variant_scale),
+                        "y": float(offset_y + item.rect.top / variant_scale),
+                        "width": float(item.rect.width / variant_scale),
+                        "height": float(item.rect.height / variant_scale),
+                    }
     except (OSError, ValueError):
-        return [], "QR-Code konnte nicht gelesen werden."
+        return [], "QR-Code konnte nicht gelesen werden.", None
     values = sorted(set(value for value in values if value))
     values = [
         value for value in values
@@ -282,7 +291,7 @@ def _decode_qr(image: Image.Image) -> tuple[list[str], str | None]:
             or "." in value
         )
     ]
-    return values, None
+    return values, None, decoder_region
 
 
 def _qr_presence(
@@ -666,8 +675,8 @@ def extract_content_anchors(
         for value in DOMAIN_RE.findall(ocr_text or "")
         if not value.replace(".", "").isdigit()
     })
-    qr_codes, qr_finding = _decode_qr(image)
-    qr_present, qr_score, qr_region = _qr_presence(image)
+    qr_codes, qr_finding, decoder_region = _decode_qr(image)
+    qr_present, qr_score, _ = _qr_presence(image)
     return {
         "text_lines": lines,
         "company_name": _normalize(company_name) if company_name else None,
@@ -677,7 +686,7 @@ def extract_content_anchors(
         "qr_codes": qr_codes,
         "qr_present": qr_present,
         "qr_presence_score": round(qr_score, 4),
-        "qr_region": qr_region,
+        "qr_region": decoder_region,
         "qr_detection": "available" if qr_finding is None else "unavailable",
         "ocr_token_count": len(_words(lines)),
         "ocr_confidence": ocr_confidence,
@@ -728,7 +737,6 @@ def compare_content_anchors(
         ("phones", "Telefonnummer"),
         ("emails", "E-Mail-Adresse"),
         ("domains", "Web-Adresse"),
-        ("qr_codes", "QR-Code-Inhalt"),
     ):
         before = set(original.get(category) or [])
         after = set(restored.get(category) or [])
