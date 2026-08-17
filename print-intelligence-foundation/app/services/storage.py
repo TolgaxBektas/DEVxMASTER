@@ -2,12 +2,14 @@ import hashlib
 from pathlib import Path
 from typing import Protocol
 import boto3
+from botocore.exceptions import ClientError
 
 
 class Storage(Protocol):
     def put(self, data: bytes, name: str): ...
     def put_file(self, source: str | Path, name: str): ...
     def get(self, name: str) -> bytes: ...
+    def exists(self, name: str) -> bool: ...
     def health(self) -> bool: ...
 
 
@@ -27,6 +29,9 @@ class LocalStorage:
 
     def get(self, name: str) -> bytes:
         return (self.root / name).read_bytes()
+
+    def exists(self, name: str) -> bool:
+        return (self.root / name).is_file()
 
     def health(self) -> bool:
         return self.root.exists()
@@ -65,6 +70,16 @@ class S3Storage:
     def get(self, name: str) -> bytes:
         key = name.removeprefix(f"s3://{self.bucket}/")
         return self.client.get_object(Bucket=self.bucket, Key=key)["Body"].read()
+
+    def exists(self, name: str) -> bool:
+        key = name.removeprefix(f"s3://{self.bucket}/")
+        try:
+            self.client.head_object(Bucket=self.bucket, Key=key)
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}:
+                return False
+            raise
+        return True
 
     def health(self) -> bool:
         try:

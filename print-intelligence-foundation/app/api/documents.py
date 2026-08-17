@@ -146,6 +146,8 @@ def artwork(
     if not occurrence or not occurrence.artwork_path:
         raise HTTPException(404, "restored artwork is not available")
     content = storage.get(occurrence.artwork_path)
+    if not content:
+        raise HTTPException(404, "artwork is not available")
     return Response(content=content, media_type="image/png")
 
 
@@ -163,7 +165,10 @@ def restoration(
     )
     if not occurrence or not occurrence.restoration_path:
         raise HTTPException(404, "restoration proposal is not available")
-    return Response(content=storage.get(occurrence.restoration_path), media_type="image/png")
+    content = storage.get(occurrence.restoration_path)
+    if not content:
+        raise HTTPException(404, "restoration proposal is not available")
+    return Response(content=content, media_type="image/png")
 
 
 @router.get("/{document_id}/ads/{ad_id}/restoration/manifest")

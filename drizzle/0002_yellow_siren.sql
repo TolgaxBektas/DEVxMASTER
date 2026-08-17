@@ -1,6 +1,7 @@
 ALTER TABLE `billing_issuers` ADD `number_year` int;--> statement-breakpoint
 ALTER TABLE `billing_issuers` ADD `payment_term_days` int DEFAULT 14 NOT NULL;--> statement-breakpoint
 ALTER TABLE `billing_dunning_log` ADD CONSTRAINT `billing_dunning_invoice_level_uq` UNIQUE(`tenant_id`,`invoice_id`,`level`);
+--> statement-breakpoint
 UPDATE `billing_issuers` AS i
 LEFT JOIN (
   SELECT issuer_id,

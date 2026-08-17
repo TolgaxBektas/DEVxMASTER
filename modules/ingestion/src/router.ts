@@ -1,6 +1,13 @@
-import { permissionProcedure, protectedProcedure, router } from "@xmaster-center/kernel";
+import {
+  appendAudit,
+  permissionProcedure,
+  protectedProcedure,
+  router,
+  type AuditRepository,
+} from "@xmaster-center/kernel";
 import { z } from "zod";
 import type { IngestionRepository } from "./repository.js";
+import type { PifReviewClient } from "./review-client.js";
 
 export function createIngestionRouter(
   repository: IngestionRepository,
@@ -16,6 +23,9 @@ export function createIngestionRouter(
   discover?: (input: { seedPages: string[]; searchTerms: string[]; maxResults: number }) => Promise<Array<{
     url: string; score: number; metadata: Record<string, unknown>;
   }>>,
+  reviewClient?: PifReviewClient,
+  reviewTenantId?: string,
+  audit?: AuditRepository,
 ) {
   return router({
     sources: router({
@@ -90,6 +100,58 @@ export function createIngestionRouter(
       list: permissionProcedure("ingestion.occurrence.read").query(({ ctx }) =>
         repository.listOccurrences(ctx.auth.tenantId),
       ),
+    }),
+    review: router({
+      list: permissionProcedure("ingestion.review.read").query(async ({ ctx }) => {
+        if (!reviewClient || !reviewTenantId) {
+          return {
+            enabled: false,
+            message: "Die Prüfung ist für diesen Dienst nicht konfiguriert.",
+            items: [],
+          };
+        }
+        if (ctx.auth.tenantId !== reviewTenantId) {
+          return {
+            enabled: true,
+            message: "Für diesen Mandanten sind keine Data-Factory-Prüffälle konfiguriert.",
+            items: [],
+          };
+        }
+        return { enabled: true, items: await reviewClient.listOpen() };
+      }),
+      get: permissionProcedure("ingestion.review.read")
+        .input(z.object({ id: z.number().int().positive() }))
+        .query(async ({ ctx, input }) => {
+          if (!reviewClient || !reviewTenantId) throw new Error("Die Prüfung ist nicht konfiguriert");
+          if (ctx.auth.tenantId !== reviewTenantId) throw new Error("Prüffall gehört zu einem anderen Mandanten");
+          return reviewClient.get(input.id);
+        }),
+      decide: permissionProcedure("ingestion.review.decide")
+        .input(z.object({
+          id: z.number().int().positive(),
+          decision: z.enum(["approve", "reject"]),
+          note: z.string().max(5000).optional(),
+        }))
+        .mutation(async ({ ctx, input }) => {
+          if (!reviewClient || !reviewTenantId) throw new Error("Die Prüfung ist nicht konfiguriert");
+          if (ctx.auth.tenantId !== reviewTenantId) throw new Error("Prüffall gehört zu einem anderen Mandanten");
+          const result = await reviewClient.decide(input.id, input.decision, input.note);
+          if (audit) {
+            await appendAudit(audit, {
+              tenantId: ctx.auth.tenantId,
+              action: "ingestion.review.decided",
+              entityType: "ingestion_review",
+              entityId: input.id,
+              actorId: ctx.auth.user.id,
+              actorName: ctx.auth.user.displayName,
+              detailsJson: JSON.stringify({
+                decision: input.decision,
+                note: input.note ?? null,
+              }),
+            });
+          }
+          return result;
+        }),
     }),
   });
 }
