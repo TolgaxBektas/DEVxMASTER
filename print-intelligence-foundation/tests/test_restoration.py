@@ -29,6 +29,7 @@ from app.services.vision.image_edit import (
 )
 from app.services.storage import LocalStorage
 from app.services.vision.recorded import RecordedVisionProvider
+from app.services.text_layer import watermark_markers_in_boxes
 from tests.test_order_forms import _pdf
 
 
@@ -49,7 +50,7 @@ class _LowConfidenceOrderFormProvider:
         return {"company": "Synthetic Bau GmbH"}
 
 
-def _run(tmp_path, enabled):
+def _run(tmp_path, enabled, watermark_markers=None):
     engine = create_engine(f"sqlite:///{tmp_path / 'restoration.db'}")
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
@@ -61,6 +62,7 @@ def _run(tmp_path, enabled):
             render_dpi=120,
             local_work_dir=tmp_path / "work",
             restoration_enabled=enabled,
+            watermark_markers=watermark_markers,
         )
         document = pipeline.ingest(FIXTURE.read_bytes())
         ads = session.scalars(
@@ -78,6 +80,234 @@ def test_restoration_is_off_by_default_and_preserves_existing_artifacts(tmp_path
     assert all(json.loads(ad.restoration_manifest_json) == {} for ad in ads)
     assert all(ad.artwork_path for ad in ads)
     session.close()
+
+
+def test_empty_watermark_marker_list_completes_restoration_path(tmp_path):
+    session, _, ads, _ = _run(tmp_path, True, watermark_markers=[])
+    manifests = [json.loads(ad.restoration_manifest_json) for ad in ads]
+    applied = [manifest for manifest in manifests if manifest["edit_status"] == "applied"]
+    assert applied
+    comparisons = [manifest["content_comparison"] for manifest in applied]
+    assert all(comparison["watermark_removed"] is False for comparison in comparisons)
+    assert all(
+        comparison["watermark_markers_original"] == []
+        for comparison in comparisons
+    )
+    assert all(
+        comparison["watermark_markers_restored"] == []
+        for comparison in comparisons
+    )
+    session.close()
+
+
+def test_watermark_marker_evidence_only_matches_overlapping_text_object(tmp_path):
+    pdf = tmp_path / "watermark.pdf"
+    pdf.write_bytes(
+        _pdf([["Marker inixmedia", "Unmarked advertisement"]])
+    )
+    evidence = watermark_markers_in_boxes(
+        pdf,
+        1,
+        [Box(0, 0, 612, 35), Box(0, 35, 612, 60)],
+        72,
+        ["inixmedia"],
+    )
+    assert len(evidence[0]) == 1
+    assert evidence[0][0]["marker"] == "inixmedia"
+    assert evidence[0][0]["source"] == "pdf_text_layer"
+    assert evidence[0][0]["bounds_pdf"]
+    assert evidence[1] == []
+
+
+def test_watermarked_ad_skips_pixel_stage_and_requires_generating_review(
+    tmp_path, monkeypatch
+):
+    engine = create_engine(f"sqlite:///{tmp_path / 'watermark.db'}")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with factory() as session:
+        pipeline = Pipeline(
+            session,
+            RecordedVisionProvider("tests/fixtures/qwen"),
+            LocalStorage(tmp_path / "storage"),
+            restoration_enabled=True,
+            image_edit_provider=object(),
+            local_work_dir=tmp_path / "work",
+        )
+        occurrence = AdOccurrence(
+            page_id=1,
+            occurrence_key="1,1,10,10",
+            bbox="1,1,10,10",
+            fields_json=json.dumps({"fields": {}}),
+        )
+        session.add(occurrence)
+        session.flush()
+        source = Image.new("RGB", (40, 40), "white")
+        artwork = tmp_path / "artwork.png"
+        source.save(artwork)
+        generative_called = []
+
+        def fail_pixel(*_args, **_kwargs):
+            raise AssertionError("pixel stage must be skipped")
+
+        def fake_generative(result, *_args):
+            generative_called.append(True)
+            result.manifest["generative"] = {"status": "passed"}
+            result.manifest["edit_status"] = "applied"
+            result.manifest["review_status"] = "pending"
+            return source.copy(), "generative proposal requires review"
+
+        monkeypatch.setattr("app.services.pipeline.propose_level_one", fail_pixel)
+        monkeypatch.setattr(
+            pipeline, "_try_generative_restoration", fake_generative
+        )
+        monkeypatch.setattr(
+            "app.services.pipeline.extract_content_anchors",
+            lambda *_args, **_kwargs: {
+                "text_lines": [],
+                "phones": [],
+                "emails": [],
+                "domains": [],
+                "qr_removed": False,
+            },
+        )
+        monkeypatch.setattr(
+            "app.services.pipeline.compare_content_anchors",
+            lambda *_args, **_kwargs: {
+                "findings": [],
+                "severity": "passed",
+                "status": "passed",
+                "qr_removed": False,
+                "watermark_removed": False,
+                "watermark_markers_original": [],
+                "watermark_markers_restored": [],
+            },
+        )
+        monkeypatch.setattr(
+            "app.services.pipeline.compare_visual_motifs",
+            lambda *_args, **_kwargs: {"findings": []},
+        )
+        monkeypatch.setattr(
+            "app.services.pipeline.finding_messages", lambda *_args: []
+        )
+        evidence = [{
+            "marker": "inixmedia",
+            "text": "© inixmedia",
+            "object_index": 3,
+            "bounds_pdf": [10, 20, 30, 40],
+            "bounds": [10, 20, 30, 40],
+            "source": "pdf_text_layer",
+        }]
+        pipeline._maybe_write_restoration(
+            occurrence,
+            tmp_path / "source.pdf",
+            1,
+            Box(0, 0, 40, 40),
+            (40, 40),
+            artwork,
+            Box(0, 0, 40, 40),
+            "digest",
+            None,
+            evidence,
+        )
+        manifest = json.loads(occurrence.restoration_manifest_json)
+        assert generative_called
+        assert manifest["watermark"]["markers"] == evidence
+        assert manifest["deterministic_restoration"]["status"] == "refused"
+        assert manifest["review_status"] == "pending"
+        assert occurrence.restoration_path is not None
+        assert session.scalar(select(ReviewItem).where(ReviewItem.ad_id == occurrence.id))
+
+
+def test_watermarked_ad_without_generative_stage_is_refused_for_review(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'watermark-no-provider.db'}")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with factory() as session:
+        pipeline = Pipeline(
+            session,
+            RecordedVisionProvider("tests/fixtures/qwen"),
+            LocalStorage(tmp_path / "storage"),
+            restoration_enabled=True,
+            local_work_dir=tmp_path / "work",
+        )
+        occurrence = AdOccurrence(
+            page_id=1,
+            occurrence_key="1,1,10,10",
+            bbox="1,1,10,10",
+            fields_json=json.dumps({"fields": {}}),
+        )
+        session.add(occurrence)
+        session.flush()
+        artwork = tmp_path / "artwork.png"
+        Image.new("RGB", (40, 40), "white").save(artwork)
+        evidence = [{
+            "marker": "inixmedia",
+            "text": "© inixmedia",
+            "object_index": 3,
+            "bounds_pdf": [10, 20, 30, 40],
+            "bounds": [10, 20, 30, 40],
+            "source": "pdf_text_layer",
+        }]
+        pipeline._maybe_write_restoration(
+            occurrence,
+            tmp_path / "source.pdf",
+            1,
+            Box(0, 0, 40, 40),
+            (40, 40),
+            artwork,
+            Box(0, 0, 40, 40),
+            "digest",
+            None,
+            evidence,
+        )
+        manifest = json.loads(occurrence.restoration_manifest_json)
+        assert occurrence.restoration_path is None
+        assert manifest["edit_status"] == "refused"
+        assert manifest["watermark"]["detected"] is True
+        assert "generative restoration is not configured" in (
+            session.scalar(
+                select(ReviewItem).where(ReviewItem.ad_id == occurrence.id)
+            ).reason
+        )
+
+
+def test_unrelated_refusal_keeps_watermark_as_evidence_not_cause(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'watermark-refusal.db'}")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with factory() as session:
+        pipeline = Pipeline(
+            session,
+            RecordedVisionProvider("tests/fixtures/qwen"),
+            LocalStorage(tmp_path / "storage"),
+            restoration_enabled=True,
+            local_work_dir=tmp_path / "work",
+        )
+        occurrence = AdOccurrence(
+            page_id=1,
+            occurrence_key="1,1,10,10",
+            bbox="1,1,10,10",
+        )
+        session.add(occurrence)
+        session.flush()
+        evidence = [{
+            "marker": "inixmedia",
+            "text": "© inixmedia",
+            "object_index": 3,
+            "bounds_pdf": [10, 20, 30, 40],
+            "bounds": [10, 20, 30, 40],
+            "source": "pdf_text_layer",
+        }]
+        pipeline._refuse_restoration(
+            occurrence, "restoration refused: artwork is unavailable", evidence
+        )
+        manifest = json.loads(occurrence.restoration_manifest_json)
+        assert manifest["cascade_level"] == 1
+        assert manifest["cascade_justification"] == (
+            "restoration refused: artwork is unavailable"
+        )
+        assert manifest["watermark"]["markers"] == evidence
 
 
 def test_fixture_restoration_accepts_clean_lines_and_refuses_uncertain_ads(tmp_path):
