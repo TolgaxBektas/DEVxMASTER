@@ -30,7 +30,20 @@ def upgrade():
         "companies",
         sa.Column("canonical_updated_at", sa.DateTime(timezone=True), nullable=True),
     )
+    op.add_column(
+        "ad_occurrences",
+        sa.Column("data_source", sa.String(length=40), nullable=False, server_default="xdata_germany"),
+    )
     connection = op.get_bind()
+    connection.execute(
+        sa.text(
+            "UPDATE ad_occurrences SET data_source = CASE WHEN EXISTS ("
+            "SELECT 1 FROM pages p JOIN documents d ON d.id = p.document_id "
+            "WHERE p.id = ad_occurrences.page_id AND "
+            "(d.filename LIKE 'print-batch-%' OR d.content_sha256 LIKE 'print-batch-%')"
+            ") THEN 'xdata_nb_high_quality' ELSE 'xdata_germany' END"
+        )
+    )
     rows = connection.execute(
         sa.text(
             "SELECT c.id, c.name, c.contact_key, "
@@ -82,6 +95,7 @@ def upgrade():
 
 
 def downgrade():
+    op.drop_column("ad_occurrences", "data_source")
     op.drop_column("companies", "canonical_updated_at")
     op.drop_column("companies", "secondary_findings_json")
     op.drop_column("companies", "canonical_fields_json")

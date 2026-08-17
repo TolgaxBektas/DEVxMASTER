@@ -10,7 +10,7 @@ from app.api.dependencies import session_dependency, storage_dependency
 from app.core.config import Settings
 from app.db.base import Base
 from app.main import app
-from app.models import AdOccurrence, Page, ReviewItem
+from app.models import AdOccurrence, Company, Page, ReviewItem
 from app.services.storage import LocalStorage
 
 
@@ -119,6 +119,32 @@ def test_review_source_filter_separates_open_cases(tmp_path, monkeypatch):
         assert len(high_quality.json()) == 1
         assert germany.json() == []
         assert invalid.status_code == 422
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_case_source_stays_germany_when_company_is_high_quality(tmp_path, monkeypatch):
+    client, factory = _client(tmp_path, monkeypatch)
+    try:
+        imported = _import(client, _metadata("Gemeinsame Firma GmbH", 10))
+        with factory() as session:
+            occurrence = session.scalar(
+                select(AdOccurrence).where(AdOccurrence.id == imported.json()["ad_id"])
+            )
+            company = session.get(Company, occurrence.company_id)
+            occurrence.data_source = "xdata_germany"
+            company.data_source = "xdata_nb_high_quality"
+            session.commit()
+        items = client.get(
+            "/api/v1/reviews/open?data_source=xdata_germany",
+            headers={"x-service-token": "review-token"},
+        ).json()
+        assert len(items) == 1
+        assert items[0]["data_source"] == "xdata_germany"
+        assert client.get(
+            "/api/v1/reviews/open?data_source=xdata_nb_high_quality",
+            headers={"x-service-token": "review-token"},
+        ).json() == []
     finally:
         app.dependency_overrides.clear()
 

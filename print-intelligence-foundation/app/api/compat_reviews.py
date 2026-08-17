@@ -28,14 +28,35 @@ def _data_source(
     document: Document | None,
     company: Company | None,
 ) -> str:
-    if company and company.data_source:
-        return company.data_source
+    if occurrence and occurrence.data_source:
+        return occurrence.data_source
     if document and (
         (document.filename or "").startswith("print-batch-")
         or (document.content_sha256 or "").startswith("print-batch-")
     ):
         return XDATA_NB_HIGH_QUALITY
     return XDATA_GERMANY
+
+
+def _source_clause(data_source: str):
+    fallback_print_batch = (
+        (Document.filename.like("print-batch-%"))
+        | (Document.content_sha256.like("print-batch-%"))
+    )
+    fallback_source = (
+        XDATA_NB_HIGH_QUALITY
+        if data_source == XDATA_NB_HIGH_QUALITY
+        else XDATA_GERMANY
+    )
+    if fallback_source == XDATA_NB_HIGH_QUALITY:
+        return or_(
+            AdOccurrence.data_source == data_source,
+            (AdOccurrence.id.is_(None) & fallback_print_batch),
+        )
+    return or_(
+        AdOccurrence.data_source == data_source,
+        (AdOccurrence.id.is_(None) & ~fallback_print_batch),
+    )
 
 
 def _item_query():
@@ -253,17 +274,15 @@ def open_reviews(
 ):
     if data_source not in {None, XDATA_NB_HIGH_QUALITY, XDATA_GERMANY}:
         raise HTTPException(422, "invalid data source")
-    rows = session.execute(
+    query = (
         _item_query()
         .where(ReviewItem.status == "pending")
         .order_by(ReviewItem.id)
-    ).all()
-    return [
-        _payload(*row, storage)
-        for row in rows
-        if data_source is None
-        or _data_source(row[1], row[3], row[4]) == data_source
-    ]
+    )
+    if data_source is not None:
+        query = query.where(_source_clause(data_source))
+    rows = session.execute(query).all()
+    return [_payload(*row, storage) for row in rows]
 
 
 @router.get("/{item_id}", dependencies=[Depends(require_compat_auth)])
@@ -319,19 +338,14 @@ def decide_review(
     current_source = _data_source(current_row[1], current_row[3], current_row[4])
     item = apply_review_decision(session, item_id, payload.decision, payload.note)
     session.commit()
-    pending_rows = session.execute(
+    next_query = (
         _item_query()
         .where(ReviewItem.status == "pending", ReviewItem.id != item.id)
+        .where(_source_clause(current_source))
         .order_by(ReviewItem.id)
-    ).all()
-    next_item = next(
-        (
-            row[0].id
-            for row in pending_rows
-            if _data_source(row[1], row[3], row[4]) == current_source
-        ),
-        None,
     )
+    next_row = session.execute(next_query).first()
+    next_item = next_row[0].id if next_row else None
     return {
         "id": item.id,
         "status": item.status,

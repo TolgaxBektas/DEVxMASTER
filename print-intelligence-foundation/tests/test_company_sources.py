@@ -103,3 +103,24 @@ def test_normalized_phone_matches_across_sources(tmp_path):
         assert high_quality.data_source == XDATA_NB_HIGH_QUALITY
     finally:
         session.close()
+
+
+def test_secondary_findings_keep_only_latest_twenty(tmp_path):
+    session = _session(tmp_path)
+    try:
+        company = resolve_company(
+            session,
+            "Muster GmbH",
+            {"company": "Muster GmbH", "website": "muster.example"},
+            XDATA_NB_HIGH_QUALITY,
+        )
+        for index in range(25):
+            resolve_company(
+                session,
+                "Muster GmbH",
+                {"company": "Muster GmbH", "website": "muster.example", "phone": str(index)},
+                XDATA_GERMANY,
+            )
+        assert len(json.loads(company.secondary_findings_json)) == 20
+    finally:
+        session.close()

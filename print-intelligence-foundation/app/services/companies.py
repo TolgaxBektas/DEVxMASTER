@@ -99,7 +99,7 @@ def _append_secondary_finding(company: Company, source: str, fields: dict[str, A
     findings.append(
         {"source": source, "fields": fields, "recorded_at": datetime.now(timezone.utc).isoformat()}
     )
-    company.secondary_findings_json = json.dumps(findings, ensure_ascii=False)
+    company.secondary_findings_json = json.dumps(findings[-20:], ensure_ascii=False)
 
 
 def resolve_company(

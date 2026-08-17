@@ -122,6 +122,7 @@ def import_print_batch(
             occurrence_key=identity,
             bbox=json.dumps(payload.bbox),
             confidence=1.0,
+            data_source=XDATA_NB_HIGH_QUALITY,
         )
         session.add(occurrence)
     else:
@@ -129,6 +130,7 @@ def import_print_batch(
         occurrence = session.scalar(
             select(AdOccurrence).where(AdOccurrence.page_id == page.id)
         )
+    occurrence.data_source = XDATA_NB_HIGH_QUALITY
     session.flush()
 
     company = resolve_company(

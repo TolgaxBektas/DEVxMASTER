@@ -328,6 +328,7 @@ class Pipeline:
                     page_id=page.id,
                     occurrence_key=key,
                     bbox=key,
+                    data_source=XDATA_GERMANY,
                     crop_path=crop_key,
                     fields_json=json.dumps(
                         {
