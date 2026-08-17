@@ -1,6 +1,7 @@
 from app.models.pipeline import (
     AdOccurrence,
     Company,
+    DeferredChannel,
     DiscoveredCandidate,
     Document,
     Job,
@@ -14,6 +15,7 @@ __all__ = [
     "Page",
     "AdOccurrence",
     "Company",
+    "DeferredChannel",
     "ReviewItem",
     "Job",
     "Source",

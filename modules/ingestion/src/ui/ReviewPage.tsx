@@ -23,6 +23,7 @@ type Review = {
       reason?: string;
       sources?: string[];
     };
+    deferred_channels: readonly DeferredChannel[];
   };
   bbox: unknown;
   restoration: {
@@ -41,6 +42,16 @@ type ReviewQueue = {
 };
 
 type DataSource = "xdata_nb_high_quality" | "xdata_germany";
+
+type DeferredChannel = {
+  id: number;
+  field_name: string;
+  value: string;
+  source_url: string | null;
+  retrieved_at: string | null;
+  data_source: DataSource;
+  status: "waiting_for_x_core" | "transferred_to_x_core";
+};
 
 type DecisionResult = { next_open_id: number | null };
 
@@ -143,6 +154,21 @@ function VerificationDetails({
       {verification.sources?.length ? (
         <span>Quellen: {verification.sources.join(" · ")}</span>
       ) : null}
+    </div>
+  );
+}
+
+function DeferredChannels({ channels }: { channels: readonly DeferredChannel[] }) {
+  if (!channels.length) return null;
+  return (
+    <div className="verification-row">
+      <strong>Zusatzkanäle – wartet auf Feld in X-Core</strong>
+      {channels.map((channel) => (
+        <span key={channel.id}>
+          {channel.field_name}: {channel.value}
+          {channel.source_url ? ` · ${channel.source_url}` : ""}
+        </span>
+      ))}
     </div>
   );
 }
@@ -339,6 +365,7 @@ export function ReviewPage({ api }: ModulePageProps) {
               evidence={review.company.evidence}
             />
             <VerificationDetails verification={review.company.verification} />
+            <DeferredChannels channels={review.company.deferred_channels} />
             <dl className="detail-list">
               <div><dt>Seite</dt><dd>{review.page ?? "—"}</dd></div>
               <div><dt>Bounding-Box</dt><dd>{Array.isArray(review.bbox) ? review.bbox.join(" × ") : displayValue(review.bbox)}</dd></div>

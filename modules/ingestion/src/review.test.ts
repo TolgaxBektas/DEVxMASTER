@@ -20,6 +20,7 @@ const review = {
     extracted_values: {},
     evidence: {},
     verification: {},
+    deferred_channels: [],
   },
   bbox: [1, 2, 3, 4],
   restoration: {

@@ -207,6 +207,22 @@ def _payload(item, occurrence, page, document, company, storage) -> dict[str, An
             "extracted_values": extracted_values,
             "evidence": evidence,
             "verification": verification,
+            "deferred_channels": [
+                {
+                    "id": channel.id,
+                    "field_name": channel.field_name,
+                    "value": channel.value,
+                    "source_url": channel.source_url,
+                    "retrieved_at": (
+                        channel.retrieved_at.isoformat()
+                        if channel.retrieved_at
+                        else None
+                    ),
+                    "data_source": channel.data_source,
+                    "status": channel.status,
+                }
+                for channel in (company.deferred_channels if company else [])
+            ],
         },
         "bbox": _bbox(occurrence.bbox) if occurrence else None,
         "restoration": {

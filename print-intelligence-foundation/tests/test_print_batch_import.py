@@ -10,7 +10,7 @@ from app.api import imports as imports_api
 from app.db.base import Base
 from app.core.config import Settings
 from app.main import app
-from app.models import AdOccurrence, Company, Document, Page, ReviewItem
+from app.models import AdOccurrence, Company, DeferredChannel, Document, Page, ReviewItem
 from app.services.storage import LocalStorage
 
 
@@ -213,6 +213,51 @@ def test_print_batch_reimport_high_quality_upgrades_germany(tmp_path):
             occurrence = session.scalar(select(AdOccurrence))
             assert occurrence.data_source == "xdata_nb_high_quality"
             assert occurrence.source_explicit is True
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_print_batch_preserves_deferred_channels_idempotently(tmp_path):
+    client, factory, _ = _client(tmp_path)
+    try:
+        metadata = _metadata()
+        metadata["company_name"] = "xDATA Zusatzkanäle GmbH"
+        metadata["evidence"].update(
+            {
+                "faxes": [
+                    {
+                        "value": "030 12345",
+                        "source_url": "https://example.test/kontakt",
+                        "retrieved_at": "2026-01-01T00:00:00Z",
+                    }
+                ],
+                "social_profiles": [
+                    {
+                        "platform": "facebook",
+                        "value": "https://facebook.example/test",
+                        "source_url": "https://example.test/kontakt",
+                        "retrieved_at": "2026-01-01T00:00:00Z",
+                    }
+                ],
+                "instagram": {
+                    "value": "https://instagram.example/test",
+                    "source_url": "https://example.test/kontakt",
+                    "retrieved_at": "2026-01-01T00:00:00Z",
+                },
+            }
+        )
+        first = client.post("/imports/print-batch", files=_files(metadata))
+        second = client.post("/imports/print-batch", files=_files(metadata))
+        assert first.status_code == second.status_code == 200
+        with factory() as session:
+            channels = session.scalars(select(DeferredChannel)).all()
+            assert len(channels) == 3
+            assert {(channel.field_name, channel.value) for channel in channels} == {
+                ("fax", "030 12345"),
+                ("facebook", "https://facebook.example/test"),
+                ("instagram", "https://instagram.example/test"),
+            }
+            assert all(channel.status == "waiting_for_x_core" for channel in channels)
     finally:
         app.dependency_overrides.clear()
 

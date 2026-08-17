@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from app.api import (
     compat,
     compat_reviews,
+    deferred_channels,
     discovery,
     documents,
     health,
@@ -32,4 +33,5 @@ app.include_router(discovery.router)
 app.include_router(queue.router)
 app.include_router(compat.router)
 app.include_router(compat_reviews.router)
+app.include_router(deferred_channels.router)
 app.include_router(imports.router)
