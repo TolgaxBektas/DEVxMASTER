@@ -12,6 +12,9 @@ EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", re.I)
 DOMAIN_RE = re.compile(
     r"(?:https?://)?(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}", re.I
 )
+TEXT_UNCERTAINTY_RATIO = 0.45
+TEXT_UNCOMPARABLE_RATIO = 0.35
+STRUCTURED_UNCERTAINTY_RATIO = 0.35
 
 
 def _normalize(value: str) -> str:
@@ -91,7 +94,7 @@ def _text_findings(
     matcher = SequenceMatcher(None, before, after, autojunk=False)
     ratio = matcher.ratio()
     uncertain = _text_comparison_is_uncertain(original, restored)
-    if ratio < 0.35:
+    if ratio < TEXT_UNCOMPARABLE_RATIO:
         return [{
             "type": "uncertain",
             "severity": "unsicher",
@@ -142,7 +145,8 @@ def _text_comparison_is_uncertain(
     after = _words(restored.get("text_lines") or [])
     return (
         min(len(before), len(after)) < 5
-        or SequenceMatcher(None, before, after, autojunk=False).ratio() < 0.35
+        or SequenceMatcher(None, before, after, autojunk=False).ratio()
+        < TEXT_UNCERTAINTY_RATIO
         or any(
             confidence is not None and confidence < 85
             for confidence in (
@@ -164,7 +168,7 @@ def _structured_values_are_uncertain(
             _words(restored.get("text_lines") or []),
             autojunk=False,
         ).ratio()
-        < 0.35
+        < STRUCTURED_UNCERTAINTY_RATIO
         or any(
             confidence is not None and confidence < 85
             for confidence in (
