@@ -16,7 +16,6 @@ import { registerReviewImageRoutes, registerUploadRoute } from "./rest.js";
 import { persistDocumentBytes } from "./rest.js";
 import { deriveDocumentClassification } from "./classification.js";
 import { documentActualityStatus } from "./actuality.js";
-import { publishCurrentActualityTransition } from "./actuality-replay.js";
 import { ingestionPages, IngestionPage, OccurrencesPage, ReviewPage } from "./ui/index.js";
 import type { PifReviewClient } from "./review-client.js";
 
@@ -282,15 +281,6 @@ export function createIngestionModule(deps: {
               );
               const processedDocument = await txRepository.getDocument(tenantId, document.id);
               const executor = createDrizzleEventRepository(db);
-              await publishCurrentActualityTransition({
-                tenantId,
-                document: processedDocument,
-                previousStatus: document.actualityStatus,
-                currentStatus: processedDocument.actualityStatus,
-                occurrences,
-                publish: deps.publish,
-                executor,
-              });
               const actualityStatus = processedDocument.actualityStatus
                 ?? documentActualityStatus(processedDocument.classification);
               for (const occurrence of occurrences) {
