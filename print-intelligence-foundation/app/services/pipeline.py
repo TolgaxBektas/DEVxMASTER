@@ -14,6 +14,12 @@ from app.models import AdOccurrence, Document, Page, ReviewItem
 from app.services.bbox import Box, deduplicate_boxes, iou, normalize_bbox
 from app.services.classify import classify_page
 from app.services.crop import crop_ad, restore_artwork
+from app.services.content_anchors import (
+    compare_content_anchors,
+    compare_visual_motifs,
+    extract_content_anchors,
+    finding_messages,
+)
 from app.services.companies import XDATA_GERMANY, resolve_company
 from app.services.extraction import extract_contact_fields
 from app.services.ingest import content_lock, validate_pdf
@@ -671,6 +677,38 @@ class Pipeline:
                 padded_box,
                 occurrence,
             )
+        if proposal_image is not None:
+            original_image = Image.open(artwork_output).convert("RGB")
+            fields = json.loads(occurrence.fields_json or "{}").get("fields", {})
+            company_name = fields.get("company") or fields.get("company_name")
+            original_anchors = extract_content_anchors(
+                original_image,
+                company_name=company_name,
+            )
+            restored_anchors = extract_content_anchors(
+                proposal_image,
+                company_name=company_name,
+            )
+            comparison = compare_content_anchors(original_anchors, restored_anchors)
+            visual_comparison = compare_visual_motifs(original_image, proposal_image)
+            comparison["findings"].extend(visual_comparison["findings"])
+            comparison["status"] = (
+                "findings" if comparison["findings"] else "passed"
+            )
+            result.manifest["content_anchors"] = {
+                "original": original_anchors,
+                "restored": restored_anchors,
+            }
+            result.manifest["content_comparison"] = comparison
+            result.manifest["visual_comparison"] = visual_comparison
+            messages = finding_messages(comparison)
+            if messages:
+                review_reason = "; ".join(
+                    reason for reason in [review_reason, *messages] if reason
+                )
+            review_reason = review_reason or (
+                "Restaurierungsvorschlag wartet auf menschliche Freigabe"
+            )
         occurrence.restoration_manifest_json = json.dumps(
             result.manifest, ensure_ascii=False
         )
@@ -936,15 +974,7 @@ class Pipeline:
                     "invalid_ratio": None,
                     "overlap_ratio": None,
                 },
-                "findings": [
-                    {
-                        "rule": "qr_detection_unavailable",
-                        "confidence": 0.0,
-                        "text": "",
-                        "region": None,
-                        "action": "review_required",
-                    },
-                ],
+                "findings": [],
                 "verification": {"status": "not_assessed", "checks": []},
                 "review_status": "pending",
                 "edit_status": "refused",

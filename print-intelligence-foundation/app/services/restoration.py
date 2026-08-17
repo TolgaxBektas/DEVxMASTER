@@ -871,16 +871,7 @@ def propose_level_one(
             "invalid_ratio": invalid_ratio,
             "overlap_ratio": overlap_ratio,
         },
-        "findings": findings
-        + [
-            {
-                "rule": "qr_detection_unavailable",
-                "confidence": 0.0,
-                "text": "",
-                "region": None,
-                "action": "review_required",
-            }
-        ],
+        "findings": findings,
         "verification": {"status": "not_assessed", "checks": []},
         "review_status": "pending",
         "edit_status": "refused",
@@ -1045,8 +1036,4 @@ def propose_level_one(
             "edit_status": "applied",
         }
     )
-    return RestorationResult(
-        artwork,
-        base_manifest,
-        "restoration proposal requires review: QR detection is unavailable",
-    )
+    return RestorationResult(artwork, base_manifest, None)

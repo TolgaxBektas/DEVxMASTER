@@ -30,6 +30,15 @@ type Review = {
     geometry_quality_status: string | null;
     model_name: string | null;
     plan_digest: string | null;
+    content_comparison?: {
+      status: string;
+      findings: Array<{ type: string; category: string; value: string }>;
+    } | null;
+    visual_comparison?: {
+      alignment?: { class?: string; score?: number };
+      lost_cells?: number;
+      added_cells?: number;
+    } | null;
   };
   images: { original_available: boolean; restored_available: boolean };
 };
@@ -328,6 +337,28 @@ export function ReviewPage({ api }: ModulePageProps) {
               <div><dt>Modell</dt><dd>{review.restoration.model_name ?? "—"}</dd></div>
               <div><dt>Plan-Digest</dt><dd>{review.restoration.plan_digest ?? "—"}</dd></div>
             </dl>
+            <h3>Inhaltsabgleich</h3>
+            {!review.restoration.content_comparison ? (
+              <p className="form-message">Kein Inhaltsabgleich verfügbar.</p>
+            ) : review.restoration.content_comparison.findings.length === 0 ? (
+              <p className="form-message">Keine Abweichungen erkannt.</p>
+            ) : (
+              <ul>
+                {review.restoration.content_comparison.findings.map((finding, index) => (
+                  <li key={`${finding.type}-${finding.category}-${index}`}>
+                    {finding.type === "missing" ? "Fehlt" : finding.type === "new" ? "Neu" : "Warnung"} · {finding.category}: {finding.value}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {review.restoration.visual_comparison?.alignment && (
+              <p className="form-message">
+                Ausrichtung: {review.restoration.visual_comparison.alignment.class ?? "—"} ·
+                {" "}Güte: {review.restoration.visual_comparison.alignment.score?.toFixed(3) ?? "—"} ·
+                {" "}verlorene Zellen: {review.restoration.visual_comparison.lost_cells ?? 0} ·
+                {" "}ergänzte Zellen: {review.restoration.visual_comparison.added_cells ?? 0}
+              </p>
+            )}
             <label htmlFor="review-note">Notiz</label>
             <Input id="review-note" value={note} onChange={(event) => setNote(event.target.value)} placeholder="Optionale Notiz" />
             {decisionError && <div className="login-error">{decisionError}</div>}
