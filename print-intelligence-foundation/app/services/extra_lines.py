@@ -526,8 +526,19 @@ def compose_extra_lines(
     anchor_height = max(1, anchor_heights[len(anchor_heights) // 2])
     cap_height = max(1, reference_heights[len(reference_heights) // 2])
     bold = _is_bold(source, anchor, text_colour, background)
+    centred = (
+        abs((anchor["left"] + anchor["right"]) / 2 - source.width / 2)
+        < source.width * 0.06
+    )
     margin = max(int(round(source.width * 0.04)), cap_height)
-    available = source.width - 2 * margin
+    max_available = source.width - 2 * margin
+    desired_left = max(margin, anchor["left"])
+    left_available = source.width - margin - desired_left
+    shifted_for_fit = False
+    if left_available <= 0:
+        desired_left = margin
+        left_available = max_available
+        shifted_for_fit = True
     probe = _fit_font("X", cap_height, bold)
     if probe is None:
         return ExtraLineComposition(
@@ -555,6 +566,7 @@ def compose_extra_lines(
         )
     for size in range(probe.size, 0, -1):
         candidate = ImageFont.truetype(font_path, size)
+        available = max_available if centred else left_available
         candidate_blocks = _group_lines(
             channels, draw_probe, candidate, cap_height, available
         )
@@ -574,10 +586,6 @@ def compose_extra_lines(
     line_height = max(1, int(round(cap_height * 1.75)))
     block_gap = max(1, int(round(cap_height * 0.9)))
     bottom_air = max(1, int(round(cap_height * 0.35)))
-    centred = (
-        abs((anchor["left"] + anchor["right"]) / 2 - source.width / 2)
-        < source.width * 0.06
-    )
     band_end = _band_end(source, anchor, background)
     band_fits = band_end - anchor["bottom"] >= line_height * 0.4 and _row_uniform(
         source, band_end - 1, background
@@ -638,10 +646,12 @@ def compose_extra_lines(
     manifest_blocks = []
     for block in blocks:
         block_start = y
-        block_x = (
-            max(margin, anchor["left"])
-            if not centred
-            else max(margin, (source.width - block["width"]) / 2)
+        desired_x = (
+            (source.width - block["width"]) / 2 if centred else desired_left
+        )
+        block_x = max(margin, min(desired_x, source.width - margin - block["width"]))
+        shifted = shifted_for_fit or (
+            not centred and abs(block_x - desired_x) > 0.01
         )
         rows_manifest = []
         for row in block["rows"]:
@@ -678,6 +688,7 @@ def compose_extra_lines(
                 "width": block["width"],
                 "rows": rows_manifest,
                 "top": block_start,
+                "shifted": shifted,
             }
         )
     return ExtraLineComposition(

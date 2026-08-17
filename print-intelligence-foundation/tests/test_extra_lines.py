@@ -397,3 +397,23 @@ def test_long_value_uses_smaller_font_and_stays_within_margins(monkeypatch):
         for block in result.manifest["blocks"]
         for row in block["rows"]
     )
+
+
+def test_right_aligned_anchor_shrinks_social_line_inside_right_margin(monkeypatch):
+    image = Image.new("RGB", (240, 140), "white")
+    ImageDraw.Draw(image).rectangle((0, 40, 239, 139), fill=(20, 80, 140))
+    anchor = _anchor(left=230, right=239)
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: anchor)
+
+    result = compose_extra_lines(
+        image,
+        [("instagram", "www.instagram.com/a-very-long-profile-name")],
+    )
+
+    assert result.manifest["status"] == "composed"
+    margin = max(round(image.width * 0.04), result.manifest["cap_height"])
+    for block in result.manifest["blocks"]:
+        for row in block["rows"]:
+            assert margin <= row["position"][0]
+            assert row["position"][0] + row["width"] <= image.width - margin
+    assert any(block["shifted"] for block in result.manifest["blocks"])
