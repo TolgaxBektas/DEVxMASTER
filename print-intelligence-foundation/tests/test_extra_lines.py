@@ -103,12 +103,79 @@ def test_groups_blocks_and_keeps_social_profiles_stacked(monkeypatch):
     blocks = result.manifest["blocks"]
     assert [block["name"] for block in blocks] == ["phone", "email_web", "social"]
     assert len(blocks[0]["rows"]) == 1
-    assert len(blocks[1]["rows"]) == 1
+    assert len(blocks[1]["rows"]) == 2
     assert len(blocks[2]["rows"]) == 2
     assert all(row["logo_used"] for row in blocks[2]["rows"])
     assert blocks[2]["top"] - (
-        blocks[1]["top"] + result.manifest["line_height"]
+        blocks[1]["top"] + 2 * result.manifest["line_height"]
     ) == result.manifest["block_gap"]
+
+
+def test_phone_and_fax_use_short_labels_and_preserve_number_text(monkeypatch):
+    image = Image.new("RGB", (600, 120), "white")
+    ImageDraw.Draw(image).rectangle((0, 40, 599, 119), fill=(20, 80, 140))
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: _anchor(right=580))
+
+    result = compose_extra_lines(
+        image,
+        [("phone", "Telefon: 06441 / 905-15"), ("fax", "Fax - 06441 / 905-16")],
+    )
+
+    row = result.manifest["blocks"][0]["rows"][0]
+    assert [part["display_value"] for part in row["parts"]] == [
+        "T 06441 / 905-15",
+        "F 06441 / 905-16",
+    ]
+
+
+def test_existing_phone_leaves_only_labeled_fax(monkeypatch):
+    image = Image.new("RGB", (400, 120), "white")
+    ImageDraw.Draw(image).rectangle((0, 40, 399, 119), fill=(20, 80, 140))
+    anchor = _anchor(right=380)
+    anchor["ocr_lines"] = [{**anchor, "text": "Telefon 06441 / 905-15"}]
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: anchor)
+
+    result = compose_extra_lines(
+        image,
+        [("phone", "06441 / 905-15"), ("fax", "06441 / 905-16")],
+    )
+
+    assert [part["display_value"] for part in result.manifest["blocks"][0]["rows"][0]["parts"]] == [
+        "F 06441 / 905-16"
+    ]
+
+
+def test_all_communication_rows_share_left_edge_and_social_logo_is_centered(
+    monkeypatch,
+):
+    image = Image.new("RGB", (600, 160), "white")
+    ImageDraw.Draw(image).rectangle((0, 40, 599, 159), fill=(20, 80, 140))
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: _anchor(right=580))
+
+    result = compose_extra_lines(
+        image,
+        [
+            ("phone", "06441 12345"),
+            ("fax", "06441 98765"),
+            ("email", "info@example.de"),
+            ("website", "www.example.de"),
+            ("instagram", "www.instagram.com/example"),
+        ],
+    )
+
+    rows = [row for block in result.manifest["blocks"] for row in block["rows"]]
+    assert len({row["position"][0] for row in rows}) == 1
+    social_part = result.manifest["blocks"][-1]["rows"][0]["parts"][0]
+    assert social_part["display_value"] == "instagram.com/example"
+    assert social_part["logo_size"][1] > result.manifest["cap_height"]
+    logo_y = social_part["logo_position"][1]
+    text_bbox = ImageFont.truetype(
+        extra_lines._font_path(result.manifest["bold"]),
+        result.manifest["font_size"],
+    ).getbbox(social_part["display_value"])
+    text_center = social_part["position"][1] + (text_bbox[1] + text_bbox[3]) / 2
+    logo_center = logo_y + social_part["logo_size"][1] / 2
+    assert abs(logo_center - text_center) <= 1
 
 
 def test_phone_and_fax_stack_when_the_available_width_is_too_small(monkeypatch):

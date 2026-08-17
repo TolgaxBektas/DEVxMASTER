@@ -435,12 +435,27 @@ def _channel_value(
     return str(channel).strip().lower(), str(value).strip()
 
 
+def _display_value(channel: str, value: str) -> str:
+    if channel in {"phone", "fax"}:
+        value = re.sub(
+            r"^\s*(?:telefax|fax|telefon|tel\.?|phone)\s*[:\-]?\s*",
+            "",
+            value,
+            flags=re.I,
+        )
+        return f"{'T' if channel == 'phone' else 'F'} {value}"
+    if channel in {"facebook", "instagram"}:
+        return re.sub(r"^(?:[a-z]+://)?(?:www\.)?", "", value.strip(), flags=re.I)
+    return value
+
+
 def _asset(channel: str, cap_height: int) -> Image.Image | None:
     path = SOCIAL_ASSETS / f"{channel}.png"
     if not path.is_file():
         return None
+    logo_height = max(1, int(round(cap_height * 1.2)))
     return Image.open(path).convert("RGBA").resize(
-        (cap_height, cap_height), Image.Resampling.LANCZOS
+        (logo_height, logo_height), Image.Resampling.LANCZOS
     )
 
 
@@ -478,12 +493,17 @@ def _group_lines(
         )
         items = sorted(items, key=lambda item: order.get(item[0], 99))
         rows = []
-        if name != "social" and len(items) == 2:
-            widths = [draw.textlength(value, font=font) for _channel, value in items]
+        if name == "phone" and len(items) == 2:
+            widths = [
+                draw.textlength(_display_value(channel, value), font=font)
+                for channel, value in items
+            ]
             if sum(widths) + pair_gap <= available:
                 rows.append(items)
             else:
                 rows.extend((item,) for item in items)
+        elif name == "email_web":
+            rows.extend((item,) for item in items)
         else:
             rows.extend((item,) for item in items)
         row_specs = []
@@ -492,16 +512,18 @@ def _group_lines(
             width = 0
             for channel, value in row:
                 logo = _asset(channel, cap_height) if name == "social" else None
-                text_width = draw.textlength(value, font=font)
+                display_value = _display_value(channel, value)
+                text_width = draw.textlength(display_value, font=font)
                 if parts:
                     width += pair_gap
                 if logo is not None:
-                    width += cap_height + logo_gap
+                    width += logo.width + logo_gap
                 width += text_width
                 parts.append(
                     {
                         "channel": channel,
                         "value": value,
+                        "display_value": display_value,
                         "logo": logo,
                         "logo_used": logo is not None,
                         "text_width": round(text_width, 2),
@@ -731,36 +753,53 @@ def compose_extra_lines(
     draw = ImageDraw.Draw(grown)
     y = band_end
     manifest_blocks = []
+    max_block_width = max(block["width"] for block in blocks)
+    desired_common_x = (
+        content_left + (content_right - content_left - max_block_width) / 2
+        if centred
+        else desired_left
+    )
+    common_x = max(
+        left_limit,
+        min(desired_common_x, right_limit - max_block_width),
+    )
     for block in blocks:
         block_start = y
-        desired_x = (
-            (
-                content_left + (content_right - content_left - block["width"]) / 2
-                if centred
-                else desired_left
-            )
-        )
-        block_x = max(
-            left_limit, min(desired_x, right_limit - block["width"])
-        )
-        shifted = not centred and abs(block_x - desired_x) > 0.01
+        block_x = common_x
+        shifted = not centred and abs(common_x - desired_left) > 0.01
         rows_manifest = []
         for row in block["rows"]:
             row_x = block_x
             row_parts = []
             for part in row["parts"]:
                 start_x = row_x
+                logo_position = None
                 if part["logo"] is not None:
-                    grown.paste(part["logo"], (int(row_x), int(y)), part["logo"])
-                    row_x += cap_height + int(round(0.4 * cap_height))
-                draw.text((int(row_x), int(y)), part["value"], font=font, fill=text_colour)
-                row_x += draw.textlength(part["value"], font=font) + int(round(2 * cap_height))
+                    bbox = font.getbbox(part["display_value"])
+                    logo_y = int(round(y + (bbox[1] + bbox[3] - part["logo"].height) / 2))
+                    logo_position = [round(row_x, 2), logo_y]
+                    grown.paste(part["logo"], (int(row_x), logo_y), part["logo"])
+                    row_x += part["logo"].width + int(round(0.4 * cap_height))
+                draw.text(
+                    (int(row_x), int(y)),
+                    part["display_value"],
+                    font=font,
+                    fill=text_colour,
+                )
+                row_x += draw.textlength(
+                    part["display_value"], font=font
+                ) + int(round(2 * cap_height))
                 row_parts.append(
                     {
                         "channel": part["channel"],
                         "value": part["value"],
+                        "display_value": part["display_value"],
                         "logo_used": part["logo_used"],
                         "position": [round(start_x, 2), y],
+                        "logo_position": logo_position,
+                        "logo_size": (
+                            list(part["logo"].size) if part["logo"] is not None else None
+                        ),
                     }
                 )
             rows_manifest.append(
