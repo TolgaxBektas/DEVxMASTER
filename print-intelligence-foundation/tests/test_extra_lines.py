@@ -80,3 +80,92 @@ def test_original_upper_half_remains_pixel_identical(monkeypatch):
         ImageChops.difference(result.image.crop(upper), image.crop(upper)).getbbox()
         is None
     )
+
+
+def test_groups_blocks_and_keeps_social_profiles_stacked(monkeypatch):
+    image = Image.new("RGB", (500, 120), "white")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((0, 40, 499, 119), fill=(20, 80, 140))
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: _anchor(right=480))
+
+    result = compose_extra_lines(
+        image,
+        [
+            ("phone", "06441 12345"),
+            ("fax", "06441 98765"),
+            ("email", "info@example.de"),
+            ("website", "www.example.de"),
+            ("facebook", "www.facebook.com/example"),
+            ("instagram", "www.instagram.com/example"),
+        ],
+    )
+
+    blocks = result.manifest["blocks"]
+    assert [block["name"] for block in blocks] == ["phone", "email_web", "social"]
+    assert len(blocks[0]["rows"]) == 1
+    assert len(blocks[1]["rows"]) == 1
+    assert len(blocks[2]["rows"]) == 2
+    assert all(row["logo_used"] for row in blocks[2]["rows"])
+    assert blocks[2]["top"] - (
+        blocks[1]["top"] + result.manifest["line_height"]
+    ) == result.manifest["block_gap"]
+
+
+def test_phone_and_fax_stack_when_the_available_width_is_too_small(monkeypatch):
+    image = Image.new("RGB", (120, 100), "white")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((0, 40, 119, 99), fill=(20, 80, 140))
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: _anchor(right=100))
+
+    result = compose_extra_lines(
+        image, [("phone", "06441 12345"), ("fax", "06441 98765")]
+    )
+
+    assert result.manifest["status"] in {"composed", "skipped"}
+    assert len(result.manifest["blocks"][0]["rows"]) == 2
+    assert all(row["width"] <= 120 - 2 * max(5, result.manifest["cap_height"]) for row in result.manifest["blocks"][0]["rows"])
+
+
+def test_long_value_is_fit_within_image_bounds(monkeypatch):
+    image = Image.new("RGB", (100, 80), "white")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((0, 30, 99, 79), fill=(30, 60, 90))
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: _anchor(right=90, bottom=40))
+
+    result = compose_extra_lines(
+        image, [("website", "www.example.de/this-is-a-very-long-address")]
+    )
+
+    if result.manifest["status"] == "composed":
+        margin = max(round(image.width * 0.04), result.manifest["cap_height"])
+        assert all(
+            margin <= row["position"][0]
+            and row["position"][0] + row["width"] <= image.width - margin
+            for block in result.manifest["blocks"]
+            for row in block["rows"]
+        )
+
+
+def test_anchor_at_bottom_fails_closed_or_composes_without_crashing(monkeypatch):
+    image = Image.new("RGB", (160, 50), "white")
+    monkeypatch.setattr(
+        extra_lines, "_anchor", lambda _image: _anchor(top=40, bottom=50, right=150)
+    )
+
+    result = compose_extra_lines(image, [("fax", "06441 12345")])
+
+    assert result.manifest["status"] in {"composed", "skipped"}
+
+
+def test_missing_font_fails_closed(monkeypatch):
+    image = Image.new("RGB", (200, 100), "white")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((0, 40, 199, 99), fill=(20, 80, 140))
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: _anchor())
+    monkeypatch.setattr(extra_lines, "_font_path", lambda _bold: None)
+
+    result = compose_extra_lines(image, [("fax", "06441 9876")])
+
+    assert result.manifest["status"] == "skipped"
+    assert result.manifest["reason"] == "font_not_found"
+    assert ImageChops.difference(result.image, image).getbbox() is None

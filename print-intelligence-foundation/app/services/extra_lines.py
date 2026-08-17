@@ -1,17 +1,26 @@
 from dataclasses import dataclass
+from pathlib import Path
 import re
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 import pytesseract
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 
-FONT_REGULAR = "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"
-FONT_BOLD = "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
-CONTACT_RE = re.compile(
-    r"(@|www\.|\.de\b|tel\.|telefon|fax|\d{3,})",
-    re.I,
-)
+CONTACT_RE = re.compile(r"(@|www\.|\.de\b|tel\.|telefon|fax|\d{3,})", re.I)
+SOCIAL_ASSETS = Path(__file__).parents[1] / "assets" / "social"
+FONT_CANDIDATES = {
+    False: (
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ),
+    True: (
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -34,8 +43,6 @@ def _lines(image: Image.Image) -> list[dict[str, Any]]:
             data["line_num"][index],
         )
         left, top = data["left"][index], data["top"][index]
-        right = left + data["width"][index]
-        bottom = top + data["height"][index]
         line = grouped.setdefault(
             key,
             {
@@ -43,80 +50,98 @@ def _lines(image: Image.Image) -> list[dict[str, Any]]:
                 "heights": [],
                 "left": left,
                 "top": top,
-                "right": right,
-                "bottom": bottom,
+                "right": left,
+                "bottom": top,
             },
         )
         line["text"].append(text)
         line["heights"].append((text, data["height"][index]))
         line["left"] = min(line["left"], left)
         line["top"] = min(line["top"], top)
-        line["right"] = max(line["right"], right)
-        line["bottom"] = max(line["bottom"], bottom)
+        line["right"] = max(line["right"], left + data["width"][index])
+        line["bottom"] = max(line["bottom"], top + data["height"][index])
     for line in grouped.values():
         line["text"] = " ".join(line["text"])
     return sorted(grouped.values(), key=lambda line: line["top"])
 
 
 def _anchor(image: Image.Image) -> dict[str, Any] | None:
-    from PIL import ImageOps
-
-    grey = image.convert("L")
     found = []
-    for candidate_image in (
+    for candidate in (
         image,
-        ImageOps.autocontrast(grey),
+        ImageOps.autocontrast(image.convert("L")),
         ImageOps.invert(image.convert("RGB")),
     ):
-        lines = [
-            line for line in _lines(candidate_image) if CONTACT_RE.search(line["text"])
-        ]
+        lines = [line for line in _lines(candidate) if CONTACT_RE.search(line["text"])]
         if lines:
             found.append(lines[-1])
-    if not found:
-        return None
-    return max(found, key=lambda line: line["bottom"])
+    return max(found, key=lambda line: line["bottom"]) if found else None
 
 
 def _average(pixels: list[tuple[int, int, int]]) -> tuple[int, int, int]:
-    count = len(pixels)
-    return tuple(sum(pixel[index] for pixel in pixels) // count for index in range(3))
+    return tuple(
+        sum(pixel[index] for pixel in pixels) // len(pixels) for index in range(3)
+    )
 
 
 def _colours(
     image: Image.Image, anchor: dict[str, Any]
-) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+) -> tuple[tuple[int, int, int], tuple[int, int, int]] | None:
     box = image.crop(
         (anchor["left"], anchor["top"], anchor["right"], anchor["bottom"])
     ).convert("RGB")
     pixels = list(box.getdata())
+    if not pixels:
+        return None
     luma = sorted(
         pixels,
         key=lambda pixel: 0.299 * pixel[0] + 0.587 * pixel[1] + 0.114 * pixel[2],
     )
-    dark = luma[: max(1, len(luma) // 20)]
-    light = luma[-max(1, len(luma) // 20) :]
-    strip = image.crop(
-        (0, anchor["bottom"], image.width, min(image.height, anchor["bottom"] + 3))
-    ).convert("RGB")
-    strip_pixels = list(strip.getdata())
+    sample = max(1, len(luma) // 20)
+    dark, light = luma[:sample], luma[-sample:]
+    start = min(image.height, anchor["bottom"])
+    end = min(image.height, start + 3)
+    if end == start:
+        start = max(0, start - 3)
+        end = min(image.height, start + 3)
+    strip_pixels = list(
+        image.crop((0, start, image.width, end)).convert("RGB").getdata()
+    )
+    if not strip_pixels:
+        return None
     background = max(set(strip_pixels), key=strip_pixels.count)
     background_luma = (
         0.299 * background[0] + 0.587 * background[1] + 0.114 * background[2]
     )
-    text = _average(dark) if background_luma > 127 else _average(light)
-    return text, background
+    return (_average(dark) if background_luma > 127 else _average(light), background)
 
 
-def _fit_font(text: str, height: int, bold: bool) -> ImageFont.FreeTypeFont:
-    path = FONT_BOLD if bold else FONT_REGULAR
-    best = ImageFont.truetype(path, 8)
-    for size in range(8, max(10, height * 3)):
+def _font_path(bold: bool) -> str | None:
+    for candidate in FONT_CANDIDATES[bold]:
+        if Path(candidate).is_file():
+            return candidate
+    return None
+
+
+def _fit_font(
+    text: str,
+    height: int,
+    bold: bool,
+    max_width: int | None = None,
+) -> ImageFont.FreeTypeFont | None:
+    path = _font_path(bold)
+    if path is None:
+        return None
+    best = None
+    for size in range(max(1, min(8, height)), max(10, height * 4)):
         font = ImageFont.truetype(path, size)
         box = font.getbbox(text)
-        if box[3] - box[1] > height:
+        fits_height = box[3] - box[1] <= height
+        fits_width = max_width is None or box[2] - box[0] <= max_width
+        if fits_height and fits_width:
+            best = font
+        elif best is not None and box[3] - box[1] > height:
             break
-        best = font
     return best
 
 
@@ -126,10 +151,11 @@ def _is_bold(
     text_colour: tuple[int, int, int],
     background: tuple[int, int, int],
 ) -> bool:
-    box = image.crop(
-        (anchor["left"], anchor["top"], anchor["right"], anchor["bottom"])
-    ).convert("RGB")
-    pixels = list(box.getdata())
+    pixels = list(
+        image.crop(
+            (anchor["left"], anchor["top"], anchor["right"], anchor["bottom"])
+        ).convert("RGB").getdata()
+    )
     if not pixels:
         return False
 
@@ -143,7 +169,9 @@ def _is_bold(
 
 
 def _snap(colour: tuple[int, int, int]) -> tuple[int, int, int]:
-    return tuple(255 if channel > 235 else 0 if channel < 20 else channel for channel in colour)
+    return tuple(
+        255 if channel > 235 else 0 if channel < 20 else channel for channel in colour
+    )
 
 
 def _row_uniform(
@@ -153,14 +181,17 @@ def _row_uniform(
     tolerance: int = 18,
     coverage: float = 0.90,
 ) -> bool:
+    if y < 0 or y >= image.height:
+        return False
     row = list(image.convert("RGB").crop((0, y, image.width, y + 1)).getdata())
+    if not row:
+        return False
     matching = sum(
-        1
-        for pixel in row
-        if all(
+        all(
             abs(channel - background[index]) <= tolerance
             for index, channel in enumerate(pixel)
         )
+        for pixel in row
     )
     return matching / len(row) >= coverage
 
@@ -174,10 +205,10 @@ def _band_end(
     pixels = image.convert("RGB")
     left = max(0, anchor["left"] - 2)
     right = min(image.width, anchor["right"] + 2)
-    end = anchor["bottom"]
-    for y in range(anchor["bottom"], image.height):
+    end = min(image.height, anchor["bottom"])
+    for y in range(end, image.height):
         row = list(pixels.crop((left, y, right, y + 1)).getdata())
-        if all(
+        if row and all(
             all(
                 abs(channel - background[index]) <= tolerance
                 for index, channel in enumerate(pixel)
@@ -185,77 +216,274 @@ def _band_end(
             for pixel in row
         ):
             end = y + 1
-            continue
-        break
+        else:
+            break
     return end
 
 
+def _channel_value(
+    item: str | tuple[str, str] | Mapping[str, str],
+) -> tuple[str, str]:
+    if isinstance(item, Mapping):
+        channel = item.get("field_name", item.get("channel", ""))
+        value = item.get("value", "")
+    elif isinstance(item, tuple) and len(item) == 2:
+        channel, value = item
+    else:
+        value = item
+        lowered = value.lower()
+        channel = (
+            "fax"
+            if lowered.startswith("fax")
+            else "facebook"
+            if "facebook." in lowered
+            else "instagram"
+            if "instagram." in lowered
+            else "website"
+            if "www." in lowered or ".de" in lowered
+            else "phone"
+        )
+    return str(channel).strip().lower(), str(value).strip()
+
+
+def _asset(channel: str, cap_height: int) -> Image.Image | None:
+    path = SOCIAL_ASSETS / f"{channel}.png"
+    if not path.is_file():
+        return None
+    return Image.open(path).convert("RGBA").resize(
+        (cap_height, cap_height), Image.Resampling.LANCZOS
+    )
+
+
+def _group_lines(
+    values: list[tuple[str, str]],
+    draw: ImageDraw.ImageDraw,
+    font: ImageFont.FreeTypeFont,
+    cap_height: int,
+    available: int,
+) -> list[dict[str, Any]]:
+    groups = [
+        ("phone", [item for item in values if item[0] in {"phone", "fax"}]),
+        ("email_web", [item for item in values if item[0] in {"email", "website"}]),
+        (
+            "social",
+            [
+                item
+                for item in values
+                if item[0] not in {"phone", "fax", "email", "website"}
+            ],
+        ),
+    ]
+    result = []
+    pair_gap = int(round(2 * cap_height))
+    logo_gap = int(round(0.4 * cap_height))
+    for name, items in groups:
+        if not items:
+            continue
+        order = (
+            {"phone": 0, "fax": 1}
+            if name == "phone"
+            else {"email": 0, "website": 1}
+            if name == "email_web"
+            else {}
+        )
+        items = sorted(items, key=lambda item: order.get(item[0], 99))
+        rows = []
+        if name != "social" and len(items) == 2:
+            widths = [draw.textlength(value, font=font) for _channel, value in items]
+            if sum(widths) + pair_gap <= available:
+                rows.append(items)
+            else:
+                rows.extend((item,) for item in items)
+        else:
+            rows.extend((item,) for item in items)
+        row_specs = []
+        for row in rows:
+            parts = []
+            width = 0
+            for channel, value in row:
+                logo = _asset(channel, cap_height) if name == "social" else None
+                text_width = draw.textlength(value, font=font)
+                if parts:
+                    width += pair_gap
+                if logo is not None:
+                    width += cap_height + logo_gap
+                width += text_width
+                parts.append(
+                    {
+                        "channel": channel,
+                        "value": value,
+                        "logo": logo,
+                        "logo_used": logo is not None,
+                        "text_width": round(text_width, 2),
+                    }
+                )
+            row_specs.append({"parts": parts, "width": round(width, 2)})
+        result.append(
+            {
+                "name": name,
+                "rows": row_specs,
+                "width": max(row["width"] for row in row_specs),
+            }
+        )
+    return result
+
+
 def compose_extra_lines(
-    image: Image.Image, values: Sequence[str]
+    image: Image.Image,
+    values: Sequence[str | tuple[str, str] | Mapping[str, str]],
 ) -> ExtraLineComposition:
     source = image.convert("RGB")
-    lines = [value.strip() for value in values if value.strip()]
-    if not lines:
+    channels = [_channel_value(value) for value in values]
+    channels = [(channel, value) for channel, value in channels if value]
+    line_values = [value for _channel, value in channels]
+    if not channels:
         return ExtraLineComposition(
-            source.copy(),
-            {"status": "skipped", "reason": "no_lines", "lines": []},
+            source.copy(), {"status": "skipped", "reason": "no_lines", "lines": []}
         )
     anchor = _anchor(source)
     if anchor is None:
         return ExtraLineComposition(
             source.copy(),
-            {"status": "skipped", "reason": "no_contact_line", "lines": lines},
+            {
+                "status": "skipped",
+                "reason": "no_contact_line",
+                "lines": line_values,
+            },
         )
-    text_colour, background = _colours(source, anchor)
+    colours = _colours(source, anchor)
+    if colours is None:
+        return ExtraLineComposition(
+            source.copy(),
+            {
+                "status": "skipped",
+                "reason": "no_colour_measurement",
+                "lines": line_values,
+            },
+        )
+    text_colour, background = colours
     text_colour = _snap(text_colour)
-    contact_words = [
-        height for word, height in anchor["heights"] if CONTACT_RE.search(word)
-    ]
     heights = sorted(
-        contact_words or [height for _word, height in anchor["heights"]]
+        [height for word, height in anchor["heights"] if CONTACT_RE.search(word)]
+        or [height for _word, height in anchor["heights"]]
     )
-    cap_height = heights[len(heights) // 2]
+    cap_height = max(1, heights[len(heights) // 2])
     bold = _is_bold(source, anchor, text_colour, background)
-    font = _fit_font(max(lines, key=len), cap_height, bold)
-    line_height = int(round(cap_height * 1.75))
+    margin = max(int(round(source.width * 0.04)), cap_height)
+    available = source.width - 2 * margin
+    probe = _fit_font("X", cap_height, bold)
+    if probe is None:
+        return ExtraLineComposition(
+            source.copy(),
+            {"status": "skipped", "reason": "font_not_found", "lines": line_values},
+        )
+    draw_probe = ImageDraw.Draw(source)
+    font = None
+    blocks = []
+    for size in range(probe.size, 0, -1):
+        candidate = _fit_font("X", size, bold, available)
+        if candidate is None:
+            continue
+        candidate_blocks = _group_lines(
+            channels, draw_probe, candidate, cap_height, available
+        )
+        if all(block["width"] <= available for block in candidate_blocks):
+            font, blocks = candidate, candidate_blocks
+            break
+    if font is None:
+        return ExtraLineComposition(
+            source.copy(),
+            {"status": "skipped", "reason": "no_line_space", "lines": line_values},
+        )
+    line_height = max(1, int(round(cap_height * 1.75)))
+    block_gap = max(1, int(round(cap_height * 0.9)))
+    bottom_air = max(1, int(round(cap_height * 0.35)))
     centred = (
         abs((anchor["left"] + anchor["right"]) / 2 - source.width / 2)
         < source.width * 0.06
     )
     band_end = _band_end(source, anchor, background)
-    added = line_height * len(lines) + int(round(line_height * 0.35))
     band_fits = band_end - anchor["bottom"] >= line_height * 0.4 and _row_uniform(
         source, band_end - 1, background
     )
     if not band_fits:
         band_end = source.height
         centred = True
-        bottom = source.crop((0, source.height - 3, source.width, source.height)).convert(
-            "RGB"
+        bottom = list(
+            source.crop(
+                (0, max(0, source.height - 3), source.width, source.height)
+            ).getdata()
         )
-        bottom_pixels = list(bottom.getdata())
-        background = max(set(bottom_pixels), key=bottom_pixels.count)
-        background_luma = (
-            0.299 * background[0] + 0.587 * background[1] + 0.114 * background[2]
-        )
-        text_colour = (0, 0, 0) if background_luma > 127 else (255, 255, 255)
-    grown = Image.new("RGB", (source.width, source.height + added), background)
+        if not bottom:
+            return ExtraLineComposition(
+                source.copy(),
+                {
+                    "status": "skipped",
+                    "reason": "no_colour_measurement",
+                    "lines": line_values,
+                },
+            )
+        background = max(set(bottom), key=bottom.count)
+        text_colour = (0, 0, 0) if sum(background) > 381 else (255, 255, 255)
+    content_height = sum(len(block["rows"]) * line_height for block in blocks)
+    content_height += block_gap * max(0, len(blocks) - 1) + bottom_air
+    grown = Image.new("RGB", (source.width, source.height + content_height), background)
     grown.paste(source.crop((0, 0, source.width, band_end)), (0, 0))
     if band_fits:
         seam = source.crop((0, band_end - 1, source.width, band_end))
-        for offset in range(added):
+        for offset in range(content_height):
             grown.paste(seam, (0, band_end + offset))
         grown.paste(
             source.crop((0, band_end, source.width, source.height)),
-            (0, band_end + added),
+            (0, band_end + content_height),
         )
     draw = ImageDraw.Draw(grown)
-    y = band_end - int(round(line_height * 0.25)) if band_fits else band_end
-    for value in lines:
-        width = draw.textlength(value, font=font)
-        x = (source.width - width) / 2 if centred else anchor["left"]
-        draw.text((x, y), value, font=font, fill=text_colour)
-        y += line_height
+    y = band_end
+    manifest_blocks = []
+    for block in blocks:
+        block_start = y
+        block_x = (
+            max(margin, anchor["left"])
+            if not centred
+            else max(margin, (source.width - block["width"]) / 2)
+        )
+        rows_manifest = []
+        for row in block["rows"]:
+            row_x = block_x
+            row_parts = []
+            for part in row["parts"]:
+                start_x = row_x
+                if part["logo"] is not None:
+                    grown.paste(part["logo"], (int(row_x), int(y)), part["logo"])
+                    row_x += cap_height + int(round(0.4 * cap_height))
+                draw.text((int(row_x), int(y)), part["value"], font=font, fill=text_colour)
+                row_x += draw.textlength(part["value"], font=font) + int(round(2 * cap_height))
+                row_parts.append(
+                    {
+                        "channel": part["channel"],
+                        "value": part["value"],
+                        "logo_used": part["logo_used"],
+                        "position": [round(start_x, 2), y],
+                    }
+                )
+            rows_manifest.append(
+                {
+                    "parts": row_parts,
+                    "logo_used": all(part["logo_used"] for part in row_parts),
+                    "position": [round(block_x, 2), y],
+                    "width": round(row["width"], 2),
+                }
+            )
+            y += line_height
+        y += block_gap
+        manifest_blocks.append(
+            {
+                "name": block["name"],
+                "width": block["width"],
+                "rows": rows_manifest,
+                "top": block_start,
+            }
+        )
     return ExtraLineComposition(
         grown,
         {
@@ -274,8 +502,11 @@ def compose_extra_lines(
             "bold": bold,
             "band_end": band_end,
             "centred": centred,
+            "cap_height": cap_height,
             "line_height": line_height,
-            "lines": lines,
+            "block_gap": block_gap,
+            "lines": line_values,
+            "blocks": manifest_blocks,
             "output_size": list(grown.size),
         },
     )
