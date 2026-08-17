@@ -254,6 +254,8 @@ def _sender_has_strong_public_origin(text, blocks):
         for block in blocks
         if max(block.get("font_sizes", [0])) >= 14
     )
+    if not blocks:
+        prominent = text
     return bool(PUBLIC_ORIGIN_SIGNALS.search(prominent))
 
 

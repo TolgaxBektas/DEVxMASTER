@@ -111,7 +111,7 @@ def test_ocr_recovers_phone_and_text_from_image_only_neighbor_ads(monkeypatch):
     monkeypatch.setattr(
         "app.services.processor._ocr_region_text",
         lambda _image, box, _width, _height:
-            "Stadt Schleicher Telefon 01234 567891"
+            "Schleicher Tours Telefon 01234 567891"
             if box[1] < 500
             else "Hotel Marbach Telefon 01234 567892",
     )
@@ -127,6 +127,24 @@ def test_ocr_recovers_phone_and_text_from_image_only_neighbor_ads(monkeypatch):
         ]),
     )
     assert len(result) == 2
+
+
+def test_ocr_excludes_communally_owned_sender(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.processor._ocr_region_text",
+        lambda *_args, **_kwargs:
+            "Senioreneinrichtungen der Stadt Bochum gGmbH Telefon 0234 9352900",
+    )
+    result = heuristic_ad_regions(
+        b"not-an-image",
+        "",
+        layout([block(10, 10, 35, 18, "Anzeigen", (8,))], [
+            drawing(100, 60, 900, 250),
+            drawing(100, 330, 900, 520),
+            drawing(100, 620, 900, 760),
+        ]),
+    )
+    assert result == []
 
 
 def test_detects_ad_spanning_two_columns_as_one_candidate():
