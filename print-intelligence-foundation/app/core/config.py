@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     image_edit_api_key: str | None = None
     image_edit_timeout: float = 120.0
     image_edit_quality: str = "medium"
-    image_edit_max_cost_cents: int = 1000
+    image_edit_max_cost_cents: int = 7
     image_edit_hard_stop_cents: int = 1000
     image_edit_max_attempts: int = 1
     image_edit_color_tolerance: float = 0.12

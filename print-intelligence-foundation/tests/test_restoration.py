@@ -959,6 +959,108 @@ def test_image_edit_provider_rejects_invalid_url_and_empty_data(monkeypatch):
         provider.edit(image, "prompt")
 
 
+def test_image_edit_provider_includes_safe_api_error_details(monkeypatch):
+    image = Image.new("RGB", (4, 4), "white")
+
+    def error_response(*_args, **_kwargs):
+        return httpx.Response(
+            400,
+            json={
+                "error": {
+                    "message": "Invalid value for 'size'",
+                    "type": "invalid_request_error",
+                    "param": "size",
+                    "code": "invalid",
+                }
+            },
+            request=httpx.Request("POST", "https://example.test/v1/images/edits"),
+        )
+
+    monkeypatch.setattr("app.services.vision.image_edit.httpx.post", error_response)
+    monkeypatch.setattr(
+        "app.services.vision.image_edit.validate_public_url", lambda _url: None
+    )
+    provider = OpenAIImageEditProvider("https://example.test/v1", "model", "key")
+    with pytest.raises(ValueError, match="Invalid value for 'size'") as error:
+        provider.edit(image, "prompt")
+    assert "Authorization" not in str(error.value)
+    assert "key" not in str(error.value)
+
+
+def test_generative_restoration_reserves_each_call_not_each_document(
+    tmp_path, monkeypatch
+):
+    class _StubImageEditProvider:
+        def __init__(self):
+            self.calls = 0
+
+        def edit(self, image, prompt, rejection_reasons=None, size=None):
+            del prompt, rejection_reasons, size
+            self.calls += 1
+            return ImageEditResult(image.copy(), "stub-image-model", 0)
+
+        def available(self):
+            return True
+
+    import app.services.pipeline as pipeline_module
+
+    monkeypatch.setattr(
+        pipeline_module,
+        "approved_artwork_box",
+        lambda *_args: Box(10, 10, 110, 60),
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "communication_lines_for_box",
+        lambda *_args: [],
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "verify_generative_proposal",
+        lambda *_args: {"status": "passed", "checks": []},
+    )
+    provider = _StubImageEditProvider()
+    pipeline = Pipeline(
+        None,
+        RecordedVisionProvider("tests/fixtures/qwen"),
+        LocalStorage(tmp_path / "storage"),
+        restoration_enabled=True,
+        local_work_dir=tmp_path / "work",
+        image_edit_provider=provider,
+        image_edit_max_cost_cents=7,
+        image_edit_hard_stop_cents=14,
+    )
+    artwork_path = tmp_path / "artwork.png"
+    Image.new("RGB", (200, 100), "white").save(artwork_path)
+    pixel_result = SimpleNamespace(
+        manifest={"edit_status": "refused"},
+        review_reason="pixel stage refused",
+    )
+    occurrence = SimpleNamespace(fields_json="{}")
+    first, _ = pipeline._try_generative_restoration(
+        pixel_result,
+        FIXTURE,
+        11,
+        Box(0, 0, 100, 50),
+        artwork_path,
+        Box(0, 0, 100, 50),
+        occurrence,
+    )
+    second, _ = pipeline._try_generative_restoration(
+        pixel_result,
+        FIXTURE,
+        11,
+        Box(0, 0, 100, 50),
+        artwork_path,
+        Box(0, 0, 100, 50),
+        occurrence,
+    )
+    assert first is not None
+    assert second is not None
+    assert provider.calls == 2
+    assert pipeline._restoration_cost_used == 14
+
+
 def test_non_numeric_reported_cost_uses_upper_bound_and_completes_document(
     tmp_path, monkeypatch
 ):
