@@ -245,7 +245,7 @@ class Pipeline:
             form = self._form_results[number]
             page.is_order_form = form.is_order_form
             page.form_header_json = form.as_json() if form.is_order_form else "{}"
-            self.session.commit()
+        self.session.commit()
 
     def _prepare_watermark_cleaning(
         self,
@@ -775,6 +775,12 @@ class Pipeline:
             return
         watermark_evidence = watermark_evidence or []
         deterministic_watermark_passed = False
+        deterministic_candidate = False
+        cleaning_verification = None
+        deterministic_verification = None
+        verification_source = source
+        verification_artwork = artwork_output
+        verification_origin = (padded_box.left, padded_box.top)
         if watermark_evidence and watermark_cleaning is not None:
             cleaned_pdf, cleaned_page = watermark_cleaning
             cleaning_verification = verify_cleaned_ad(
@@ -823,37 +829,15 @@ class Pipeline:
                             },
                             "verification": cleaning_verification.as_dict(),
                         },
-                        "verification": {
-                            "status": "passed",
-                            "checks": [
-                                {
-                                    "name": "watermark_text_object_cleaning",
-                                    "status": "passed",
-                                }
-                            ],
-                        },
                     }
                 )
-                deterministic_watermark_passed = result.image is not None
-                if deterministic_watermark_passed:
-                    result.manifest.update(
-                        {
-                            "deterministic_restoration": {
-                                "status": "passed",
-                                "reason": (
-                                    "The cleaned PDF passed marker, text, and "
-                                    "pixel-preservation checks."
-                                ),
-                            },
-                            "review_status": "not_required",
-                            "review_exemption_reason": (
-                                "Human review is not required because the "
-                                "deterministic PDF cleaning passed all three "
-                                "losslessness checks."
-                            ),
-                            "edit_status": "applied",
-                        }
-                    )
+                deterministic_candidate = result.image is not None
+                verification_source = cleaned_pdf
+                verification_artwork = cleaned_artwork
+                verification_origin = (
+                    cleaned_padded_box.left,
+                    cleaned_padded_box.top,
+                )
             else:
                 result = RestorationResult(
                     image=None,
@@ -939,21 +923,39 @@ class Pipeline:
             )
         proposal_image = result.image
         review_reason = result.review_reason
-        if proposal_image is not None and not deterministic_watermark_passed:
+        if proposal_image is not None:
             fields = json.loads(occurrence.fields_json).get("fields", {})
             verification = verify_proposal(
-                source,
+                verification_source,
                 page_number,
                 box,
                 self.render_dpi,
-                artwork_output,
+                verification_artwork,
                 proposal_image,
-                (padded_box.left, padded_box.top),
+                verification_origin,
                 self.artwork_dpi,
                 result.manifest,
                 [str(value) for value in fields.values() if value],
             )
+            if cleaning_verification is not None:
+                cleaning_checks = [
+                    {
+                        "name": f"watermark_{name}",
+                        **check,
+                    }
+                    for name, check in cleaning_verification.as_dict().items()
+                    if isinstance(check, dict)
+                ]
+                verification["checks"].extend(cleaning_checks)
+                verification["status"] = (
+                    "passed"
+                    if verification["status"] == "passed"
+                    and cleaning_verification.passed
+                    else "failed"
+                )
             result.manifest["verification"] = verification
+            if cleaning_verification is not None:
+                deterministic_verification = verification
             if verification["status"] != "passed":
                 proposal_image = None
                 review_reason = (
@@ -964,7 +966,51 @@ class Pipeline:
                 )
                 result.manifest["edit_status"] = "refused"
             else:
-                result.manifest["restoration_mode"] = "pixel_shift"
+                result.manifest["restoration_mode"] = (
+                    "deterministic_text_object"
+                    if cleaning_verification is not None
+                    else "pixel_shift"
+                )
+                deterministic_watermark_passed = (
+                    cleaning_verification is not None
+                )
+                if deterministic_watermark_passed:
+                    result.manifest.update(
+                        {
+                            "deterministic_restoration": {
+                                "status": "passed",
+                                "reason": (
+                                    "The cleaned PDF and independent restoration "
+                                    "verification both passed."
+                                ),
+                            },
+                            "review_status": "not_required",
+                            "review_exemption_reason": (
+                                "Human review is not required because the "
+                                "deterministic PDF cleaning and independent "
+                                "verification both passed."
+                            ),
+                            "edit_status": "applied",
+                        }
+                    )
+        if (
+            cleaning_verification is not None
+            and not deterministic_watermark_passed
+        ):
+            result.manifest["deterministic_restoration"] = {
+                "status": "refused",
+                "reason": (
+                    "Independent verification of the cleaned PDF restoration "
+                    "failed."
+                    if deterministic_candidate
+                    else (
+                        result.review_reason
+                        or "Level-one restoration produced no image."
+                    )
+                ),
+            }
+            result.manifest["review_status"] = "pending"
+            result.manifest["edit_status"] = "refused"
         if proposal_image is None and self.image_edit_provider is not None:
             proposal_image, review_reason = self._try_generative_restoration(
                 result,
@@ -975,6 +1021,16 @@ class Pipeline:
                 padded_box,
                 occurrence,
             )
+            if deterministic_verification is not None:
+                result.manifest["verification"]["checks"].extend(
+                    {
+                        "name": f"deterministic_{check['name']}",
+                        **check,
+                    }
+                    for check in deterministic_verification["checks"]
+                )
+                if deterministic_verification["status"] != "passed":
+                    result.manifest["verification"]["status"] = "failed"
         if watermark_evidence and not deterministic_watermark_passed:
             result.manifest["watermark"] = {
                 "detected": True,
@@ -982,13 +1038,16 @@ class Pipeline:
                 "source": "pdf_text_layer",
             }
             result.manifest["cascade_level"] = 2
-            result.manifest["deterministic_restoration"] = {
-                "status": "refused",
-                "reason": (
-                    "Watermark remains in a deterministic PDF render; "
-                    "pixel-shift restoration is insufficient."
-                ),
-            }
+            result.manifest.setdefault(
+                "deterministic_restoration",
+                {
+                    "status": "refused",
+                    "reason": (
+                        "Watermark remains in a deterministic PDF render; "
+                        "pixel-shift restoration is insufficient."
+                    ),
+                },
+            )
             if proposal_image is None:
                 result.manifest["edit_status"] = "refused"
                 result.manifest["review_status"] = "pending"
