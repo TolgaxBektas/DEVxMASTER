@@ -1,3 +1,19 @@
+# Social assets
+
+`facebook.png`, `instagram.png`, `linkedin.png`, `youtube.png`, `tiktok.png`,
+and `xing.png` are rasterized from the corresponding Simple Icons SVG assets
+distributed via the Simple Icons npm package/CDN. The LinkedIn, YouTube, TikTok,
+and Xing assets were fetched from Simple Icons `latest` on 2026-08-18 and
+retained their Simple Icons brand paths with official colours:
+
+- LinkedIn `#0A66C2`
+- YouTube `#FF0000`
+- TikTok `#000000`
+- Xing `#006567`
+
+The Simple Icons assets are available under CC0 1.0. Simple Icons' trademark
+disclaimer remains applicable to the brand marks.
+
 # CC0 1.0 Universal
 
 ## Statement of Purpose

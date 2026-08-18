@@ -204,20 +204,33 @@ def _contact_values(text: str) -> list[tuple[str, str]]:
     values: list[tuple[str, str]] = []
     for match in re.finditer(r"[\w.+-]+@[\w.-]+\.[a-z]{2,}", text, re.I):
         values.append(("email", match.group(0)))
-    for match in re.finditer(
+    social_pattern = (
         r"(?:(?:https?://)?(?:www\.)?"
-        r"(?:facebook|instagram)\.[a-z]{2,}(?:/[^\s,;)]*)?)",
-        text,
-        re.I,
-    ):
+        r"(?:facebook|instagram|linkedin|youtube|tiktok|xing)\.[a-z]{2,}"
+        r"(?:/[^\s,;)]*)?)"
+    )
+    for match in re.finditer(social_pattern, text, re.I):
         domain = match.group(0)
-        channel = "facebook" if "facebook." in domain.lower() else "instagram"
+        lowered = domain.lower()
+        channel = next(
+            social
+            for social in (
+                "facebook",
+                "instagram",
+                "linkedin",
+                "youtube",
+                "tiktok",
+                "xing",
+            )
+            if f"{social}." in lowered
+        )
         values.append((channel, domain))
     without_email = re.sub(r"[\w.+-]+@[\w.-]+\.[a-z]{2,}", "", text, flags=re.I)
+    without_social = re.sub(social_pattern, "", without_email, flags=re.I)
     for match in re.finditer(
         r"(?:(?:https?://)?(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+"
         r"(?:/[^\s,;)]*)?)",
-        without_email,
+        without_social,
         re.I,
     ):
         values.append(("website", match.group(0)))
@@ -583,6 +596,10 @@ def _layout_elements(
     line_height: int,
     block_gap: int,
     cap_height: int,
+    *,
+    frame_left: int | None = None,
+    frame_right: int | None = None,
+    alignment: str = "left",
 ) -> dict[str, Any]:
     boxes = []
     layout_blocks = []
@@ -590,29 +607,47 @@ def _layout_elements(
     for block in blocks:
         block_layout = {"top": y, "rows": []}
         for row in block["rows"]:
-            row_x = common_x
-            row_layout = {"top": y, "parts": []}
+            if frame_left is not None and frame_right is not None:
+                if alignment == "centred":
+                    row_x = (frame_left + frame_right - row["width"]) / 2
+                elif alignment == "right":
+                    row_x = frame_right - row["width"]
+                else:
+                    row_x = frame_left
+                row_x = max(frame_left, min(row_x, frame_right - row["width"]))
+                if alignment == "right":
+                    row_x = math.floor(row_x)
+                else:
+                    row_x = round(row_x)
+            else:
+                row_x = common_x
+            row_layout = {"top": y, "x": int(row_x), "parts": []}
             for part in row["parts"]:
-                start_x = row_x
+                part_font = part.get("font", font)
+                start_x = int(round(row_x))
                 logo_position = None
                 logo_box = None
                 if part["logo"] is not None:
-                    bbox = font.getbbox(part["display_value"])
+                    bbox = part_font.getbbox(part["display_value"])
                     logo_y = int(round(y + (bbox[1] + bbox[3] - part["logo"].height) / 2))
-                    logo_position = (int(row_x), logo_y)
+                    logo_position = (start_x, logo_y)
                     logo_box = (
-                        int(row_x),
+                        start_x,
                         logo_y,
-                        int(row_x) + part["logo"].width,
+                        start_x + part["logo"].width,
                         logo_y + part["logo"].height,
                     )
                     boxes.append(logo_box)
-                    row_x += part["logo"].width + int(round(0.4 * cap_height))
-                text_position = (int(row_x), int(y))
+                    row_x = (
+                        start_x
+                        + part["logo"].width
+                        + int(round(0.4 * cap_height))
+                    )
+                text_position = (int(round(row_x)), int(y))
                 text_box = measure_draw.textbbox(
                     text_position,
                     part["display_value"],
-                    font=font,
+                    font=part_font,
                 )
                 boxes.append(text_box)
                 row_layout["parts"].append(
@@ -626,7 +661,7 @@ def _layout_elements(
                     }
                 )
                 row_x += measure_draw.textlength(
-                    part["display_value"], font=font
+                    part["display_value"], font=part_font
                 ) + int(round(2 * cap_height))
             block_layout["rows"].append(row_layout)
             y += line_height
@@ -759,6 +794,54 @@ def _anchor(image: Image.Image) -> dict[str, Any] | None:
     return anchor
 
 
+def _contact_alignment(
+    anchor: dict[str, Any],
+    frame_left: int,
+    frame_right: int,
+) -> str:
+    explicit = anchor.get("alignment")
+    if explicit in {"left", "right", "centred"}:
+        return explicit
+    segments = anchor.get("contact_segments") or [anchor]
+    heights = sorted(
+        segment.get("bottom", 0) - segment.get("top", 0)
+        for segment in segments
+        if segment.get("bottom") is not None and segment.get("top") is not None
+    )
+    tolerance = max(1, heights[len(heights) // 2]) if heights else 1
+    common_left = max(
+        (
+            sum(
+                abs(segment["left"] - other["left"]) <= tolerance
+                for other in segments
+            )
+            for segment in segments
+        ),
+        default=0,
+    ) >= max(2, len(segments) // 2)
+    common_right = max(
+        (
+            sum(
+                abs(segment["right"] - other["right"]) <= tolerance
+                for other in segments
+            )
+            for segment in segments
+        ),
+        default=0,
+    ) >= max(2, len(segments) // 2)
+    if common_left and not common_right:
+        return "left"
+    if common_right and not common_left:
+        return "right"
+    left = min(segment["left"] for segment in segments)
+    right = max(segment["right"] for segment in segments)
+    centre = (left + right) / 2
+    frame_centre = (frame_left + frame_right) / 2
+    if abs(centre - frame_centre) <= (frame_right - frame_left) * 0.08:
+        return "centred"
+    return "left" if centre < frame_centre else "right"
+
+
 def _normal_key(channel: str, value: str) -> tuple[str, str]:
     value = value.strip().lower()
     value = re.sub(r"^[a-z]+://", "", value)
@@ -876,7 +959,10 @@ def _layout_height(
     for block in blocks:
         for row in block["rows"]:
             row_bottom = max(
-                [font.getbbox(part["value"])[3] for part in row["parts"]]
+                [
+                    part.get("font", font).getbbox(part["display_value"])[3]
+                    for part in row["parts"]
+                ]
                 + [cap_height]
             )
             glyph_bottom = max(glyph_bottom, offset + row_bottom)
@@ -1056,6 +1142,14 @@ def _channel_value(
             if "facebook." in lowered
             else "instagram"
             if "instagram." in lowered
+            else "linkedin"
+            if "linkedin." in lowered
+            else "youtube"
+            if "youtube." in lowered
+            else "tiktok"
+            if "tiktok." in lowered
+            else "xing"
+            if "xing." in lowered
             else "website"
             if "www." in lowered or ".de" in lowered
             else "phone"
@@ -1072,7 +1166,14 @@ def _display_value(channel: str, value: str) -> str:
             flags=re.I,
         )
         return f"{'T' if channel == 'phone' else 'F'} {value}"
-    if channel in {"facebook", "instagram"}:
+    if channel in {
+        "facebook",
+        "instagram",
+        "linkedin",
+        "youtube",
+        "tiktok",
+        "xing",
+    }:
         return re.sub(r"^(?:[a-z]+://)?(?:www\.)?", "", value.strip(), flags=re.I)
     return value
 
@@ -1109,6 +1210,21 @@ def _group_lines(
     result = []
     pair_gap = int(round(2 * cap_height))
     logo_gap = int(round(0.4 * cap_height))
+
+    def row_width(items, row_font, name):
+        width = 0
+        for index, (channel, value) in enumerate(items):
+            if index:
+                width += pair_gap
+            logo = _asset(channel, cap_height) if name == "social" else None
+            if logo is not None:
+                width += logo.width + logo_gap
+            width += draw.textlength(
+                _display_value(channel, value),
+                font=row_font,
+            )
+        return width
+
     for name, items in groups:
         if not items:
             continue
@@ -1121,27 +1237,49 @@ def _group_lines(
         )
         items = sorted(items, key=lambda item: order.get(item[0], 99))
         rows = []
+        row_fonts = []
         if name == "phone" and len(items) == 2:
-            widths = [
-                draw.textlength(_display_value(channel, value), font=font)
-                for channel, value in items
-            ]
-            if sum(widths) + pair_gap <= available:
+            if row_width(items, font, name) <= available:
                 rows.append(items)
+                row_fonts.append(font)
             else:
                 rows.extend((item,) for item in items)
+                row_fonts.extend(font for _item in items)
         elif name == "email_web":
-            rows.extend((item,) for item in items)
+            if len(items) == 2 and row_width(items, font, name) <= available:
+                rows.append(items)
+                row_fonts.append(font)
+            else:
+                rows.extend((item,) for item in items)
+                row_fonts.extend(font for _item in items)
+        elif name == "social" and len(items) > 1:
+            social_font = font
+            if row_width(items, social_font, name) > available:
+                font_path = getattr(font, "path", None)
+                for size in range(font.size - 1, max(0, font.size - 2) - 1, -1):
+                    if font_path is None:
+                        break
+                    candidate = ImageFont.truetype(font_path, size)
+                    if row_width(items, candidate, name) <= available:
+                        social_font = candidate
+                        break
+            if row_width(items, social_font, name) <= available:
+                rows.append(items)
+                row_fonts.append(social_font)
+            else:
+                rows.extend((item,) for item in items)
+                row_fonts.extend(font for _item in items)
         else:
             rows.extend((item,) for item in items)
+            row_fonts.extend(font for _item in items)
         row_specs = []
-        for row in rows:
+        for row, row_font in zip(rows, row_fonts):
             parts = []
             width = 0
             for channel, value in row:
                 logo = _asset(channel, cap_height) if name == "social" else None
                 display_value = _display_value(channel, value)
-                text_width = draw.textlength(display_value, font=font)
+                text_width = draw.textlength(display_value, font=row_font)
                 if parts:
                     width += pair_gap
                 if logo is not None:
@@ -1155,6 +1293,7 @@ def _group_lines(
                         "logo": logo,
                         "logo_used": logo is not None,
                         "text_width": round(text_width, 2),
+                        "font": row_font,
                     }
                 )
             row_specs.append({"parts": parts, "width": round(width, 2)})
@@ -1166,6 +1305,34 @@ def _group_lines(
             }
         )
     return result
+
+
+def _render_channels(
+    reset_values: list[tuple[str, str]],
+    requested_channels: list[tuple[str, str]],
+) -> tuple[list[tuple[str, str]], set[tuple[str, tuple[str, str]]]]:
+    rendered: list[tuple[str, str]] = []
+    rendered_normal_keys: set[tuple[str, str]] = set()
+    erased_keys: set[tuple[str, tuple[str, str]]] = set()
+    for channel, value in reset_values:
+        normal_key = _normal_key(channel, value)
+        erased_key = (channel, normal_key)
+        if erased_key in erased_keys:
+            continue
+        erased_keys.add(erased_key)
+        rendered.append((channel, value))
+        rendered_normal_keys.add(normal_key)
+    for channel, value in requested_channels:
+        normal_key = _normal_key(channel, value)
+        if normal_key in rendered_normal_keys:
+            continue
+        rendered_normal_keys.add(normal_key)
+        rendered.append((channel, value))
+    rendered_erased_keys = {
+        (channel, _normal_key(channel, value))
+        for channel, value in rendered
+    }
+    return rendered, erased_keys - rendered_erased_keys
 
 
 def compose_extra_lines(
@@ -1217,18 +1384,11 @@ def compose_extra_lines(
         )
     reset_values = reset["values"] if reset is not None else []
     requested_channels = list(channels)
-    rendered_keys: set[tuple[str, str]] = set()
-    render_channels = []
-    for channel, value in [*reset_values, *channels]:
-        key = _normal_key(channel, value)
-        if key in rendered_keys:
-            continue
-        rendered_keys.add(key)
-        render_channels.append((channel, value))
-    if reset is not None and any(
-        _normal_key(channel, value) not in rendered_keys
-        for channel, value in reset_values
-    ):
+    render_channels, missing_erased_values = _render_channels(
+        reset_values,
+        requested_channels,
+    )
+    if reset is not None and missing_erased_values:
         reset = None
         reset_skip_reason = "removed_value_not_preserved"
         render_channels = channels
@@ -1356,26 +1516,9 @@ def compose_extra_lines(
                     not in {_normal_key(*value) for value in reset_values}
                 ],
             ]
-    if anchor.get("alignment_left") is not None:
-        centred = False
-    else:
-        centred = (
-            abs((anchor["left"] + anchor["right"]) / 2 - source.width / 2)
-            < source.width * 0.06
-        )
-    desired_left = max(
-        left_limit,
-        (
-            anchor["alignment_left"]
-            if anchor.get("alignment_left") is not None
-            else anchor["left"]
-        ),
-    )
-    max_available = (
-        max(0, right_limit - desired_left)
-        if reset is not None and not centred
-        else right_limit - left_limit
-    )
+    alignment = _contact_alignment(anchor, content_left, content_right)
+    centred = alignment == "centred"
+    max_available = right_limit - left_limit
     if max_available <= 0:
         return ExtraLineComposition(
             source.copy(),
@@ -1475,6 +1618,14 @@ def compose_extra_lines(
     content_height, glyph_bottom = _layout_height(
         blocks, line_height, block_gap, font, cap_height, bottom_air
     )
+
+    def block_x(width: float) -> float:
+        if alignment == "right":
+            return right_limit - width
+        if alignment == "centred":
+            return content_left + (content_right - content_left - width) / 2
+        return left_limit
+
     font_floor_applied = probe.size > minimum_font_size and font.size == minimum_font_size
     if reset is not None:
         band_top, band_bottom = _reset_band(
@@ -1482,10 +1633,13 @@ def compose_extra_lines(
         )
         available_bottom = band_bottom - reset["top"] - bottom_air
         block_width = max((block["width"] for block in blocks), default=0)
-        span_left = max(0, int(round(desired_left - cap_height * 0.35)))
+        span_left = max(
+            0,
+            int(round(block_x(block_width) - cap_height * 0.35)),
+        )
         span_right = min(
             source.width,
-            int(round(desired_left + block_width + cap_height * 0.35)),
+            int(round(block_x(block_width) + block_width + cap_height * 0.35)),
         )
         homogeneous_room = (
             content_height <= available_bottom
@@ -1526,11 +1680,7 @@ def compose_extra_lines(
         delta = max(0, content_height - available_bottom)
         growth = delta
         max_block_width = max((block["width"] for block in blocks), default=0)
-        planned_common_x = (
-            content_left + (content_right - content_left - max_block_width) / 2
-            if centred
-            else desired_left
-        )
+        planned_common_x = block_x(max_block_width)
         planned_common_x = max(
             left_limit,
             min(planned_common_x, right_limit - max_block_width),
@@ -1556,6 +1706,9 @@ def compose_extra_lines(
                 line_height,
                 block_gap,
                 cap_height,
+                frame_left=left_limit,
+                frame_right=right_limit,
+                alignment=alignment,
             )
             candidate_boxes = candidate_layout["boxes"]
             candidate_delta = max(
@@ -1684,11 +1837,7 @@ def compose_extra_lines(
     draw = ImageDraw.Draw(grown)
     manifest_blocks = []
     max_block_width = max((block["width"] for block in blocks), default=0)
-    desired_common_x = (
-        content_left + (content_right - content_left - max_block_width) / 2
-        if centred
-        else desired_left
-    )
+    desired_common_x = block_x(max_block_width)
     common_x = max(
         left_limit,
         min(desired_common_x, right_limit - max_block_width),
@@ -1713,11 +1862,13 @@ def compose_extra_lines(
         line_height,
         block_gap,
         cap_height,
+        frame_left=left_limit,
+        frame_right=right_limit,
+        alignment=alignment,
     )
     for block, block_layout in zip(blocks, element_layout["blocks"]):
         block_start = block_layout["top"]
-        block_x = common_x
-        shifted = not centred and abs(common_x - desired_left) > 0.01
+        shifted = False
         rows_manifest = []
         for row, row_layout in zip(block["rows"], block_layout["rows"]):
             row_parts = []
@@ -1729,7 +1880,7 @@ def compose_extra_lines(
                 draw.text(
                     part_layout["text_position"],
                     part["display_value"],
-                    font=font,
+                    font=part.get("font", font),
                     fill=text_colour,
                 )
                 row_parts.append(
@@ -1738,6 +1889,7 @@ def compose_extra_lines(
                         "value": part["value"],
                         "display_value": part["display_value"],
                         "logo_used": part["logo_used"],
+                        "font_size": part.get("font", font).size,
                         "position": [part_layout["start_x"], row_layout["top"]],
                         "logo_position": (
                             list(part_layout["logo_position"])
@@ -1753,7 +1905,7 @@ def compose_extra_lines(
                 {
                     "parts": row_parts,
                     "logo_used": all(part["logo_used"] for part in row_parts),
-                    "position": [round(block_x, 2), row_layout["top"]],
+                    "position": [row_layout["x"], row_layout["top"]],
                     "width": round(row["width"], 2),
                 }
             )
@@ -1792,6 +1944,7 @@ def compose_extra_lines(
             "content_end": content_end_value,
             "insertion_gap": insertion_gap,
             "centred": centred,
+            "alignment": alignment,
             "anchor_height": anchor_height,
             "cap_height": cap_height,
             "reference_height": reference_height,
