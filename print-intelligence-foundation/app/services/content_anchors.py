@@ -272,7 +272,19 @@ def _decode_qr(
             for item in decode(variant):
                 if not item.data:
                     continue
-                values.append(item.data.decode("utf-8", errors="replace").strip())
+                value = item.data.decode("utf-8", errors="replace").strip()
+                if not (
+                    len(value) >= 8
+                    and (
+                        value.casefold().startswith(
+                            ("http://", "https://", "www.")
+                        )
+                        or "@" in value
+                        or "." in value
+                    )
+                ):
+                    continue
+                values.append(value)
                 if decoder_region is None and item.rect:
                     decoder_region = {
                         "x": float(offset_x + item.rect.left / variant_scale),
@@ -282,15 +294,7 @@ def _decode_qr(
                     }
     except (OSError, ValueError):
         return [], "QR-Code konnte nicht gelesen werden.", None
-    values = sorted(set(value for value in values if value))
-    values = [
-        value for value in values
-        if len(value) >= 8 and (
-            value.casefold().startswith(("http://", "https://", "www."))
-            or "@" in value
-            or "." in value
-        )
-    ]
+    values = sorted(set(values))
     return values, None, decoder_region
 
 

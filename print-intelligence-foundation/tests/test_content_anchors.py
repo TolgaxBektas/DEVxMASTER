@@ -190,6 +190,28 @@ def test_qr_decoder_region_accounts_for_tile_offset(monkeypatch):
     assert region == {"x": 660.0, "y": 30.0, "width": 120.0, "height": 60.0}
 
 
+def test_qr_decoder_ignores_unaccepted_barcode_payload_region(monkeypatch):
+    class Rect:
+        left = 10
+        top = 20
+        width = 100
+        height = 40
+
+    class Item:
+        data = b"12345"
+        rect = Rect()
+
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "pyzbar.pyzbar",
+        types.SimpleNamespace(decode=lambda _image: [Item()]),
+    )
+    values, finding, region = _decode_qr(Image.new("RGB", (32, 32), "white"))
+    assert values == []
+    assert finding is None
+    assert region is None
+
+
 def test_phone_ocr_difference_is_uncertain_not_passed():
     result = compare_content_anchors(
         {
