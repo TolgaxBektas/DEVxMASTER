@@ -228,7 +228,15 @@ def _contact_values(text: str) -> list[tuple[str, str]]:
             text,
             flags=re.I,
         ).strip()
-        number_match = re.search(r"\d[\d\s./-]{4,}", number_text)
+        number_matches = re.finditer(r"\d[\d\s./-]*\d|\d+", number_text)
+        number_match = next(
+            (
+                match
+                for match in number_matches
+                if len(re.sub(r"\D", "", match.group(0))) >= 6
+            ),
+            None,
+        )
         if number_match:
             values.append(
                 (
@@ -342,6 +350,82 @@ def _rowwise_homogeneous(
         if matching / len(row) < 0.90:
             return False
     return True
+
+
+def _seam_repeatable(
+    image: Image.Image,
+    seam_y: int,
+    bottom: int,
+    left: int,
+    right: int,
+    tolerance: int = 18,
+) -> bool:
+    if bottom <= seam_y or right <= left:
+        return True
+    pixels = image.convert("RGB")
+    best_score = 0.0
+    best_seam = None
+    best_y = seam_y
+    candidate_limit = min(bottom - 12, seam_y + 40)
+    for candidate_y in range(seam_y, max(seam_y, candidate_limit)):
+        candidate = [pixels.getpixel((x, candidate_y)) for x in range(left, right)]
+        score = 1.0
+        for y in range(candidate_y, min(bottom, candidate_y + 12)):
+            matching = sum(
+                all(
+                    abs(pixels.getpixel((x, y))[index] - candidate[x - left][index])
+                    <= tolerance
+                    for index in range(3)
+                )
+                for x in range(left, right)
+            )
+            score = min(score, matching / len(candidate))
+        if score > best_score:
+            best_score = score
+            best_seam = candidate
+            best_y = candidate_y
+    if best_seam is None or best_score < 0.90:
+        return False
+    for y in range(best_y, bottom):
+        matching = sum(
+            all(
+                abs(pixels.getpixel((x, y))[index] - best_seam[x - left][index])
+                <= tolerance
+                for index in range(3)
+            )
+            for x in range(left, right)
+        )
+        if matching / len(best_seam) < 0.90:
+            return False
+    return True
+
+
+def _seam_band_stable(
+    image: Image.Image,
+    top: int,
+    bottom: int,
+    left: int,
+    right: int,
+    tolerance: int = 18,
+) -> bool:
+    pixels = image.convert("RGB")
+    references = []
+    for y in range(top, min(bottom, top + 12)):
+        row = [pixels.getpixel((x, y)) for x in range(left, right)]
+        if not row:
+            return False
+        reference = max(set(row), key=row.count)
+        matching = sum(
+            all(abs(pixel[index] - reference[index]) <= tolerance for index in range(3))
+            for pixel in row
+        )
+        if matching / len(row) < 0.80:
+            return False
+        references.append(reference)
+    return bool(references) and all(
+        all(abs(reference[index] - references[0][index]) <= tolerance for index in range(3))
+        for reference in references
+    )
 
 
 def _inline_fax_area(
@@ -763,6 +847,16 @@ def _band_end(
     return end
 
 
+def _append_geometry(
+    image: Image.Image,
+    background: tuple[int, int, int],
+    line_height: int,
+) -> tuple[int, int]:
+    content_end = _content_end(image, background)
+    insertion_gap = max(1, int(round(line_height / 2)))
+    return content_end, insertion_gap
+
+
 def _channel_value(
     item: str | tuple[str, str] | Mapping[str, str],
 ) -> tuple[str, str]:
@@ -1022,11 +1116,10 @@ def compose_extra_lines(
             )
         background = max(set(bottom), key=bottom.count)
         text_colour = (0, 0, 0) if sum(background) > 381 else (255, 255, 255)
-        content_end = _content_end(source, background)
-        gap = max(1, int(round(line_height / 2)))
-        content_end_value = content_end
-        insertion_gap = gap
-        band_end = content_end + gap
+        content_end_value, insertion_gap = _append_geometry(
+            source, background, line_height
+        )
+        band_end = content_end_value + insertion_gap
     content_bounds = _content_bounds(source, _edge_colour(source)) or (
         0,
         source.width,
@@ -1036,8 +1129,10 @@ def compose_extra_lines(
     left_limit = content_left + margin
     right_limit = content_right - margin
     inline_fax = None
-    fax_values = [item for item in channels if item[0] == "fax"]
-    if len(fax_values) == 1 and not any(item[0] == "phone" for item in channels):
+    fax_values = [item for item in requested_channels if item[0] == "fax"]
+    if len(fax_values) == 1 and not any(
+        item[0] == "phone" for item in requested_channels
+    ):
         fax_value = fax_values[0]
         for segment in anchor.get("contact_segments", []):
             segment_values = _contact_values(segment.get("text", ""))
@@ -1062,6 +1157,16 @@ def compose_extra_lines(
     )
     if inline_fax:
         channels = [item for item in channels if item[0] != "fax"]
+        if reset is not None:
+            channels = [
+                *reset_values,
+                *[
+                    item
+                    for item in channels
+                    if _normal_key(*item)
+                    not in {_normal_key(*value) for value in reset_values}
+                ],
+            ]
     if anchor.get("alignment_left") is not None:
         centred = False
     else:
@@ -1093,6 +1198,7 @@ def compose_extra_lines(
             },
         )
     probe = _fit_font("X", cap_height, bold)
+    draw_probe = ImageDraw.Draw(source)
     if probe is None:
         return ExtraLineComposition(
             source.copy(),
@@ -1103,7 +1209,6 @@ def compose_extra_lines(
                 "discarded": discarded,
             },
         )
-    draw_probe = ImageDraw.Draw(source)
     font = None
     blocks = []
     font_path = _font_path(bold)
@@ -1118,12 +1223,42 @@ def compose_extra_lines(
             },
         )
     minimum_font_size = max(1, math.ceil(probe.size * FONT_MINIMUM_SCALE))
+    inline_font = None
+    if inline_fax is not None:
+        display = _display_value(inline_fax["channel"], inline_fax["value"])
+        inline_minimum = max(
+            1,
+            math.ceil(
+                (inline_fax["segment"]["bottom"] - inline_fax["segment"]["top"])
+                * FONT_MINIMUM_SCALE
+            ),
+        )
+        inline_size = min(
+            probe.size,
+            max(
+                inline_minimum,
+                int(round(probe.size * (
+                    (inline_fax["segment"]["bottom"] - inline_fax["segment"]["top"])
+                    / max(1, cap_height)
+                ))),
+            ),
+        )
+        for size in range(inline_size, inline_minimum - 1, -1):
+            candidate = ImageFont.truetype(font_path, size)
+            bbox = draw_probe.textbbox((0, 0), display, font=candidate)
+            if bbox[2] - bbox[0] <= inline_fax["right"] - inline_fax["left"]:
+                inline_font = candidate
+                break
+        if inline_font is None:
+            inline_fax = None
+            fax_inline_reason = "rendered_text_does_not_fit"
+            channels = list(render_channels)
 
-    def fit_blocks(available: int, minimum_size: int):
+    def fit_blocks(values_to_fit, available: int, minimum_size: int):
         for size in range(probe.size, minimum_size - 1, -1):
             candidate = ImageFont.truetype(font_path, size)
             candidate_blocks = _group_lines(
-                channels, draw_probe, candidate, cap_height, available
+                values_to_fit, draw_probe, candidate, cap_height, available
             )
             if all(block["width"] <= available for block in candidate_blocks):
                 return candidate, candidate_blocks
@@ -1135,7 +1270,7 @@ def compose_extra_lines(
     if all(block["width"] <= max_available for block in probe_blocks):
         font, blocks = probe, probe_blocks
     else:
-        font, blocks = fit_blocks(max_available, minimum_font_size)
+        font, blocks = fit_blocks(channels, max_available, minimum_font_size)
     if font is None:
         return ExtraLineComposition(
             source.copy(),
@@ -1156,22 +1291,55 @@ def compose_extra_lines(
         reset_bottom = reset["bottom"]
         required_bottom = reset["top"] + content_height
         available_bottom = source.height - reset_bottom
-        needs_shift = required_bottom > source.height
+        block_width = max((block["width"] for block in blocks), default=0)
+        span_left = max(0, int(round(desired_left - cap_height * 0.35)))
+        span_right = min(
+            source.width,
+            int(round(desired_left + block_width + cap_height * 0.35)),
+        )
+        seam_check_bottom = min(
+            source.height,
+            reset_bottom + max(content_height, cap_height * 3),
+        )
         homogeneous_room = (
             available_bottom >= content_height
-            and _rowwise_homogeneous(
+            and _seam_repeatable(
                 source,
-                reset_bottom,
-                min(source.height, reset_bottom + content_height),
-                content_left,
-                content_right,
+                reset_bottom + max(1, cap_height // 2),
+                seam_check_bottom,
+                span_left,
+                span_right,
             )
         )
-        movable_artwork = _columnwise_homogeneous(
-            source, reset_bottom, source.height, left=content_left, right=content_right
+        movable_artwork = _seam_repeatable(
+            source,
+            reset_bottom + max(1, cap_height // 2),
+            source.height,
+            span_left,
+            span_right,
         )
-        if (not needs_shift and not homogeneous_room) or (
-            needs_shift and not movable_artwork
+        stable_seam = _seam_band_stable(
+            source,
+            reset_bottom + max(1, cap_height // 2),
+            source.height,
+            span_left,
+            span_right,
+        ) or _seam_band_stable(
+            source,
+            reset_bottom + max(1, cap_height // 2),
+            source.height,
+            reset["left"],
+            reset["right"],
+        ) or _columnwise_homogeneous(
+            source,
+            reset_bottom,
+            min(source.height, reset_bottom + 12),
+            left=reset["left"],
+            right=reset["right"],
+        )
+        growth = max(0, required_bottom - source.height)
+        if growth > int(round(source.height * 0.25)) or (
+            not homogeneous_room and not movable_artwork and not stable_seam
         ):
             reset = None
             reset_values = []
@@ -1185,8 +1353,9 @@ def compose_extra_lines(
             )
             background = max(set(bottom), key=bottom.count)
             text_colour = (0, 0, 0) if sum(background) > 381 else (255, 255, 255)
-            content_end_value = _content_end(source, background)
-            insertion_gap = max(1, int(round(line_height / 2)))
+            content_end_value, insertion_gap = _append_geometry(
+                source, background, line_height
+            )
             band_end = content_end_value + insertion_gap
             probe_blocks = _group_lines(
                 channels, draw_probe, probe, cap_height, max_available
@@ -1194,7 +1363,7 @@ def compose_extra_lines(
             font, blocks = (
                 (probe, probe_blocks)
                 if all(block["width"] <= max_available for block in probe_blocks)
-                else fit_blocks(max_available, minimum_font_size)
+                else fit_blocks(channels, max_available, minimum_font_size)
             )
             if font is None:
                 return ExtraLineComposition(
@@ -1210,11 +1379,12 @@ def compose_extra_lines(
                 blocks, line_height, block_gap, font, cap_height, bottom_air
             )
         else:
-            delta = max(0, required_bottom - reset_bottom)
+            delta = growth
             if delta:
                 grown = Image.new("RGB", (source.width, source.height + delta))
                 grown.paste(source, (0, 0))
-                seam = source.crop((0, reset_bottom - 1, source.width, reset_bottom))
+                seam_y = min(source.height - 1, reset_bottom + max(1, cap_height // 2))
+                seam = source.crop((0, seam_y, source.width, seam_y + 1))
                 for offset in range(delta):
                     grown.paste(seam, (0, reset_bottom + offset))
                 grown.paste(
@@ -1275,10 +1445,13 @@ def compose_extra_lines(
     )
     if inline_fax is not None:
         fax_display = _display_value(inline_fax["channel"], inline_fax["value"])
+        inline_font = inline_font or font
+        inline_bbox = draw.textbbox((0, 0), fax_display, font=inline_font)
+        inline_y = inline_fax["segment"]["bottom"] - inline_bbox[3]
         draw.text(
-            (inline_fax["left"], inline_fax["segment"]["top"]),
+            (inline_fax["left"], inline_y),
             fax_display,
-            font=font,
+            font=inline_font,
             fill=text_colour,
         )
     for block in blocks:

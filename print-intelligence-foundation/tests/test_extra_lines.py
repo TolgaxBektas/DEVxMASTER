@@ -445,6 +445,38 @@ def test_short_postal_or_house_number_does_not_count_as_duplicate(monkeypatch):
     assert result.manifest.get("discarded", []) == []
 
 
+def test_postal_and_house_numbers_are_not_phone_values():
+    assert extra_lines._contact_values("Hintergasse 13 | 35576 Wetzlar") == []
+
+
+def test_inline_fax_rejects_when_rendered_text_does_not_fit(monkeypatch):
+    image = Image.new("RGB", (260, 120), (20, 80, 140))
+    anchor = _anchor(left=30, right=80, bottom=55)
+    anchor["contact_segments"] = [
+        {
+            "text": "06441 42071 | schmidt.example.de",
+            "left": 30,
+            "top": 40,
+            "right": 80,
+            "bottom": 55,
+            "ocr_source": "whole_image",
+            "confidence": 95,
+        }
+    ]
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: anchor)
+    monkeypatch.setattr(extra_lines, "_content_bounds", lambda *_args: (0, 260))
+    monkeypatch.setattr(
+        extra_lines,
+        "_inline_fax_area",
+        lambda *_args: (90, 105, 40, (20, 80, 140)),
+    )
+
+    result = compose_extra_lines(image, [("fax", "06441 987654321")])
+
+    assert result.manifest["fax_inline"] is False
+    assert result.manifest["fax_inline_reason"] == "rendered_text_does_not_fit"
+
+
 def test_reference_height_uses_all_contact_lines_not_only_anchor(monkeypatch):
     image = Image.new("RGB", (500, 160), "white")
     ImageDraw.Draw(image).rectangle((0, 40, 499, 159), fill=(20, 80, 140))
@@ -753,10 +785,10 @@ def test_non_homogeneous_contact_background_falls_back_to_append(monkeypatch):
 
 
 def test_reset_growth_continues_each_column_from_seam(monkeypatch):
-    image = Image.new("RGB", (600, 90), (20, 80, 140))
+    image = Image.new("RGB", (600, 180), (20, 80, 140))
     draw = ImageDraw.Draw(image)
-    draw.line((0, 0, 0, 89), fill=(220, 20, 20), width=2)
-    draw.line((599, 0, 599, 89), fill=(20, 20, 220), width=2)
+    draw.line((0, 0, 0, 179), fill=(220, 20, 20), width=2)
+    draw.line((599, 0, 599, 179), fill=(20, 20, 220), width=2)
     font = ImageFont.truetype(extra_lines._font_path(False), 10)
     draw.text((30, 40), "Telefon 06441 12345", font=font, fill="white")
     draw.text((30, 55), "E-Mail info@example.de", font=font, fill="white")
