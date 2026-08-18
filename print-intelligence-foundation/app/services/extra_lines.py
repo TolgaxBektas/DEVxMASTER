@@ -609,11 +609,11 @@ def _layout_elements(
         for row in block["rows"]:
             if frame_left is not None and frame_right is not None:
                 if alignment == "centred":
-                    row_x = (frame_left + frame_right - row["width"]) / 2
+                    row_x = common_x - row["width"] / 2
                 elif alignment == "right":
-                    row_x = frame_right - row["width"]
+                    row_x = common_x - row["width"]
                 else:
-                    row_x = frame_left
+                    row_x = common_x
                 row_x = max(frame_left, min(row_x, frame_right - row["width"]))
                 if alignment == "right":
                     row_x = math.floor(row_x)
@@ -788,6 +788,31 @@ def _anchor(image: Image.Image) -> dict[str, Any] | None:
         if len(distinct_common) >= 2
         else None
     )
+    right_groups: list[list[dict[str, Any]]] = []
+    for segment in sorted(contacts, key=lambda item: item["right"]):
+        group = next(
+            (
+                group
+                for group in right_groups
+                if abs(group[0]["right"] - segment["right"]) <= tolerance
+            ),
+            None,
+        )
+        if group is None:
+            right_groups.append([segment])
+        else:
+            group.append(segment)
+    common_right = max(
+        right_groups,
+        key=lambda group: len({segment["text"] for segment in group}),
+        default=[],
+    )
+    distinct_common_right = {segment["text"] for segment in common_right}
+    anchor["alignment_right"] = (
+        round(sum(segment["right"] for segment in common_right) / len(common_right), 2)
+        if len(distinct_common_right) >= 2
+        else None
+    )
     anchor["contact_segments"] = contacts
     anchor["ocr_lines"] = ocr_lines
     anchor["ocr_metadata"] = metadata
@@ -840,6 +865,21 @@ def _contact_alignment(
     if abs(centre - frame_centre) <= (frame_right - frame_left) * 0.08:
         return "centred"
     return "left" if centre < frame_centre else "right"
+
+
+def _alignment_reference(anchor: dict[str, Any], alignment: str) -> float:
+    segments = anchor.get("contact_segments") or [anchor]
+    if alignment == "left" and anchor.get("alignment_left") is not None:
+        return float(anchor["alignment_left"])
+    if alignment == "right" and anchor.get("alignment_right") is not None:
+        return float(anchor["alignment_right"])
+    left = min(segment["left"] for segment in segments)
+    right = max(segment["right"] for segment in segments)
+    if alignment == "right":
+        return float(right)
+    if alignment == "centred":
+        return (left + right) / 2
+    return float(left)
 
 
 def _normal_key(channel: str, value: str) -> tuple[str, str]:
@@ -1310,7 +1350,7 @@ def _group_lines(
 def _render_channels(
     reset_values: list[tuple[str, str]],
     requested_channels: list[tuple[str, str]],
-) -> tuple[list[tuple[str, str]], set[tuple[str, tuple[str, str]]]]:
+) -> list[tuple[str, str]]:
     rendered: list[tuple[str, str]] = []
     rendered_normal_keys: set[tuple[str, str]] = set()
     erased_keys: set[tuple[str, tuple[str, str]]] = set()
@@ -1328,11 +1368,7 @@ def _render_channels(
             continue
         rendered_normal_keys.add(normal_key)
         rendered.append((channel, value))
-    rendered_erased_keys = {
-        (channel, _normal_key(channel, value))
-        for channel, value in rendered
-    }
-    return rendered, erased_keys - rendered_erased_keys
+    return rendered
 
 
 def compose_extra_lines(
@@ -1384,14 +1420,10 @@ def compose_extra_lines(
         )
     reset_values = reset["values"] if reset is not None else []
     requested_channels = list(channels)
-    render_channels, missing_erased_values = _render_channels(
+    render_channels = _render_channels(
         reset_values,
         requested_channels,
     )
-    if reset is not None and missing_erased_values:
-        reset = None
-        reset_skip_reason = "removed_value_not_preserved"
-        render_channels = channels
     channels = render_channels
     colours = _colours(source, anchor)
     if colours is None:
@@ -1518,6 +1550,7 @@ def compose_extra_lines(
             ]
     alignment = _contact_alignment(anchor, content_left, content_right)
     centred = alignment == "centred"
+    alignment_reference = _alignment_reference(anchor, alignment)
     max_available = right_limit - left_limit
     if max_available <= 0:
         return ExtraLineComposition(
@@ -1596,13 +1629,35 @@ def compose_extra_lines(
                 return candidate, candidate_blocks
         return None, []
 
-    probe_blocks = _group_lines(
-        channels, draw_probe, probe, cap_height, max_available
-    )
-    if all(block["width"] <= max_available for block in probe_blocks):
-        font, blocks = probe, probe_blocks
-    else:
-        font, blocks = fit_blocks(channels, max_available, minimum_font_size)
+    def fit_channel_blocks(values_to_fit):
+        probe_blocks = _group_lines(
+            values_to_fit, draw_probe, probe, cap_height, max_available
+        )
+        if all(block["width"] <= max_available for block in probe_blocks):
+            return probe, probe_blocks
+        return fit_blocks(values_to_fit, max_available, minimum_font_size)
+
+    font, blocks = fit_channel_blocks(channels)
+    if reset is not None:
+        erased_keys = {
+            (channel, _normal_key(channel, value))
+            for channel, value in reset_values
+        }
+        laid_out_keys = {
+            (part["channel"], _normal_key(part["channel"], part["value"]))
+            for block in blocks
+            for row in block["rows"]
+            for part in row["parts"]
+        }
+        if erased_keys - laid_out_keys:
+            reset = None
+            reset_values = []
+            reset_colours = None
+            reset_skip_reason = "removed_value_not_preserved"
+            channels = list(requested_channels)
+            if inline_fax is not None:
+                channels = [item for item in channels if item[0] != "fax"]
+            font, blocks = fit_channel_blocks(channels)
     if font is None:
         return ExtraLineComposition(
             source.copy(),
@@ -1621,10 +1676,12 @@ def compose_extra_lines(
 
     def block_x(width: float) -> float:
         if alignment == "right":
-            return right_limit - width
-        if alignment == "centred":
-            return content_left + (content_right - content_left - width) / 2
-        return left_limit
+            desired_x = alignment_reference - width
+        elif alignment == "centred":
+            desired_x = alignment_reference - width / 2
+        else:
+            desired_x = alignment_reference
+        return max(left_limit, min(desired_x, right_limit - width))
 
     font_floor_applied = probe.size > minimum_font_size and font.size == minimum_font_size
     if reset is not None:
@@ -1679,12 +1736,7 @@ def compose_extra_lines(
         )
         delta = max(0, content_height - available_bottom)
         growth = delta
-        max_block_width = max((block["width"] for block in blocks), default=0)
-        planned_common_x = block_x(max_block_width)
-        planned_common_x = max(
-            left_limit,
-            min(planned_common_x, right_limit - max_block_width),
-        )
+        planned_common_x = alignment_reference
         placement_top = reset["top"]
         placement_safe = False
         max_top = band_bottom + delta - content_height
@@ -1836,12 +1888,7 @@ def compose_extra_lines(
         )
     draw = ImageDraw.Draw(grown)
     manifest_blocks = []
-    max_block_width = max((block["width"] for block in blocks), default=0)
-    desired_common_x = block_x(max_block_width)
-    common_x = max(
-        left_limit,
-        min(desired_common_x, right_limit - max_block_width),
-    )
+    common_x = alignment_reference
     if inline_fax is not None:
         fax_display = _display_value(inline_fax["channel"], inline_fax["value"])
         inline_font = inline_font or font

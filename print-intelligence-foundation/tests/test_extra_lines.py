@@ -121,8 +121,7 @@ def test_alignment_is_inherited_for_left_right_and_centred_contacts(monkeypatch)
         assert result.manifest["alignment"] == expected
         rows = [row for block in result.manifest["blocks"] for row in block["rows"]]
         if expected == "centred":
-            frame_left, frame_right = result.manifest["content_bounds"]
-            frame_center = (frame_left + frame_right) / 2
+            frame_center = 110
             assert all(
                 abs(row["position"][0] + row["width"] / 2 - frame_center) <= 1
                 for row in rows
@@ -137,6 +136,40 @@ def test_alignment_is_inherited_for_left_right_and_centred_contacts(monkeypatch)
             assert max(ends) - min(ends) <= 1
         else:
             assert len({row["position"][0] for row in rows}) == 1
+
+
+def test_alignment_uses_contact_column_reference_edges(monkeypatch):
+    image = Image.new("RGB", (700, 180), (20, 80, 140))
+    values = [("website", "example.de"), ("facebook", "facebook.com/acme")]
+    cases = [
+        ("left", {"left": 170, "right": 300, "alignment_left": 170}, "left"),
+        ("right", {"left": 400, "right": 530, "alignment_right": 530}, "right"),
+        ("centred", {"left": 280, "right": 420}, "centred"),
+    ]
+    for expected, geometry, mode in cases:
+        alignment_fields = {
+            key: geometry.pop(key)
+            for key in ("alignment_left", "alignment_right")
+            if key in geometry
+        }
+        anchor = {
+            **_anchor(**geometry),
+            **alignment_fields,
+            "alignment": expected,
+        }
+        monkeypatch.setattr(extra_lines, "_anchor", lambda _image, anchor=anchor: anchor)
+        result = compose_extra_lines(image, values)
+        rows = [row for block in result.manifest["blocks"] for row in block["rows"]]
+        assert result.manifest["alignment"] == expected
+        if mode == "left":
+            assert all(row["position"][0] == 170 for row in rows)
+        elif mode == "right":
+            assert all(abs(row["position"][0] + row["width"] - 530) <= 1 for row in rows)
+        else:
+            assert all(
+                abs(row["position"][0] + row["width"] / 2 - 350) <= 1
+                for row in rows
+            )
 
 
 def test_pairing_and_social_packing_use_available_width():
@@ -321,8 +354,8 @@ def test_block_reset_rows_are_centered_individually(monkeypatch):
 
     assert result.manifest["mode"] == "block_reset"
     assert result.manifest["alignment"] == "centred"
+    frame_center = 275
     content_left, content_right = result.manifest["content_bounds"]
-    frame_center = (content_left + content_right) / 2
     for block in result.manifest["blocks"]:
         for row in block["rows"]:
             assert abs(row["position"][0] + row["width"] / 2 - frame_center) <= 1
@@ -394,12 +427,13 @@ def test_reset_falls_back_when_erased_value_guard_reports_missing(monkeypatch):
     }
     monkeypatch.setattr(extra_lines, "_anchor", lambda _image: anchor)
     monkeypatch.setattr(extra_lines, "_reset_block", lambda _anchor: reset)
+    original_group_lines = extra_lines._group_lines
     monkeypatch.setattr(
         extra_lines,
-        "_render_channels",
-        lambda *_args: (
-            [("website", "example.de")],
-            {("phone", ("digits", "0644112345"))},
+        "_group_lines",
+        lambda values, *args: original_group_lines(
+            [item for item in values if item[0] != "phone"],
+            *args,
         ),
     )
 
@@ -952,10 +986,8 @@ def test_resets_existing_communication_block_and_keeps_removed_values(
     rows = [row for block in result.manifest["blocks"] for row in block["rows"]]
     assert rows[0]["parts"][0]["display_value"].startswith("T ")
     assert rows[0]["parts"][1]["display_value"].startswith("F ")
-    content_left, content_right = result.manifest["content_bounds"]
-    frame_center = (content_left + content_right) / 2
     assert all(
-        abs(row["position"][0] + row["width"] / 2 - frame_center) <= 1
+        abs(row["position"][0] + row["width"] / 2 - 275) <= 1
         for row in rows
     )
 
