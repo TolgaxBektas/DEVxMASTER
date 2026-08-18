@@ -618,8 +618,8 @@ def _reset_elements_fit(
     frame_right: int,
     cap_height: int,
 ) -> bool:
-    padding = max(1, int(round(cap_height * 0.3)))
-    above_padding = max(padding, int(round(cap_height * 0.5)))
+    padding = max(1, int(round(cap_height * 0.15)))
+    above_padding = padding
     cleared = image.copy()
     clear_draw = ImageDraw.Draw(cleared)
     for segment in reset["segments"]:
@@ -1498,35 +1498,50 @@ def compose_extra_lines(
             left_limit,
             min(planned_common_x, right_limit - max_block_width),
         )
-        placement_top = band_top
+        placement_top = reset["top"]
         placement_safe = False
         max_top = band_bottom + delta - content_height
-        step = max(1, cap_height)
-        candidates = [band_top, min(max_top, band_top + step), max_top]
-        candidates = list(dict.fromkeys(candidates))
-        if max_top not in candidates:
+        step = max(1, int(round(cap_height * 0.5)))
+        candidates = [
+            candidate
+            for candidate in range(reset["top"], max(reset["top"], max_top) + 1, step)
+        ]
+        if max_top >= reset["top"] and max_top not in candidates:
             candidates.append(max_top)
+        clearance = max(1, int(round(cap_height * 0.15)))
         for candidate_top in candidates:
+            candidate_boxes = _planned_element_boxes(
+                blocks,
+                font,
+                planned_common_x,
+                candidate_top,
+                line_height,
+            )
+            candidate_delta = max(
+                0,
+                max((box[3] for box in candidate_boxes), default=0)
+                + clearance
+                + bottom_air
+                - band_bottom,
+            )
+            if candidate_delta > int(round(source.height * 0.25)):
+                continue
             if _reset_elements_fit(
                 source,
                 reset,
                 background,
-                _planned_element_boxes(
-                    blocks,
-                    font,
-                    planned_common_x,
-                    candidate_top,
-                    line_height,
-                ),
+                candidate_boxes,
                 band_top,
                 band_bottom,
-                delta,
+                candidate_delta,
                 content_left,
                 content_right,
                 cap_height,
             ):
                 placement_top = candidate_top
                 placement_safe = True
+                delta = candidate_delta
+                growth = candidate_delta
                 break
         if growth > int(round(source.height * 0.25)) or (
             not homogeneous_room and not movable_artwork and not stable_seam

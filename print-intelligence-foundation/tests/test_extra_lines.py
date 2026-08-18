@@ -829,6 +829,7 @@ def test_reset_does_not_move_nonhomogeneous_artwork(monkeypatch):
     assert result.manifest["block_reset_skipped_reason"] in {
         "no_room_without_moving_artwork",
         "non_homogeneous_background",
+        "elements_overlap_existing_content",
     }
 
 
@@ -983,3 +984,81 @@ def test_reset_clears_padded_removed_glyph_area(monkeypatch):
     for y in range(37, 68):
         for x in range(450, 523):
             assert result.image.getpixel((x, y)) == tuple(background)
+
+
+def test_reset_growth_delta_uses_last_planned_glyph_box(monkeypatch):
+    image = Image.new("RGB", (600, 160), (20, 80, 140))
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.truetype(extra_lines._font_path(False), 10)
+    draw.text((30, 40), "Telefon 06441 12345", font=font, fill="white")
+    draw.text((30, 55), "E-Mail info@example.de", font=font, fill="white")
+    anchor = _reset_anchor()
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: anchor)
+    monkeypatch.setattr(extra_lines, "_content_bounds", lambda *_args: (0, 600))
+    monkeypatch.setattr(extra_lines, "_reset_band", lambda *_args: (20, 80))
+    calls = []
+
+    def capture_fit(*args):
+        calls.append(args)
+        return True
+
+    monkeypatch.setattr(extra_lines, "_reset_elements_fit", capture_fit)
+    result = compose_extra_lines(
+        image,
+        [("fax", "06441 98765"), ("website", "example.de")],
+    )
+
+    assert result.manifest["mode"] == "block_reset"
+    boxes = calls[0][3]
+    cap_height = calls[0][9]
+    expected_delta = max(
+        0,
+        max(box[3] for box in boxes)
+        + round(cap_height * 0.15)
+        + result.manifest["bottom_air"]
+        - 80,
+    )
+    assert calls[0][6] == expected_delta
+    assert result.image.height == image.height + expected_delta
+
+
+def test_reset_uses_topmost_safe_candidate(monkeypatch):
+    image = Image.new("RGB", (600, 180), (20, 80, 140))
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.truetype(extra_lines._font_path(False), 10)
+    draw.text((30, 40), "Telefon 06441 12345", font=font, fill="white")
+    draw.text((30, 55), "E-Mail info@example.de", font=font, fill="white")
+    anchor = _reset_anchor()
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: anchor)
+    monkeypatch.setattr(extra_lines, "_content_bounds", lambda *_args: (0, 600))
+    monkeypatch.setattr(extra_lines, "_reset_band", lambda *_args: (20, 120))
+    calls = []
+
+    def accept_second_candidate(*args):
+        calls.append(args)
+        return len(calls) == 2
+
+    monkeypatch.setattr(extra_lines, "_reset_elements_fit", accept_second_candidate)
+    result = compose_extra_lines(image, [("fax", "06441 98765")])
+
+    assert result.manifest["mode"] == "block_reset"
+    assert result.manifest["blocks"][0]["top"] == 40 + 5
+    assert len(calls) >= 2
+
+
+def test_reset_growth_over_image_limit_falls_back(monkeypatch):
+    image = Image.new("RGB", (600, 100), (20, 80, 140))
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.truetype(extra_lines._font_path(False), 10)
+    draw.text((30, 40), "Telefon 06441 12345", font=font, fill="white")
+    draw.text((30, 55), "E-Mail info@example.de", font=font, fill="white")
+    anchor = _reset_anchor()
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: anchor)
+    monkeypatch.setattr(extra_lines, "_content_bounds", lambda *_args: (0, 600))
+    monkeypatch.setattr(extra_lines, "_reset_band", lambda *_args: (20, 20))
+    monkeypatch.setattr(extra_lines, "_reset_elements_fit", lambda *_args: True)
+
+    result = compose_extra_lines(image, [("fax", "06441 98765")])
+
+    assert result.manifest["mode"] == "append"
+    assert result.manifest["block_reset_skipped_reason"]
