@@ -12,6 +12,9 @@ EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", re.I)
 DOMAIN_RE = re.compile(
     r"(?:https?://)?(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}", re.I
 )
+TEXT_UNCERTAINTY_RATIO = 0.45
+TEXT_UNCOMPARABLE_RATIO = 0.35
+STRUCTURED_UNCERTAINTY_RATIO = 0.35
 
 
 def _normalize(value: str) -> str:
@@ -96,18 +99,8 @@ def _text_findings(
         return []
     matcher = SequenceMatcher(None, before, after, autojunk=False)
     ratio = matcher.ratio()
-    uncertain = (
-        min(len(before), len(after)) < 5
-        or ratio < 0.45
-        or any(
-            confidence is not None and confidence < 85
-            for confidence in (
-                original.get("ocr_confidence"),
-                restored.get("ocr_confidence"),
-            )
-        )
-    )
-    if ratio < 0.35:
+    uncertain = _text_comparison_is_uncertain(original, restored)
+    if ratio < TEXT_UNCOMPARABLE_RATIO:
         return [{
             "type": "uncertain",
             "severity": "unsicher",
@@ -184,7 +177,7 @@ def _remove_watermark_markers(
     return cleaned
 
 
-def _ocr_is_uncertain(
+def _text_comparison_is_uncertain(
     original: dict[str, Any],
     restored: dict[str, Any],
 ) -> bool:
@@ -192,7 +185,30 @@ def _ocr_is_uncertain(
     after = _words(restored.get("text_lines") or [])
     return (
         min(len(before), len(after)) < 5
-        or SequenceMatcher(None, before, after, autojunk=False).ratio() < 0.35
+        or SequenceMatcher(None, before, after, autojunk=False).ratio()
+        < TEXT_UNCERTAINTY_RATIO
+        or any(
+            confidence is not None and confidence < 85
+            for confidence in (
+                original.get("ocr_confidence"),
+                restored.get("ocr_confidence"),
+            )
+        )
+    )
+
+
+def _structured_values_are_uncertain(
+    original: dict[str, Any],
+    restored: dict[str, Any],
+) -> bool:
+    return (
+        SequenceMatcher(
+            None,
+            _words(original.get("text_lines") or []),
+            _words(restored.get("text_lines") or []),
+            autojunk=False,
+        ).ratio()
+        < STRUCTURED_UNCERTAINTY_RATIO
         or any(
             confidence is not None and confidence < 85
             for confidence in (
@@ -703,7 +719,10 @@ def compare_content_anchors(
     watermark_markers: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     findings: list[dict[str, str]] = []
-    ocr_uncertain = _ocr_is_uncertain(original, restored)
+    structured_values_uncertain = _structured_values_are_uncertain(
+        original,
+        restored,
+    )
     watermark_markers = tuple(watermark_markers or ())
     watermark_enabled = bool(watermark_markers)
     original_watermarks = (
@@ -767,11 +786,8 @@ def compare_content_anchors(
             findings.append({
                 "type": "missing",
                 "severity": (
-                    "abweichung"
-                    if category == "qr_codes"
-                    else
                     "unsicher"
-                    if ocr_uncertain
+                    if structured_values_uncertain
                     else "abweichung"
                 ),
                 "category": label,
@@ -781,11 +797,8 @@ def compare_content_anchors(
             findings.append({
                 "type": "new",
                 "severity": (
-                    "abweichung"
-                    if category == "qr_codes"
-                    else
                     "unsicher"
-                    if ocr_uncertain
+                    if structured_values_uncertain
                     else "abweichung"
                 ),
                 "category": label,
