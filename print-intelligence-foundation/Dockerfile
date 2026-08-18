@@ -9,6 +9,7 @@ RUN apt-get update \
         tesseract-ocr \
         tesseract-ocr-deu \
         tesseract-ocr-eng \
+        fonts-liberation \
         libzbar0 \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir -r requirements.txt
