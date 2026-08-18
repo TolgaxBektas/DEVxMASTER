@@ -10,19 +10,22 @@ from app.api import imports as imports_api
 from app.db.base import Base
 from app.core.config import Settings
 from app.main import app
-from app.models import AdOccurrence, Company, Document, Page, ReviewItem
+from app.models import AdOccurrence, Company, DeferredChannel, Document, Page, ReviewItem
 from app.services.storage import LocalStorage
 
 
-def _metadata():
+def _metadata(data_source=None):
+    source = {
+        "publication": "Testblatt",
+        "issue": "01/2026",
+        "page": 4,
+        "url": "https://example.test/testblatt.pdf",
+    }
+    if data_source is not None:
+        source["data_source"] = data_source
     return {
         "company_name": "Import Test GmbH",
-        "source": {
-            "publication": "Testblatt",
-            "issue": "01/2026",
-            "page": 4,
-            "url": "https://example.test/testblatt.pdf",
-        },
+        "source": source,
         "bbox": [1, 2, 30, 40],
         "crop_size": [1200, 800],
         "evidence": {
@@ -91,6 +94,173 @@ def test_print_batch_import_is_idempotent_and_reviewable(tmp_path):
         queue = client.get("/review-queue")
         assert queue.status_code == 200
         assert len(queue.json()) == 1
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize(
+    ("data_source", "expected"),
+    [
+        ("xdata_germany", "xdata_germany"),
+        ("xdata_nb_high_quality", "xdata_nb_high_quality"),
+    ],
+)
+def test_print_batch_import_uses_explicit_source(tmp_path, data_source, expected):
+    client, factory, _ = _client(tmp_path)
+    try:
+        response = client.post(
+            "/imports/print-batch",
+            files=_files(_metadata(data_source)),
+        )
+        assert response.status_code == 200
+        with factory() as session:
+            occurrence = session.scalar(select(AdOccurrence))
+            company = session.scalar(select(Company))
+            assert occurrence.data_source == expected
+            assert occurrence.source_explicit is True
+            assert company.data_source == expected
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_print_batch_import_defaults_to_germany_source(tmp_path):
+    client, factory, _ = _client(tmp_path)
+    try:
+        response = client.post("/imports/print-batch", files=_files())
+        assert response.status_code == 200
+        with factory() as session:
+            occurrence = session.scalar(select(AdOccurrence))
+            company = session.scalar(select(Company))
+            assert occurrence.data_source == "xdata_germany"
+            assert occurrence.source_explicit is False
+            assert company.data_source == "xdata_germany"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_print_batch_reimport_without_source_preserves_explicit_high_quality(tmp_path):
+    client, factory, _ = _client(tmp_path)
+    try:
+        explicit = _metadata("xdata_nb_high_quality")
+        assert client.post("/imports/print-batch", files=_files(explicit)).status_code == 200
+        assert client.post("/imports/print-batch", files=_files()).status_code == 200
+        with factory() as session:
+            occurrence = session.scalar(select(AdOccurrence))
+            company = session.scalar(select(Company))
+            metadata = json.loads(occurrence.artwork_metadata_json)
+            assert occurrence.data_source == "xdata_nb_high_quality"
+            assert occurrence.source_explicit is True
+            assert company.data_source == "xdata_nb_high_quality"
+            assert metadata["source"]["data_source"] == "xdata_nb_high_quality"
+            assert len(json.loads(company.secondary_findings_json)) == 1
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_print_batch_reimport_without_source_preserves_company_without_hard_contacts(
+    tmp_path,
+):
+    client, factory, _ = _client(tmp_path)
+    try:
+        explicit = _metadata("xdata_nb_high_quality")
+        explicit["evidence"] = {"verified": True}
+        assert client.post("/imports/print-batch", files=_files(explicit)).status_code == 200
+        germany_default = _metadata()
+        germany_default["evidence"] = {"verified": True}
+        assert (
+            client.post(
+                "/imports/print-batch",
+                files=_files(germany_default),
+            ).status_code
+            == 200
+        )
+        with factory() as session:
+            occurrence = session.scalar(select(AdOccurrence))
+            companies = session.scalars(select(Company)).all()
+            metadata = json.loads(occurrence.artwork_metadata_json)
+            assert len(companies) == 1
+            assert companies[0].data_source == "xdata_nb_high_quality"
+            assert occurrence.data_source == "xdata_nb_high_quality"
+            assert metadata["source"]["data_source"] == "xdata_nb_high_quality"
+            assert len(json.loads(companies[0].secondary_findings_json)) == 1
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_print_batch_reimport_germany_does_not_downgrade_high_quality(tmp_path):
+    client, factory, _ = _client(tmp_path)
+    try:
+        explicit = _metadata("xdata_nb_high_quality")
+        germany = _metadata("xdata_germany")
+        assert client.post("/imports/print-batch", files=_files(explicit)).status_code == 200
+        assert client.post("/imports/print-batch", files=_files(germany)).status_code == 200
+        with factory() as session:
+            occurrence = session.scalar(select(AdOccurrence))
+            assert occurrence.data_source == "xdata_nb_high_quality"
+            assert occurrence.source_explicit is True
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_print_batch_reimport_high_quality_upgrades_germany(tmp_path):
+    client, factory, _ = _client(tmp_path)
+    try:
+        germany = _metadata("xdata_germany")
+        explicit = _metadata("xdata_nb_high_quality")
+        assert client.post("/imports/print-batch", files=_files(germany)).status_code == 200
+        assert client.post("/imports/print-batch", files=_files(explicit)).status_code == 200
+        with factory() as session:
+            occurrence = session.scalar(select(AdOccurrence))
+            assert occurrence.data_source == "xdata_nb_high_quality"
+            assert occurrence.source_explicit is True
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_print_batch_preserves_deferred_channels_idempotently(tmp_path):
+    client, factory, _ = _client(tmp_path)
+    try:
+        metadata = _metadata()
+        metadata["company_name"] = "xDATA Zusatzkanäle GmbH"
+        metadata["evidence"].update(
+            {
+                "faxes": [
+                    {
+                        "value": "030 12345",
+                        "source_url": "https://example.test/kontakt",
+                        "retrieved_at": "2026-01-01T00:00:00Z",
+                    },
+                    "030 12345",
+                ],
+                "fax": "030 12345",
+                "social_profiles": [
+                    {
+                        "platform": "Facebook",
+                        "value": "https://facebook.example/test",
+                        "source_url": "https://example.test/kontakt",
+                        "retrieved_at": "2026-01-01T00:00:00Z",
+                    },
+                ],
+                "facebook": "https://facebook.example/test",
+                "instagram": {
+                    "value": "https://instagram.example/test",
+                    "source_url": "https://example.test/kontakt",
+                    "retrieved_at": "2026-01-01T00:00:00Z",
+                },
+            }
+        )
+        first = client.post("/imports/print-batch", files=_files(metadata))
+        second = client.post("/imports/print-batch", files=_files(metadata))
+        assert first.status_code == second.status_code == 200
+        with factory() as session:
+            channels = session.scalars(select(DeferredChannel)).all()
+            assert len(channels) == 3
+            assert {(channel.field_name, channel.value) for channel in channels} == {
+                ("fax", "030 12345"),
+                ("facebook", "https://facebook.example/test"),
+                ("instagram", "https://instagram.example/test"),
+            }
+            assert all(channel.status == "waiting_for_x_core" for channel in channels)
     finally:
         app.dependency_overrides.clear()
 
@@ -187,7 +357,7 @@ def test_print_batch_import_rejects_unknown_source_metadata(tmp_path):
     client, factory, _ = _client(tmp_path)
     try:
         metadata = _metadata()
-        metadata["source"]["supplement"] = "extra source detail"
+        metadata["source"]["data_source"] = "xdata_other"
         response = client.post("/imports/print-batch", files=_files(metadata))
         assert response.status_code == 422
         with factory() as session:

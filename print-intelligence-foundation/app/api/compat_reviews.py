@@ -30,33 +30,13 @@ def _data_source(
 ) -> str:
     if occurrence and occurrence.data_source:
         return occurrence.data_source
-    if document and (
-        (document.filename or "").startswith("print-batch-")
-        or (document.content_sha256 or "").startswith("print-batch-")
-    ):
-        return XDATA_NB_HIGH_QUALITY
     return XDATA_GERMANY
 
 
 def _source_clause(data_source: str):
-    fallback_print_batch = (
-        (Document.filename.like("print-batch-%"))
-        | (Document.content_sha256.like("print-batch-%"))
-    )
-    fallback_source = (
-        XDATA_NB_HIGH_QUALITY
-        if data_source == XDATA_NB_HIGH_QUALITY
-        else XDATA_GERMANY
-    )
-    if fallback_source == XDATA_NB_HIGH_QUALITY:
-        return or_(
-            AdOccurrence.data_source == data_source,
-            (AdOccurrence.id.is_(None) & fallback_print_batch),
-        )
-    return or_(
-        AdOccurrence.data_source == data_source,
-        (AdOccurrence.id.is_(None) & ~fallback_print_batch),
-    )
+    if data_source == XDATA_GERMANY:
+        return or_(AdOccurrence.data_source == data_source, AdOccurrence.id.is_(None))
+    return AdOccurrence.data_source == data_source
 
 
 def _item_query():
@@ -227,6 +207,22 @@ def _payload(item, occurrence, page, document, company, storage) -> dict[str, An
             "extracted_values": extracted_values,
             "evidence": evidence,
             "verification": verification,
+            "deferred_channels": [
+                {
+                    "id": channel.id,
+                    "field_name": channel.field_name,
+                    "value": channel.value,
+                    "source_url": channel.source_url,
+                    "retrieved_at": (
+                        channel.retrieved_at.isoformat()
+                        if channel.retrieved_at
+                        else None
+                    ),
+                    "data_source": channel.data_source,
+                    "status": channel.status,
+                }
+                for channel in (company.deferred_channels if company else [])
+            ],
         },
         "bbox": _bbox(occurrence.bbox) if occurrence else None,
         "restoration": {

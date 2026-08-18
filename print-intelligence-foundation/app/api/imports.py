@@ -1,6 +1,6 @@
 import hashlib
 import json
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt, ValidationError
@@ -10,7 +10,8 @@ from app.api.auth import require_auth
 from app.api.dependencies import session_dependency, storage_dependency
 from app.core.config import get_settings
 from app.models import AdOccurrence, Document, Page, ReviewItem
-from app.services.companies import XDATA_NB_HIGH_QUALITY, resolve_company
+from app.services.companies import XDATA_GERMANY, XDATA_NB_HIGH_QUALITY, resolve_company
+from app.services.deferred_channels import record_deferred_channels
 from app.services.ingest import UploadTooLargeError, read_limited
 from app.services.storage import sha256
 
@@ -18,6 +19,7 @@ from app.services.storage import sha256
 class PrintBatchSource(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    data_source: Literal["xdata_nb_high_quality", "xdata_germany"] = XDATA_GERMANY
     publication: str | None = None
     issue: str | None = None
     page: PositiveInt
@@ -47,7 +49,7 @@ router = APIRouter(
 def _stable_key(metadata: PrintBatchMetadata) -> str:
     identity = {
         "company_name": metadata.company_name,
-        "source": metadata.source.model_dump(),
+        "source": metadata.source.model_dump(exclude={"data_source"}),
         "bbox": metadata.bbox,
     }
     return hashlib.sha256(
@@ -122,7 +124,7 @@ def import_print_batch(
             occurrence_key=identity,
             bbox=json.dumps(payload.bbox),
             confidence=1.0,
-            data_source=XDATA_NB_HIGH_QUALITY,
+            data_source=payload.source.data_source,
         )
         session.add(occurrence)
     else:
@@ -130,23 +132,40 @@ def import_print_batch(
         occurrence = session.scalar(
             select(AdOccurrence).where(AdOccurrence.page_id == page.id)
         )
-    occurrence.data_source = XDATA_NB_HIGH_QUALITY
+    is_new_occurrence = occurrence.id is None
+    source_explicit = "data_source" in payload.source.model_fields_set
+    if is_new_occurrence:
+        occurrence.source_explicit = source_explicit
+        occurrence.data_source = payload.source.data_source
+    elif occurrence.source_explicit or source_explicit:
+        if occurrence.data_source != XDATA_NB_HIGH_QUALITY or (
+            payload.source.data_source == XDATA_NB_HIGH_QUALITY
+        ):
+            occurrence.data_source = payload.source.data_source
+        occurrence.source_explicit = True
     session.flush()
+    effective_source = occurrence.data_source
 
     company = resolve_company(
         session,
         payload.company_name,
         {"company": payload.company_name, **payload.evidence},
-        XDATA_NB_HIGH_QUALITY,
+        effective_source,
+        write_source=payload.source.data_source,
+    )
+    record_deferred_channels(
+        session, company, payload.evidence, payload.source.data_source
     )
 
     prefix = f"print-batch/{identity}"
     occurrence.artwork_path = storage.put(original_bytes, f"{prefix}/original.png")
     occurrence.restoration_path = storage.put(restored_bytes, f"{prefix}/restored.png")
+    stored_source = payload.source.model_dump()
+    stored_source["data_source"] = effective_source
     occurrence.artwork_metadata_json = json.dumps(
         {
             "company_name": payload.company_name,
-            "source": payload.source.model_dump(),
+            "source": stored_source,
             "crop_size": payload.crop_size,
             "evidence": payload.evidence,
             "plan_digest": payload.plan_digest,

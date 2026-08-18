@@ -7,7 +7,7 @@ from typing import Any
 from sqlalchemy import select
 
 from app.models import Company
-from app.services.dedupe import contact_key, normalize_name
+from app.services.dedupe import normalize_name
 
 XDATA_NB_HIGH_QUALITY = "xdata_nb_high_quality"
 XDATA_GERMANY = "xdata_germany"
@@ -18,9 +18,6 @@ def _digits(value: Any) -> str:
 
 
 def _contact_values(fields: dict[str, Any]) -> tuple[str, set[str], set[str], set[str]]:
-    key = contact_key(fields)
-    if not key.replace("|", ""):
-        key = ""
     domains: set[str] = set()
     phones: set[str] = set()
     emails: set[str] = set()
@@ -57,6 +54,14 @@ def _contact_values(fields: dict[str, Any]) -> tuple[str, set[str], set[str], se
 
     for name, value in fields.items():
         visit(name, value)
+    key_parts = []
+    if domains:
+        key_parts.append("domain=" + ",".join(sorted(domains)))
+    if phones:
+        key_parts.append("phone=" + ",".join(sorted(phones)))
+    if emails:
+        key_parts.append("email=" + ",".join(sorted(emails)))
+    key = "|".join(key_parts)
     return key, domains, phones, emails
 
 
@@ -77,16 +82,21 @@ def _matches(
     source: str,
 ) -> bool:
     stored_key, stored_domains, stored_phones, stored_emails = _stored_values(company)
-    if company.data_source == source and (
-        (key.startswith("weak:")) or stored_key == key
-    ):
-        return True
-    return bool(
-        (not key.startswith("weak:") and company.contact_key and key == company.contact_key)
-        or domains & stored_domains
-        or phones & stored_phones
-        or emails & stored_emails
+    incoming_hard = bool(domains or phones or emails)
+    stored_hard = bool(stored_domains or stored_phones or stored_emails)
+    hard_match = bool(
+        (incoming_hard and stored_hard)
+        and (
+            key == stored_key
+            or key == company.contact_key
+            or domains & stored_domains
+            or phones & stored_phones
+            or emails & stored_emails
+        )
     )
+    if hard_match:
+        return True
+    return company.data_source == source and not incoming_hard and not stored_hard
 
 
 def _append_secondary_finding(company: Company, source: str, fields: dict[str, Any]) -> None:
@@ -106,15 +116,17 @@ def resolve_company(
     session,
     name: str,
     fields: dict[str, Any],
-    source: str,
+    lookup_source: str,
+    write_source: str | None = None,
 ) -> Company:
+    write_source = lookup_source if write_source is None else write_source
     normalized = normalize_name(name)
     key, domains, phones, _emails = _contact_values(fields)
     if not key:
         digest = hashlib.sha256(
             json.dumps(fields, ensure_ascii=False, sort_keys=True).encode()
         ).hexdigest()
-        key = f"weak:{source}:{digest}"
+        key = f"weak:{lookup_source}:{digest}"
     candidates = session.scalars(
         select(Company).where(Company.normalized_name == normalized)
     ).all()
@@ -122,7 +134,7 @@ def resolve_company(
         (
             candidate
             for candidate in candidates
-            if _matches(candidate, key, domains, phones, _emails, source)
+            if _matches(candidate, key, domains, phones, _emails, lookup_source)
         ),
         None,
     )
@@ -132,7 +144,7 @@ def resolve_company(
             name=name,
             normalized_name=normalized,
             contact_key=key,
-            data_source=source,
+            data_source=write_source,
             canonical_fields_json=json.dumps(fields, ensure_ascii=False),
             secondary_findings_json="[]",
             canonical_updated_at=now,
@@ -140,12 +152,12 @@ def resolve_company(
         session.add(company)
         session.flush()
         return company
-    if source == XDATA_GERMANY and company.data_source == XDATA_NB_HIGH_QUALITY:
-        _append_secondary_finding(company, source, fields)
+    if write_source == XDATA_GERMANY and company.data_source == XDATA_NB_HIGH_QUALITY:
+        _append_secondary_finding(company, write_source, fields)
         return company
     company.name = name
     company.contact_key = key
     company.canonical_fields_json = json.dumps(fields, ensure_ascii=False)
-    company.data_source = source
+    company.data_source = write_source
     company.canonical_updated_at = now
     return company
