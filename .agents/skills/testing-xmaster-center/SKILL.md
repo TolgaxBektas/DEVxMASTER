@@ -9,9 +9,15 @@ description: How to bring up and end-to-end test the xMaster Center monorepo (sy
 Node on the box is 20.18.1 and corepack is broken — always call pnpm as
 `npm exec --yes pnpm@10.4.1 -- <command>`. Vite warns about the Node version but works.
 
+The app now lives in the DEVxMASTER monorepo root (`/home/ubuntu/repos/DEVxMASTER`); the old
+`/home/ubuntu/repos/xmaster-center` path may no longer exist. After a fresh clone/branch switch run
+`npm exec --yes pnpm@10.4.1 -- -r run build` once — `dev:api` imports
+`@xmaster-center/jobs/dist/index.js` and fails with `ERR_MODULE_NOT_FOUND` if the workspace
+packages were never built.
+
 ```bash
-cd /home/ubuntu/repos/xmaster-center
-docker compose up -d              # mysql :3307, print-ingest 127.0.0.1:8010, minio :9000/:9001 (bucket xmaster-center auto-created)
+cd /home/ubuntu/repos/DEVxMASTER
+docker compose up -d mysql minio  # mysql :3307, minio :9000/:9001 (bucket xmaster-center auto-created)
 export DATABASE_URL=mysql://xmaster:xmaster_dev_password@127.0.0.1:3307/xmaster_center
 export JWT_SECRET=replace-with-a-long-random-secret   # must match the stored admin secret_hash
 export PUBLIC_APP_ORIGIN=http://localhost:3020 ADMIN_PIN=1907 PORT=3010
@@ -104,6 +110,33 @@ the occurrence AND the lead in tenant 2 — always upload identical bytes in BOT
   (`starnberg-amtsblatt.pdf` 142 KB, `paderborn-messekatalog.pdf` 4 MB, `goerlitz-magazin.pdf` 10 MB).
   Do NOT set `INGESTION_MAX_UPLOAD_BYTES=102400` when testing with these — the default is 25 MB.
 - `docker compose up -d` now also starts SearXNG (`127.0.0.1:8081`, health `/healthz` via compose).
+
+## Data-Factory review tab („Prüfung“, `/ingestion/review`)
+- Gated on `PIF_REVIEW_TENANT_ID` (plus `PIF_BASE_URL` / `PIF_SERVICE_TOKEN`). Without the tenant id
+  the nav entry is absent and the page shows „Prüfung deaktiviert“; a session in another tenant sees
+  „Für diesen Mandanten sind keine Data-Factory-Prüffälle konfiguriert.“ and the image proxy
+  `GET /api/ingestion/reviews/:id/original|restored` answers 403
+  „Prüffall gehört zu einem anderen Mandanten“.
+- Seed cases in a local Data Factory instead of mocking: start print-intelligence-foundation with
+  `VISION_PROVIDER=recorded STORAGE_BACKEND=filesystem DATABASE_URL=sqlite:///... SERVICE_TOKEN=...`
+  and POST real pairs from `/home/ubuntu/run50/kunden/<case>/` (`original.png`, `restauriert.png`,
+  `evidence.json`) to `POST /imports/print-batch` (Bearer). Seed at least one `verified:true` and one
+  `verified:false` evidence file so both „Belegstatus: belegt“ / „nicht belegt“ render. A case with
+  no ad link is created with `insert into review_items (ad_id,...) values (NULL,...)`.
+- Decisions are proxied to the Data Factory; verify them in the SQLite `review_items`
+  (`status`, `review_note`) and in xMaster `audit_log` (`action='ingestion.review.decided'`,
+  `details_json`), not just in the UI. A failed decision must keep the note and show
+  „Die Entscheidung konnte nicht gespeichert werden. Die Notiz wurde nicht verändert.“ — the same
+  message also appears when the user lacks `ingestion.review.decide`.
+- **Trap: `scripts/seed.ts` has a hard-coded permission list.** Migrations such as
+  `drizzle/0011_ingestion_review_permissions.sql` only `UPDATE` existing `roles` rows, so on a FRESH
+  database (migrate → seed, roles table empty during the migration) the admin role never gets
+  `ingestion.review.read` / `ingestion.review.decide` and the tab stays invisible. Re-running
+  `db:migrate` does not help (migration already recorded). Apply the permission SQL manually, e.g.
+  `UPDATE roles SET permissions = JSON_ARRAY_APPEND(permissions,'$','ingestion.review.read') WHERE code='admin' AND NOT JSON_CONTAINS(permissions,'"ingestion.review.read"');`
+  and check with `select code, permissions from roles;` (JSON — use `JSON_CONTAINS`, not LIKE).
+- Extra users for the permission/tenant matrix: `secret_hash = sha256(secret + JWT_SECRET)`, so
+  `printf '%s' "2208$JWT_SECRET" | sha256sum` is enough to seed `user_identities` directly.
 
 ## Login
 Local provider, user `admin`, PIN from `ADMIN_PIN` (dev value `1907`). Browser login form at
