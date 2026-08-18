@@ -564,6 +564,121 @@ def _reset_band(
     return band_top, band_bottom
 
 
+def _planned_element_boxes(
+    blocks: list[dict[str, Any]],
+    font: ImageFont.FreeTypeFont,
+    common_x: float,
+    top: int,
+    line_height: int,
+) -> list[tuple[int, int, int, int]]:
+    boxes = []
+    y = top
+    for block in blocks:
+        for row in block["rows"]:
+            row_x = common_x
+            for part in row["parts"]:
+                if part["logo"] is not None:
+                    bbox = font.getbbox(part["display_value"])
+                    logo_y = int(round(y + (bbox[1] + bbox[3] - part["logo"].height) / 2))
+                    boxes.append(
+                        (
+                            int(row_x),
+                            logo_y,
+                            int(row_x) + part["logo"].width,
+                            logo_y + part["logo"].height,
+                        )
+                    )
+                    row_x += part["logo"].width + int(round(0.4 * (bbox[3] - bbox[1])))
+                bbox = font.getbbox(part["display_value"])
+                boxes.append(
+                    (
+                        int(row_x),
+                        int(y + bbox[1]),
+                        int(row_x + font.getlength(part["display_value"])),
+                        int(y + bbox[3]),
+                    )
+                )
+                row_x += font.getlength(part["display_value"]) + int(
+                    round(2 * (bbox[3] - bbox[1]))
+                )
+            y += line_height
+        y += line_height
+    return boxes
+
+
+def _reset_elements_fit(
+    image: Image.Image,
+    reset: dict[str, Any],
+    background: tuple[int, int, int],
+    boxes: list[tuple[int, int, int, int]],
+    band_top: int,
+    band_bottom: int,
+    delta: int,
+    frame_left: int,
+    frame_right: int,
+    cap_height: int,
+) -> bool:
+    padding = max(1, int(round(cap_height * 0.3)))
+    above_padding = max(padding, int(round(cap_height * 0.5)))
+    cleared = image.copy()
+    clear_draw = ImageDraw.Draw(cleared)
+    for segment in reset["segments"]:
+        clear_draw.rectangle(
+            (
+                max(0, int(segment["left"] - cap_height * 0.25)),
+                max(0, int(segment["top"] - cap_height * 0.25)),
+                min(image.width - 1, int(segment["right"] + cap_height * 0.25)),
+                min(image.height - 1, int(segment["bottom"] + cap_height * 0.25)),
+            ),
+            fill=background,
+        )
+    pixels = cleared.convert("RGB")
+    seam_y = min(image.height - 1, max(0, band_bottom - 1))
+    seam = image.convert("RGB").crop((0, seam_y, image.width, seam_y + 1))
+    row_references = []
+    band_left = max(0, reset.get("left", min(s["left"] for s in reset["segments"])) - cap_height)
+    band_right = min(image.width, reset.get("right", max(s["right"] for s in reset["segments"])) + cap_height)
+    for y in range(
+        max(
+            0,
+            reset.get("top", min(s["top"] for s in reset["segments"])) - cap_height,
+        ),
+        min(
+            image.height,
+            reset.get("top", min(s["top"] for s in reset["segments"])) + cap_height,
+        ),
+    ):
+        row = [image.convert("RGB").getpixel((x, y)) for x in range(band_left, band_right)]
+        reference = max(set(row), key=row.count)
+        if sum(
+            all(abs(pixel[i] - reference[i]) <= 18 for i in range(3))
+            for pixel in row
+        ) / max(1, len(row)) >= 0.80:
+            row_references.append(reference)
+    for left, top, right, bottom in boxes:
+        if (
+            left - padding < frame_left
+            or right + padding > frame_right
+            or left - padding < 0
+            or right + padding > image.width
+            or bottom + padding > band_bottom + delta
+        ):
+            return False
+        check_bottom = min(image.height, band_bottom)
+        for y in range(max(0, top - above_padding), min(check_bottom, bottom + padding)):
+            for x in range(max(0, left - padding), min(image.width, right + padding)):
+                if any(abs(pixels.getpixel((x, y))[i] - background[i]) > 18 for i in range(3)):
+                    pixel = pixels.getpixel((x, y))
+                    references = [seam.getpixel((x, 0))] + row_references
+                    if any(
+                        all(abs(pixel[i] - ref[i]) <= 18 for i in range(3))
+                        for ref in references
+                    ):
+                        continue
+                    return False
+    return True
+
+
 def _anchor(image: Image.Image) -> dict[str, Any] | None:
     ocr_lines, metadata = _ocr_lines(image)
     whole_lines = [
@@ -1373,13 +1488,57 @@ def compose_extra_lines(
         )
         delta = max(0, content_height - available_bottom)
         growth = delta
+        max_block_width = max((block["width"] for block in blocks), default=0)
+        planned_common_x = (
+            content_left + (content_right - content_left - max_block_width) / 2
+            if centred
+            else desired_left
+        )
+        planned_common_x = max(
+            left_limit,
+            min(planned_common_x, right_limit - max_block_width),
+        )
+        placement_top = band_top
+        placement_safe = False
+        max_top = band_bottom + delta - content_height
+        step = max(1, cap_height)
+        candidates = [band_top, min(max_top, band_top + step), max_top]
+        candidates = list(dict.fromkeys(candidates))
+        if max_top not in candidates:
+            candidates.append(max_top)
+        for candidate_top in candidates:
+            if _reset_elements_fit(
+                source,
+                reset,
+                background,
+                _planned_element_boxes(
+                    blocks,
+                    font,
+                    planned_common_x,
+                    candidate_top,
+                    line_height,
+                ),
+                band_top,
+                band_bottom,
+                delta,
+                content_left,
+                content_right,
+                cap_height,
+            ):
+                placement_top = candidate_top
+                placement_safe = True
+                break
         if growth > int(round(source.height * 0.25)) or (
             not homogeneous_room and not movable_artwork and not stable_seam
-        ):
+        ) or not placement_safe:
             reset = None
             reset_values = []
             channels = list(requested_channels)
-            reset_skip_reason = "no_room_without_moving_artwork"
+            reset_skip_reason = (
+                "elements_overlap_existing_content"
+                if not placement_safe
+                else "no_room_without_moving_artwork"
+            )
             band_fits = False
             bottom = list(
                 source.crop(
@@ -1428,16 +1587,17 @@ def compose_extra_lines(
                 grown = source.copy()
             reset_draw = ImageDraw.Draw(grown)
             for segment in reset["segments"]:
+                padding = max(1, int(round(cap_height * 0.25)))
                 reset_draw.rectangle(
                     (
-                        max(0, segment["left"]),
-                        max(0, segment["top"]),
-                        min(grown.width, segment["right"]),
-                        min(grown.height, segment["bottom"]),
+                        max(0, segment["left"] - padding),
+                        max(0, segment["top"] - padding),
+                        min(grown.width - 1, segment["right"] + padding),
+                        min(grown.height - 1, segment["bottom"] + padding),
                     ),
                     fill=background,
                 )
-            band_end = band_top
+            band_end = placement_top
     if reset is None and not band_fits:
         available = max(0, source.height - band_end)
         fits_margin = available >= content_height and _uniform_rows(

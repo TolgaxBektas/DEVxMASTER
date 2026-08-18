@@ -912,3 +912,74 @@ def test_all_rendered_rows_share_common_left_edge(monkeypatch):
         for row in block["rows"]
     ]
     assert len(set(positions)) == 1
+
+
+def test_reset_rejects_element_over_existing_artwork():
+    image = Image.new("RGB", (160, 100), (230, 220, 190))
+    ImageDraw.Draw(image).rectangle((70, 30, 130, 60), fill=(20, 30, 40))
+    reset = {
+        "segments": [{"left": 20, "right": 60, "top": 40, "bottom": 55}],
+    }
+    assert not extra_lines._reset_elements_fit(
+        image,
+        reset,
+        (230, 220, 190),
+        [(40, 35, 110, 55)],
+        20,
+        80,
+        0,
+        0,
+        160,
+        20,
+    )
+
+
+def test_group_lines_keeps_communication_channel_order():
+    image = Image.new("RGB", (600, 100), "white")
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.truetype(extra_lines._font_path(False), 20)
+
+    blocks = extra_lines._group_lines(
+        [
+            ("instagram", "instagram.com/example"),
+            ("website", "example.de"),
+            ("fax", "06441 98765"),
+            ("email", "info@example.de"),
+            ("phone", "06441 12345"),
+        ],
+        draw,
+        font,
+        20,
+        600,
+    )
+
+    assert [block["name"] for block in blocks] == ["phone", "email_web", "social"]
+    assert [part["channel"] for part in blocks[0]["rows"][0]["parts"]] == [
+        "phone",
+        "fax",
+    ]
+    assert [row["parts"][0]["channel"] for row in blocks[1]["rows"]] == [
+        "email",
+        "website",
+    ]
+
+
+def test_reset_clears_padded_removed_glyph_area(monkeypatch):
+    image = Image.new("RGB", (600, 140), (20, 80, 140))
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.truetype(extra_lines._font_path(False), 10)
+    draw.text((30, 40), "Telefon 06441 12345", font=font, fill="white")
+    draw.text((30, 55), "E-Mail info@example.de", font=font, fill="white")
+    anchor = _reset_anchor()
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: anchor)
+    monkeypatch.setattr(extra_lines, "_content_bounds", lambda *_args: (0, 600))
+
+    result = compose_extra_lines(
+        image,
+        [("fax", "06441 98765"), ("website", "example.de")],
+    )
+    assert result.manifest["mode"] == "block_reset"
+    background = result.manifest["background"]
+    for y in range(37, 68):
+        for x in range(450, 523):
+            assert result.image.getpixel((x, y)) == tuple(background)
