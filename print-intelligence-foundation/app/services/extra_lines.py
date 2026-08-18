@@ -361,16 +361,26 @@ def _seam_repeatable(
     tolerance: int = 18,
 ) -> bool:
     if bottom <= seam_y or right <= left:
-        return True
+        return False
+    window_height = bottom - seam_y
+    if window_height < 2:
+        return False
     pixels = image.convert("RGB")
     best_score = 0.0
     best_seam = None
     best_y = seam_y
-    candidate_limit = min(bottom - 12, seam_y + 40)
+    comparison_height = max(1, window_height // 2)
+    candidate_limit = min(
+        bottom - comparison_height + 1,
+        seam_y + max(window_height, 1) * 4,
+    )
     for candidate_y in range(seam_y, max(seam_y, candidate_limit)):
         candidate = [pixels.getpixel((x, candidate_y)) for x in range(left, right)]
         score = 1.0
-        for y in range(candidate_y, min(bottom, candidate_y + 12)):
+        for y in range(
+            candidate_y,
+            min(bottom, candidate_y + comparison_height),
+        ):
             matching = sum(
                 all(
                     abs(pixels.getpixel((x, y))[index] - candidate[x - left][index])
@@ -564,46 +574,65 @@ def _reset_band(
     return band_top, band_bottom
 
 
-def _planned_element_boxes(
+def _layout_elements(
     blocks: list[dict[str, Any]],
     font: ImageFont.FreeTypeFont,
+    measure_draw: ImageDraw.ImageDraw,
     common_x: float,
     top: int,
     line_height: int,
-) -> list[tuple[int, int, int, int]]:
+    block_gap: int,
+    cap_height: int,
+) -> dict[str, Any]:
     boxes = []
+    layout_blocks = []
     y = top
     for block in blocks:
+        block_layout = {"top": y, "rows": []}
         for row in block["rows"]:
             row_x = common_x
+            row_layout = {"top": y, "parts": []}
             for part in row["parts"]:
+                start_x = row_x
+                logo_position = None
+                logo_box = None
                 if part["logo"] is not None:
                     bbox = font.getbbox(part["display_value"])
                     logo_y = int(round(y + (bbox[1] + bbox[3] - part["logo"].height) / 2))
-                    boxes.append(
-                        (
-                            int(row_x),
-                            logo_y,
-                            int(row_x) + part["logo"].width,
-                            logo_y + part["logo"].height,
-                        )
-                    )
-                    row_x += part["logo"].width + int(round(0.4 * (bbox[3] - bbox[1])))
-                bbox = font.getbbox(part["display_value"])
-                boxes.append(
-                    (
+                    logo_position = (int(row_x), logo_y)
+                    logo_box = (
                         int(row_x),
-                        int(y + bbox[1]),
-                        int(row_x + font.getlength(part["display_value"])),
-                        int(y + bbox[3]),
+                        logo_y,
+                        int(row_x) + part["logo"].width,
+                        logo_y + part["logo"].height,
                     )
+                    boxes.append(logo_box)
+                    row_x += part["logo"].width + int(round(0.4 * cap_height))
+                text_position = (int(row_x), int(y))
+                text_box = measure_draw.textbbox(
+                    text_position,
+                    part["display_value"],
+                    font=font,
                 )
-                row_x += font.getlength(part["display_value"]) + int(
-                    round(2 * (bbox[3] - bbox[1]))
+                boxes.append(text_box)
+                row_layout["parts"].append(
+                    {
+                        "part": part,
+                        "start_x": int(start_x),
+                        "text_position": text_position,
+                        "text_box": text_box,
+                        "logo_position": logo_position,
+                        "logo_box": logo_box,
+                    }
                 )
+                row_x += measure_draw.textlength(
+                    part["display_value"], font=font
+                ) + int(round(2 * cap_height))
+            block_layout["rows"].append(row_layout)
             y += line_height
-        y += line_height
-    return boxes
+        y += block_gap
+        layout_blocks.append(block_layout)
+    return {"blocks": layout_blocks, "boxes": boxes, "end": y}
 
 
 def _reset_elements_fit(
@@ -1287,6 +1316,14 @@ def compose_extra_lines(
     ):
         fax_value = fax_values[0]
         for segment in anchor.get("contact_segments", []):
+            if reset is not None and any(
+                all(
+                    segment.get(key) == selected.get(key)
+                    for key in ("left", "top", "right", "bottom")
+                )
+                for selected in reset["segments"]
+            ):
+                continue
             segment_values = _contact_values(segment.get("text", ""))
             if not any(channel == "phone" for channel, _value in segment_values):
                 continue
@@ -1510,13 +1547,17 @@ def compose_extra_lines(
             candidates.append(max_top)
         clearance = max(1, int(round(cap_height * 0.15)))
         for candidate_top in candidates:
-            candidate_boxes = _planned_element_boxes(
+            candidate_layout = _layout_elements(
                 blocks,
                 font,
+                draw_probe,
                 planned_common_x,
                 candidate_top,
                 line_height,
+                block_gap,
+                cap_height,
             )
+            candidate_boxes = candidate_layout["boxes"]
             candidate_delta = max(
                 0,
                 max((box[3] for box in candidate_boxes), default=0)
@@ -1549,6 +1590,8 @@ def compose_extra_lines(
             reset = None
             reset_values = []
             channels = list(requested_channels)
+            if inline_fax is not None:
+                channels = [item for item in channels if item[0] != "fax"]
             reset_skip_reason = (
                 "elements_overlap_existing_content"
                 if not placement_safe
@@ -1639,7 +1682,6 @@ def compose_extra_lines(
             (0, band_end + content_height),
         )
     draw = ImageDraw.Draw(grown)
-    y = band_end
     manifest_blocks = []
     max_block_width = max((block["width"] for block in blocks), default=0)
     desired_common_x = (
@@ -1662,40 +1704,46 @@ def compose_extra_lines(
             font=inline_font,
             fill=text_colour,
         )
-    for block in blocks:
-        block_start = y
+    element_layout = _layout_elements(
+        blocks,
+        font,
+        draw,
+        common_x,
+        band_end,
+        line_height,
+        block_gap,
+        cap_height,
+    )
+    for block, block_layout in zip(blocks, element_layout["blocks"]):
+        block_start = block_layout["top"]
         block_x = common_x
         shifted = not centred and abs(common_x - desired_left) > 0.01
         rows_manifest = []
-        for row in block["rows"]:
-            row_x = block_x
+        for row, row_layout in zip(block["rows"], block_layout["rows"]):
             row_parts = []
-            for part in row["parts"]:
-                start_x = row_x
-                logo_position = None
+            for part_layout in row_layout["parts"]:
+                part = part_layout["part"]
                 if part["logo"] is not None:
-                    bbox = font.getbbox(part["display_value"])
-                    logo_y = int(round(y + (bbox[1] + bbox[3] - part["logo"].height) / 2))
-                    logo_position = [round(row_x, 2), logo_y]
-                    grown.paste(part["logo"], (int(row_x), logo_y), part["logo"])
-                    row_x += part["logo"].width + int(round(0.4 * cap_height))
+                    logo_x, logo_y = part_layout["logo_position"]
+                    grown.paste(part["logo"], (logo_x, logo_y), part["logo"])
                 draw.text(
-                    (int(row_x), int(y)),
+                    part_layout["text_position"],
                     part["display_value"],
                     font=font,
                     fill=text_colour,
                 )
-                row_x += draw.textlength(
-                    part["display_value"], font=font
-                ) + int(round(2 * cap_height))
                 row_parts.append(
                     {
                         "channel": part["channel"],
                         "value": part["value"],
                         "display_value": part["display_value"],
                         "logo_used": part["logo_used"],
-                        "position": [round(start_x, 2), y],
-                        "logo_position": logo_position,
+                        "position": [part_layout["start_x"], row_layout["top"]],
+                        "logo_position": (
+                            list(part_layout["logo_position"])
+                            if part_layout["logo_position"] is not None
+                            else None
+                        ),
                         "logo_size": (
                             list(part["logo"].size) if part["logo"] is not None else None
                         ),
@@ -1705,12 +1753,10 @@ def compose_extra_lines(
                 {
                     "parts": row_parts,
                     "logo_used": all(part["logo_used"] for part in row_parts),
-                    "position": [round(block_x, 2), y],
+                    "position": [round(block_x, 2), row_layout["top"]],
                     "width": round(row["width"], 2),
                 }
             )
-            y += line_height
-        y += block_gap
         manifest_blocks.append(
             {
                 "name": block["name"],
