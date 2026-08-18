@@ -13,7 +13,7 @@ from app.services.companies import (
 from app.services.dedupe import normalize_name
 
 
-revision = "0010_repair_company_normalization"
+revision = "0010_repair_company_norm"
 down_revision = "0009_deferred_channels"
 branch_labels = None
 depends_on = None

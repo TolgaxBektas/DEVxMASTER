@@ -85,7 +85,7 @@ def test_normalization_migration_merges_references_and_rehomes_data(
         old_id, high_quality_id = old.id, high_quality.id
 
     command.stamp(config, "0009_deferred_channels")
-    command.upgrade(config, "0010_repair_company_normalization")
+    command.upgrade(config, "0010_repair_company_norm")
 
     with Session(engine) as session:
         companies = session.scalars(select(Company)).all()
@@ -134,7 +134,7 @@ def test_normalization_migration_keeps_different_hard_contacts_separate(
         session.commit()
 
     command.stamp(config, "0009_deferred_channels")
-    command.upgrade(config, "0010_repair_company_normalization")
+    command.upgrade(config, "0010_repair_company_norm")
 
     with Session(engine) as session:
         companies = session.scalars(select(Company)).all()
