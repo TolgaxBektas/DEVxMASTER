@@ -206,6 +206,7 @@ def _contact_values(text: str) -> list[tuple[str, str]]:
         values.append(("email", match.group(0)))
     social_pattern = (
         r"(?:(?:https?://)?(?:www\.)?"
+        r"(?<![A-Za-z0-9])"
         r"(?:facebook|instagram|linkedin|youtube|tiktok|xing)\.[a-z]{2,}"
         r"(?:/[^\s,;)]*)?)"
     )
@@ -222,7 +223,7 @@ def _contact_values(text: str) -> list[tuple[str, str]]:
                 "tiktok",
                 "xing",
             )
-            if f"{social}." in lowered
+            if re.search(rf"(?<![a-z0-9]){social}\.", lowered)
         )
         values.append((channel, domain))
     without_email = re.sub(r"[\w.+-]+@[\w.-]+\.[a-z]{2,}", "", text, flags=re.I)
@@ -1158,8 +1159,9 @@ def _append_geometry(
     image: Image.Image,
     background: tuple[int, int, int],
     line_height: int,
+    minimum_end: int = 0,
 ) -> tuple[int, int]:
-    content_end = _content_end(image, background)
+    content_end = max(_content_end(image, background), minimum_end)
     insertion_gap = max(1, int(round(line_height / 2)))
     return content_end, insertion_gap
 
@@ -1179,17 +1181,17 @@ def _channel_value(
             "fax"
             if lowered.startswith("fax")
             else "facebook"
-            if "facebook." in lowered
+            if re.search(r"(?<![a-z0-9])facebook\.", lowered)
             else "instagram"
-            if "instagram." in lowered
+            if re.search(r"(?<![a-z0-9])instagram\.", lowered)
             else "linkedin"
-            if "linkedin." in lowered
+            if re.search(r"(?<![a-z0-9])linkedin\.", lowered)
             else "youtube"
-            if "youtube." in lowered
+            if re.search(r"(?<![a-z0-9])youtube\.", lowered)
             else "tiktok"
-            if "tiktok." in lowered
+            if re.search(r"(?<![a-z0-9])tiktok\.", lowered)
             else "xing"
-            if "xing." in lowered
+            if re.search(r"(?<![a-z0-9])xing\.", lowered)
             else "website"
             if "www." in lowered or ".de" in lowered
             else "phone"
@@ -1296,7 +1298,11 @@ def _group_lines(
             social_font = font
             if row_width(items, social_font, name) > available:
                 font_path = getattr(font, "path", None)
-                for size in range(font.size - 1, max(0, font.size - 2) - 1, -1):
+                for size in range(
+                    max(1, font.size - 1),
+                    max(1, font.size - 2) - 1,
+                    -1,
+                ):
                     if font_path is None:
                         break
                     candidate = ImageFont.truetype(font_path, size)
@@ -1490,7 +1496,7 @@ def compose_extra_lines(
         background = max(set(bottom), key=bottom.count)
         text_colour = (0, 0, 0) if sum(background) > 381 else (255, 255, 255)
         content_end_value, insertion_gap = _append_geometry(
-            source, background, line_height
+            source, background, line_height, anchor["bottom"]
         )
         band_end = content_end_value + insertion_gap
     content_bounds = _content_bounds(source, _edge_colour(source)) or (
@@ -1637,6 +1643,36 @@ def compose_extra_lines(
             return probe, probe_blocks
         return fit_blocks(values_to_fit, max_available, minimum_font_size)
 
+    def fallback_to_append(reason: str) -> None:
+        nonlocal background, band_end, band_fits, blocks, channels
+        nonlocal content_end_value, content_height, font, glyph_bottom
+        nonlocal insertion_gap, reset, reset_colours, reset_skip_reason
+        nonlocal reset_values, text_colour
+        reset = None
+        reset_values = []
+        reset_colours = None
+        channels = list(requested_channels)
+        if inline_fax is not None:
+            channels = [item for item in channels if item[0] != "fax"]
+        reset_skip_reason = reason
+        band_fits = False
+        bottom = list(
+            source.crop(
+                (0, max(0, source.height - 3), source.width, source.height)
+            ).getdata()
+        )
+        background = max(set(bottom), key=bottom.count)
+        text_colour = (0, 0, 0) if sum(background) > 381 else (255, 255, 255)
+        content_end_value, insertion_gap = _append_geometry(
+            source, background, line_height, anchor["bottom"]
+        )
+        band_end = content_end_value + insertion_gap
+        font, blocks = fit_channel_blocks(channels)
+        if font is not None:
+            content_height, glyph_bottom = _layout_height(
+                blocks, line_height, block_gap, font, cap_height, bottom_air
+            )
+
     font, blocks = fit_channel_blocks(channels)
     if reset is not None:
         erased_keys = {
@@ -1650,14 +1686,7 @@ def compose_extra_lines(
             for part in row["parts"]
         }
         if erased_keys - laid_out_keys:
-            reset = None
-            reset_values = []
-            reset_colours = None
-            reset_skip_reason = "removed_value_not_preserved"
-            channels = list(requested_channels)
-            if inline_fax is not None:
-                channels = [item for item in channels if item[0] != "fax"]
-            font, blocks = fit_channel_blocks(channels)
+            fallback_to_append("removed_value_not_preserved")
     if font is None:
         return ExtraLineComposition(
             source.copy(),
@@ -1792,35 +1821,10 @@ def compose_extra_lines(
         if growth > int(round(source.height * 0.25)) or (
             not homogeneous_room and not movable_artwork and not stable_seam
         ) or not placement_safe:
-            reset = None
-            reset_values = []
-            channels = list(requested_channels)
-            if inline_fax is not None:
-                channels = [item for item in channels if item[0] != "fax"]
-            reset_skip_reason = (
+            fallback_to_append(
                 "elements_overlap_existing_content"
                 if not placement_safe
                 else "no_room_without_moving_artwork"
-            )
-            band_fits = False
-            bottom = list(
-                source.crop(
-                    (0, max(0, source.height - 3), source.width, source.height)
-                ).getdata()
-            )
-            background = max(set(bottom), key=bottom.count)
-            text_colour = (0, 0, 0) if sum(background) > 381 else (255, 255, 255)
-            content_end_value, insertion_gap = _append_geometry(
-                source, background, line_height
-            )
-            band_end = content_end_value + insertion_gap
-            probe_blocks = _group_lines(
-                channels, draw_probe, probe, cap_height, max_available
-            )
-            font, blocks = (
-                (probe, probe_blocks)
-                if all(block["width"] <= max_available for block in probe_blocks)
-                else fit_blocks(channels, max_available, minimum_font_size)
             )
             if font is None:
                 return ExtraLineComposition(
@@ -1832,9 +1836,6 @@ def compose_extra_lines(
                         "discarded": discarded,
                     },
                 )
-            content_height, glyph_bottom = _layout_height(
-                blocks, line_height, block_gap, font, cap_height, bottom_air
-            )
         else:
             if delta:
                 grown = Image.new("RGB", (source.width, source.height + delta))
