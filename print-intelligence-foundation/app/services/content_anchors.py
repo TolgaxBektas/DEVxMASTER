@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from difflib import SequenceMatcher
-from typing import Any
+from typing import Any, Iterable
 
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
@@ -150,6 +150,40 @@ def _text_findings(
     return findings
 
 
+def _watermark_marker_presence(
+    lines: list[str], markers: Iterable[str]
+) -> set[str]:
+    text = " ".join(lines).casefold()
+    return {
+        marker.casefold().strip()
+        for marker in markers
+        if marker.strip()
+        and re.search(
+            rf"(?<!\w){re.escape(marker.casefold().strip())}(?!\w)",
+            text,
+        )
+    }
+
+
+def _remove_watermark_markers(
+    lines: list[str], markers: Iterable[str]
+) -> list[str]:
+    cleaned = lines[:]
+    for marker in markers:
+        marker = marker.casefold().strip()
+        if not marker:
+            continue
+        pattern = re.compile(
+            rf"(?<!\w){re.escape(marker)}(?!\w)", re.I
+        )
+        cleaned = [
+            _normalize(pattern.sub("", line))
+            for line in cleaned
+            if _normalize(pattern.sub("", line))
+        ]
+    return cleaned
+
+
 def _ocr_is_uncertain(
     original: dict[str, Any],
     restored: dict[str, Any],
@@ -169,11 +203,13 @@ def _ocr_is_uncertain(
     )
 
 
-def _decode_qr(image: Image.Image) -> tuple[list[str], str | None]:
+def _decode_qr(
+    image: Image.Image,
+) -> tuple[list[str], str | None, dict[str, float] | None]:
     try:
         from pyzbar.pyzbar import decode
     except ImportError:
-        return [], "QR-Code-Prüfung nicht verfügbar (Decoder nicht installiert)."
+        return [], "QR-Code-Prüfung nicht verfügbar (Decoder nicht installiert).", None
     try:
         pixel_budget = 4_000_000
         scale = max(
@@ -202,12 +238,12 @@ def _decode_qr(image: Image.Image) -> tuple[list[str], str | None]:
             ]
 
         def variants():
-            yield image
-            yield enlarged
+            yield image, 1.0, (0, 0)
+            yield enlarged, scale, (0, 0)
             gray = ImageOps.autocontrast(enlarged.convert("L"))
-            yield gray
-            yield ImageEnhance.Contrast(gray).enhance(2.0)
-            yield gray.filter(ImageFilter.SHARPEN)
+            yield gray, scale, (0, 0)
+            yield ImageEnhance.Contrast(gray).enhance(2.0), scale, (0, 0)
+            yield gray.filter(ImageFilter.SHARPEN), scale, (0, 0)
             for left, top in tiles:
                 tile = image.crop((
                     left,
@@ -228,17 +264,24 @@ def _decode_qr(image: Image.Image) -> tuple[list[str], str | None]:
                         max(1, round(tile.height * tile_scale)),
                     ),
                     Image.Resampling.LANCZOS,
-                )
+                ), tile_scale, (left, top)
 
         values = []
-        for variant in variants():
-            values.extend(
-                item.data.decode("utf-8", errors="replace").strip()
-                for item in decode(variant)
-                if item.data
-            )
+        decoder_region = None
+        for variant, variant_scale, (offset_x, offset_y) in variants():
+            for item in decode(variant):
+                if not item.data:
+                    continue
+                values.append(item.data.decode("utf-8", errors="replace").strip())
+                if decoder_region is None and item.rect:
+                    decoder_region = {
+                        "x": float(offset_x + item.rect.left / variant_scale),
+                        "y": float(offset_y + item.rect.top / variant_scale),
+                        "width": float(item.rect.width / variant_scale),
+                        "height": float(item.rect.height / variant_scale),
+                    }
     except (OSError, ValueError):
-        return [], "QR-Code konnte nicht gelesen werden."
+        return [], "QR-Code konnte nicht gelesen werden.", None
     values = sorted(set(value for value in values if value))
     values = [
         value for value in values
@@ -248,19 +291,18 @@ def _decode_qr(image: Image.Image) -> tuple[list[str], str | None]:
             or "." in value
         )
     ]
-    return values, None
+    return values, None, decoder_region
 
 
-def _qr_presence(image: Image.Image) -> tuple[bool, float]:
+def _qr_presence(
+    image: Image.Image,
+) -> tuple[bool, float, dict[str, float] | None]:
     import numpy as np
 
+    width, height = image.size
     gray = np.asarray(
-        ImageOps.autocontrast(image.convert("L"))
-        .resize(
-            (
-                min(image.width, 256),
-                min(image.height, 256),
-            ),
+        ImageOps.autocontrast(image.convert("L")).resize(
+            (min(width, 256), min(height, 256)),
             Image.Resampling.BILINEAR,
         ),
         dtype=np.float32,
@@ -270,22 +312,26 @@ def _qr_presence(image: Image.Image) -> tuple[bool, float]:
     vertical = binary[1:, :] != binary[:-1, :]
 
     def integral(values):
-        return np.pad(values.astype(np.int32).cumsum(0).cumsum(1), ((1, 0), (1, 0)))
+        return np.pad(
+            values.astype(np.int32).cumsum(0).cumsum(1),
+            ((1, 0), (1, 0)),
+        )
 
     gray_integral = integral(binary)
     horizontal_integral = integral(horizontal)
     vertical_integral = integral(vertical)
 
-    def windows(values, height, width):
+    def windows(values, window_height, window_width):
         return (
-            values[height:, width:]
-            - values[:-height, width:]
-            - values[height:, :-width]
-            + values[:-height, :-width]
+            values[window_height:, window_width:]
+            - values[:-window_height, window_width:]
+            - values[window_height:, :-window_width]
+            + values[:-window_height, :-window_width]
         )
 
     best = 0.0
     finder_best = 0.0
+    finder_region = None
     gray_image = Image.fromarray(gray.astype(np.uint8), mode="L")
     expected_pattern = np.array([
         [
@@ -306,30 +352,32 @@ def _qr_presence(image: Image.Image) -> tuple[bool, float]:
         vertical_score = windows(
             vertical_integral, size - 1, size
         ) / (size * (size - 1))
-        score = np.minimum(horizontal_score, vertical_score) * (1 - np.abs(0.5 - dark))
+        score = np.minimum(horizontal_score, vertical_score) * (
+            1 - np.abs(0.5 - dark)
+        )
         best = max(best, float(score.max()))
         output_height = gray.shape[0] - size + 1
         output_width = gray.shape[1] - size + 1
 
-        def region(y, x, height, width):
+        def region(top, left, region_height, region_width):
             return (
                 gray_integral[
-                    height + y:height + y + output_height,
-                    width + x:width + x + output_width,
+                    region_height + top:region_height + top + output_height,
+                    region_width + left:region_width + left + output_width,
                 ]
                 - gray_integral[
-                    y:y + output_height,
-                    width + x:width + x + output_width,
+                    top:top + output_height,
+                    region_width + left:region_width + left + output_width,
                 ]
                 - gray_integral[
-                    height + y:height + y + output_height,
-                    x:x + output_width,
+                    region_height + top:region_height + top + output_height,
+                    left:left + output_width,
                 ]
                 + gray_integral[
-                    y:y + output_height,
-                    x:x + output_width,
+                    top:top + output_height,
+                    left:left + output_width,
                 ]
-            ) / (height * width)
+            ) / (region_height * region_width)
 
         finder_scores = []
         for origin_x, origin_y in (
@@ -357,20 +405,29 @@ def _qr_presence(image: Image.Image) -> tuple[bool, float]:
             )
             pixels = np.asarray(crop, dtype=np.uint8)
             for inverted in (False, True):
-                candidate_binary = ((pixels < 128) != inverted)
+                candidate_binary = (pixels < 128) != inverted
                 matches = 0
                 for origin_x, origin_y in ((0, 0), (14, 0), (0, 14)):
-                    matches += int(
-                        (
-                            candidate_binary[
-                                origin_y:origin_y + 7,
-                                origin_x:origin_x + 7,
-                            ]
-                            == expected_pattern
-                        ).sum()
-                    )
-                finder_best = max(finder_best, matches / 147)
-    return finder_best >= 0.78, finder_best if finder_best else best
+                    matches += int((
+                        candidate_binary[
+                            origin_y:origin_y + 7,
+                            origin_x:origin_x + 7,
+                        ] == expected_pattern
+                    ).sum())
+                score = matches / 147
+                if score > finder_best:
+                    finder_best = score
+                    finder_region = {
+                        "x": float(left * width / gray.shape[1]),
+                        "y": float(top * height / gray.shape[0]),
+                        "width": float(size * width / gray.shape[1]),
+                        "height": float(size * height / gray.shape[0]),
+                    }
+    return (
+        finder_best >= 0.78,
+        finder_best if finder_best else best,
+        finder_region if finder_best >= 0.78 else None,
+    )
 
 
 def _edge_grid(image: Image.Image, size: int = 12) -> list[float]:
@@ -456,6 +513,8 @@ def _aligned_candidate(
 def compare_visual_motifs(
     original: Image.Image,
     restored: Image.Image,
+    *,
+    excluded_lost_regions: list[dict[str, float]] | None = None,
 ) -> dict[str, Any]:
     original = original.convert("RGB")
     restored = restored.convert("RGB")
@@ -547,6 +606,33 @@ def compare_visual_motifs(
             result.append(component)
         return result
 
+    excluded_lost_regions = excluded_lost_regions or []
+    max_qr_side = min(width, height) * 0.25
+
+    def cell_intersects_region(index: int, region: dict[str, float]) -> bool:
+        region_width = max(0.0, min(region.get("width", 0.0), max_qr_side))
+        region_height = max(0.0, min(region.get("height", 0.0), max_qr_side))
+        center_x = region.get("x", 0.0) + region.get("width", 0.0) / 2
+        center_y = region.get("y", 0.0) + region.get("height", 0.0) / 2
+        left = max(0.0, center_x - region_width / 2)
+        top = max(0.0, center_y - region_height / 2)
+        row, column = divmod(index, 12)
+        cell_left = column * width / 12
+        cell_top = row * height / 12
+        cell_right = (column + 1) * width / 12
+        cell_bottom = (row + 1) * height / 12
+        return (
+            cell_left < left + region_width
+            and cell_right > left
+            and cell_top < top + region_height
+            and cell_bottom > top
+        )
+
+    for region in excluded_lost_regions:
+        lost = {
+            index for index in lost
+            if not cell_intersects_region(index, region)
+        }
     lost_components = [part for part in components(set(lost)) if len(part) >= 2]
     added_components = [part for part in components(set(added)) if len(part) >= 2]
     result["lost_cells"] = len(lost)
@@ -589,8 +675,8 @@ def extract_content_anchors(
         for value in DOMAIN_RE.findall(ocr_text or "")
         if not value.replace(".", "").isdigit()
     })
-    qr_codes, qr_finding = _decode_qr(image)
-    qr_present, qr_score = _qr_presence(image)
+    qr_codes, qr_finding, decoder_region = _decode_qr(image)
+    qr_present, qr_score, _ = _qr_presence(image)
     return {
         "text_lines": lines,
         "company_name": _normalize(company_name) if company_name else None,
@@ -600,6 +686,7 @@ def extract_content_anchors(
         "qr_codes": qr_codes,
         "qr_present": qr_present,
         "qr_presence_score": round(qr_score, 4),
+        "qr_region": decoder_region,
         "qr_detection": "available" if qr_finding is None else "unavailable",
         "ocr_token_count": len(_words(lines)),
         "ocr_confidence": ocr_confidence,
@@ -609,15 +696,47 @@ def extract_content_anchors(
 def compare_content_anchors(
     original: dict[str, Any],
     restored: dict[str, Any],
+    watermark_markers: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     findings: list[dict[str, str]] = []
     ocr_uncertain = _ocr_is_uncertain(original, restored)
+    watermark_markers = tuple(watermark_markers or ())
+    watermark_enabled = bool(watermark_markers)
+    original_watermarks = (
+        _watermark_marker_presence(
+            original.get("text_lines") or [], watermark_markers
+        )
+        if watermark_enabled
+        else set()
+    )
+    restored_watermarks = (
+        _watermark_marker_presence(
+            restored.get("text_lines") or [], watermark_markers
+        )
+        if watermark_enabled
+        else set()
+    )
+    watermark_removed = bool(original_watermarks - restored_watermarks)
+    if watermark_enabled:
+        if restored_watermarks - original_watermarks:
+            findings.append({
+                "type": "new",
+                "severity": "abweichung",
+                "category": "Wasserzeichen",
+                "value": ", ".join(sorted(restored_watermarks - original_watermarks)),
+            })
+        elif original_watermarks & restored_watermarks:
+            findings.append({
+                "type": "uncertain",
+                "severity": "unsicher",
+                "category": "Wasserzeichen",
+                "value": "Wasserzeichen nicht entfernt",
+            })
 
     for category, label in (
         ("phones", "Telefonnummer"),
         ("emails", "E-Mail-Adresse"),
         ("domains", "Web-Adresse"),
-        ("qr_codes", "QR-Code-Inhalt"),
     ):
         before = set(original.get(category) or [])
         after = set(restored.get(category) or [])
@@ -644,6 +763,9 @@ def compare_content_anchors(
             findings.append({
                 "type": "missing",
                 "severity": (
+                    "abweichung"
+                    if category == "qr_codes"
+                    else
                     "unsicher"
                     if ocr_uncertain
                     else "abweichung"
@@ -655,6 +777,9 @@ def compare_content_anchors(
             findings.append({
                 "type": "new",
                 "severity": (
+                    "abweichung"
+                    if category == "qr_codes"
+                    else
                     "unsicher"
                     if ocr_uncertain
                     else "abweichung"
@@ -663,19 +788,20 @@ def compare_content_anchors(
                 "value": value,
             })
 
-    if original.get("qr_present") and not restored.get("qr_present"):
-        findings.append({
-            "type": "missing",
-            "severity": "abweichung",
-            "category": "QR-Code-Anwesenheit",
-            "value": "Quadratischer QR-Code-Bereich im Original",
-        })
-    elif restored.get("qr_present") and not original.get("qr_present"):
+    qr_removed = bool(original.get("qr_present") and not restored.get("qr_present"))
+    if restored.get("qr_present") and not original.get("qr_present"):
         findings.append({
             "type": "new",
             "severity": "abweichung",
             "category": "QR-Code-Anwesenheit",
             "value": "Quadratischer QR-Code-Bereich im Restaurat",
+        })
+    elif original.get("qr_present") and restored.get("qr_present"):
+        findings.append({
+            "type": "uncertain",
+            "severity": "unsicher",
+            "category": "QR-Code-Anwesenheit",
+            "value": "QR-Code nicht entfernt",
         })
 
     if original.get("company_name") and restored.get("company_name"):
@@ -703,7 +829,16 @@ def compare_content_anchors(
             "category": "QR-Code",
             "value": "QR-Code-Prüfung nicht verfügbar.",
         })
-    findings.extend(_text_findings(original, restored))
+    text_original = dict(original)
+    text_restored = dict(restored)
+    if watermark_enabled:
+        text_original["text_lines"] = _remove_watermark_markers(
+            original.get("text_lines") or [], watermark_markers
+        )
+        text_restored["text_lines"] = _remove_watermark_markers(
+            restored.get("text_lines") or [], watermark_markers
+        )
+    findings.extend(_text_findings(text_original, text_restored))
     severity = (
         "abweichung"
         if any(item["severity"] == "abweichung" for item in findings)
@@ -711,11 +846,16 @@ def compare_content_anchors(
         if findings
         else "passed"
     )
-    return {
+    result = {
         "status": severity,
         "severity": severity,
+        "qr_removed": qr_removed,
+        "watermark_removed": watermark_removed,
+        "watermark_markers_original": sorted(original_watermarks),
+        "watermark_markers_restored": sorted(restored_watermarks),
         "findings": findings,
     }
+    return result
 
 
 def finding_messages(comparison: dict[str, Any]) -> list[str]:

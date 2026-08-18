@@ -89,4 +89,5 @@ def make_pipeline(session, settings: Settings):
         settings.image_edit_hard_stop_cents,
         settings.image_edit_max_attempts,
         settings.image_edit_color_tolerance,
+        settings.watermark_markers,
     )

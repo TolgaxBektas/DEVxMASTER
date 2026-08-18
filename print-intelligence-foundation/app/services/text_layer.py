@@ -1,4 +1,7 @@
+import ctypes
 from pathlib import Path
+
+from pypdfium2 import raw
 
 from app.services.pdfium import open_document
 from app.services.bbox import Box
@@ -99,3 +102,85 @@ def page_text(
                 text_page.close()
         finally:
             page.close()
+
+
+def watermark_markers_in_boxes(
+    pdf_path: str | Path,
+    page_number: int,
+    boxes: list[Box],
+    render_dpi: int,
+    markers: list[str],
+) -> list[list[dict]]:
+    """Return PDF text-layer watermark marker evidence for each artwork box."""
+    normalized_markers = [
+        marker.casefold().strip() for marker in markers if marker.strip()
+    ]
+    evidence = [[] for _ in boxes]
+    if not normalized_markers:
+        return evidence
+    with open_document(pdf_path) as pdf:
+        page = pdf[page_number - 1]
+        try:
+            _, page_height = page.get_size()
+            scale = render_dpi / 72
+            text_page = page.get_textpage()
+            try:
+                for object_index, obj in enumerate(page.get_objects()):
+                    if obj.type != 1:
+                        continue
+                    try:
+                        bounds = list(obj.get_pos())
+                    except Exception:
+                        continue
+                    if len(bounds) != 4:
+                        continue
+                    buffer = (ctypes.c_ushort * 4096)()
+                    try:
+                        raw.FPDFTextObj_GetText(
+                            obj.raw, text_page.raw, buffer, len(buffer)
+                        )
+                    except Exception:
+                        continue
+                    text = "".join(chr(value) for value in buffer if value)
+                    lowered = text.casefold()
+                    matched = [
+                        marker for marker in normalized_markers if marker in lowered
+                    ]
+                    if not matched:
+                        continue
+                    left, bottom, right, top = bounds
+                    pixel_box = Box(
+                        round(left * scale),
+                        round((page_height - top) * scale),
+                        round(right * scale),
+                        round((page_height - bottom) * scale),
+                    )
+                    for box_index, box in enumerate(boxes):
+                        if (
+                            pixel_box.left < box.right
+                            and pixel_box.right > box.left
+                            and pixel_box.top < box.bottom
+                            and pixel_box.bottom > box.top
+                        ):
+                            evidence[box_index].append(
+                                {
+                                    "marker": matched[0],
+                                    "text": text,
+                                    "object_index": object_index,
+                                    "bounds_pdf": [
+                                        float(value) for value in bounds
+                                    ],
+                                    "bounds": [
+                                        pixel_box.left,
+                                        pixel_box.top,
+                                        pixel_box.right,
+                                        pixel_box.bottom,
+                                    ],
+                                    "source": "pdf_text_layer",
+                                }
+                            )
+            finally:
+                text_page.close()
+        finally:
+            page.close()
+    return evidence
