@@ -436,7 +436,7 @@ def _inline_fax_area(
     cap_height: int,
 ) -> tuple[int, int, int, tuple[int, int, int]] | None:
     left = segment["right"] + max(1, cap_height)
-    right = content_right - margin
+    right = content_right - margin - max(1, cap_height)
     padding = max(2, int(round(cap_height * 0.35)))
     top = max(0, segment["top"] - padding)
     bottom = min(image.height, segment["bottom"] + padding)
@@ -456,10 +456,12 @@ def _inline_fax_area(
             break
         if background is None:
             background = candidate
+        elif any(abs(candidate[index] - background[index]) > 18 for index in range(3)):
+            break
         run_right = x + 1
     if background is None or run_right - left < max(20, cap_height * 3):
         return None
-    return left, run_right, top, background
+    return left, run_right - max(1, cap_height), top, background
 
 
 def _reset_block(anchor: dict[str, Any]) -> dict[str, Any] | None:
@@ -525,6 +527,41 @@ def _reset_block(anchor: dict[str, Any]) -> dict[str, Any] | None:
         "right": max(segment["right"] for segment in selected),
         "bottom": max(segment["bottom"] for segment in selected),
     }
+
+
+def _reset_band(
+    image: Image.Image,
+    reset: dict[str, Any],
+    background: tuple[int, int, int],
+    cap_height: int,
+) -> tuple[int, int]:
+    padding = max(1, int(round(cap_height * 0.35)))
+    left = max(0, reset["left"] - padding)
+    right = min(image.width, reset["right"] + padding)
+    pixels = image.convert("RGB")
+
+    def matches(y: int) -> bool:
+        if not 0 <= y < image.height or right <= left:
+            return False
+        return (
+            sum(
+                all(
+                    abs(pixels.getpixel((x, y))[index] - background[index]) <= 18
+                    for index in range(3)
+                )
+                for x in range(left, right)
+            )
+            / (right - left)
+            >= 0.90
+        )
+
+    band_top = reset["top"]
+    while band_top > 0 and matches(band_top - 1):
+        band_top -= 1
+    band_bottom = reset["bottom"]
+    while band_bottom < image.height and matches(band_bottom):
+        band_bottom += 1
+    return band_top, band_bottom
 
 
 def _anchor(image: Image.Image) -> dict[str, Any] | None:
@@ -1288,56 +1325,54 @@ def compose_extra_lines(
     )
     font_floor_applied = probe.size > minimum_font_size and font.size == minimum_font_size
     if reset is not None:
-        reset_bottom = reset["bottom"]
-        required_bottom = reset["top"] + content_height
-        available_bottom = source.height - reset_bottom
+        band_top, band_bottom = _reset_band(
+            source, reset, background, cap_height
+        )
+        available_bottom = band_bottom - reset["top"] - bottom_air
         block_width = max((block["width"] for block in blocks), default=0)
         span_left = max(0, int(round(desired_left - cap_height * 0.35)))
         span_right = min(
             source.width,
             int(round(desired_left + block_width + cap_height * 0.35)),
         )
-        seam_check_bottom = min(
-            source.height,
-            reset_bottom + max(content_height, cap_height * 3),
-        )
         homogeneous_room = (
-            available_bottom >= content_height
+            content_height <= available_bottom
             and _seam_repeatable(
                 source,
-                reset_bottom + max(1, cap_height // 2),
-                seam_check_bottom,
+                band_bottom - max(1, cap_height // 2),
+                band_bottom,
                 span_left,
                 span_right,
             )
         )
         movable_artwork = _seam_repeatable(
             source,
-            reset_bottom + max(1, cap_height // 2),
-            source.height,
+            band_bottom - max(1, cap_height // 2),
+            band_bottom,
             span_left,
             span_right,
         )
         stable_seam = _seam_band_stable(
             source,
-            reset_bottom + max(1, cap_height // 2),
-            source.height,
+            band_bottom - max(1, cap_height // 2),
+            band_bottom,
             span_left,
             span_right,
         ) or _seam_band_stable(
             source,
-            reset_bottom + max(1, cap_height // 2),
-            source.height,
+            band_bottom - max(1, cap_height // 2),
+            band_bottom,
             reset["left"],
             reset["right"],
         ) or _columnwise_homogeneous(
             source,
-            reset_bottom,
-            min(source.height, reset_bottom + 12),
+            max(band_top, band_bottom - 12),
+            band_bottom,
             left=reset["left"],
             right=reset["right"],
         )
-        growth = max(0, required_bottom - source.height)
+        delta = max(0, content_height - available_bottom)
+        growth = delta
         if growth > int(round(source.height * 0.25)) or (
             not homogeneous_room and not movable_artwork and not stable_seam
         ):
@@ -1379,17 +1414,15 @@ def compose_extra_lines(
                 blocks, line_height, block_gap, font, cap_height, bottom_air
             )
         else:
-            delta = growth
             if delta:
                 grown = Image.new("RGB", (source.width, source.height + delta))
-                grown.paste(source, (0, 0))
-                seam_y = min(source.height - 1, reset_bottom + max(1, cap_height // 2))
-                seam = source.crop((0, seam_y, source.width, seam_y + 1))
+                grown.paste(source.crop((0, 0, source.width, band_bottom)), (0, 0))
+                seam = source.crop((0, band_bottom - 1, source.width, band_bottom))
                 for offset in range(delta):
-                    grown.paste(seam, (0, reset_bottom + offset))
+                    grown.paste(seam, (0, band_bottom + offset))
                 grown.paste(
-                    source.crop((0, reset_bottom, source.width, source.height)),
-                    (0, reset_bottom + delta),
+                    source.crop((0, band_bottom, source.width, source.height)),
+                    (0, band_bottom + delta),
                 )
             else:
                 grown = source.copy()
@@ -1404,7 +1437,7 @@ def compose_extra_lines(
                     ),
                     fill=background,
                 )
-            band_end = reset["top"]
+            band_end = band_top
     if reset is None and not band_fits:
         available = max(0, source.height - band_end)
         fits_margin = available >= content_height and _uniform_rows(

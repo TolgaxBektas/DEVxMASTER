@@ -868,6 +868,28 @@ def test_inline_fax_rejects_nonhomogeneous_right_hand_area(monkeypatch):
     assert result.manifest["fax_inline_reason"] == "no_homogeneous_space"
 
 
+def test_reset_band_uses_homogeneous_rows_around_removed_block():
+    image = Image.new("RGB", (120, 100), (240, 220, 180))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((0, 10, 119, 14), fill=(10, 20, 30))
+    draw.rectangle((0, 45, 119, 49), fill=(10, 20, 30))
+    reset = {"left": 30, "right": 90, "top": 20, "bottom": 40}
+
+    assert extra_lines._reset_band(image, reset, (240, 220, 180), 10) == (15, 45)
+
+
+def test_inline_fax_area_reserves_cap_height_before_foreign_content():
+    image = Image.new("RGB", (240, 80), (240, 220, 180))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((190, 25, 239, 55), fill=(20, 30, 40))
+    segment = {"left": 20, "right": 80, "top": 30, "bottom": 45}
+
+    area = extra_lines._inline_fax_area(image, segment, 240, 0, 10)
+
+    assert area is not None
+    assert area[1] <= 180
+
+
 def test_all_rendered_rows_share_common_left_edge(monkeypatch):
     image = Image.new("RGB", (600, 140), (20, 80, 140))
     draw = ImageDraw.Draw(image)
