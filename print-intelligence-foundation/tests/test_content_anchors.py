@@ -87,6 +87,52 @@ def test_phone_ocr_difference_is_uncertain_not_passed():
     assert result["findings"][0]["severity"] == "unsicher"
 
 
+def test_low_ocr_confidence_downgrades_structured_contact_difference():
+    result = compare_content_anchors(
+        {
+            "text_lines": ["Firma"],
+            "emails": ["alt@example.de"],
+            "ocr_confidence": 60,
+        },
+        {
+            "text_lines": ["Firma"],
+            "emails": ["neu@example.de"],
+            "ocr_confidence": 60,
+        },
+    )
+
+    email_findings = [
+        finding
+        for finding in result["findings"]
+        if finding["category"] == "E-Mail-Adresse"
+    ]
+    assert email_findings
+    assert all(finding["severity"] == "unsicher" for finding in email_findings)
+
+
+def test_short_clean_text_does_not_downgrade_structured_contact_difference():
+    result = compare_content_anchors(
+        {
+            "text_lines": ["Firma"],
+            "emails": ["alt@example.de"],
+            "ocr_confidence": 98,
+        },
+        {
+            "text_lines": ["Firma"],
+            "emails": ["neu@example.de"],
+            "ocr_confidence": 98,
+        },
+    )
+
+    email_findings = [
+        finding
+        for finding in result["findings"]
+        if finding["category"] == "E-Mail-Adresse"
+    ]
+    assert email_findings
+    assert all(finding["severity"] == "abweichung" for finding in email_findings)
+
+
 def test_text_comparison_reports_substantial_missing_run():
     result = compare_content_anchors(
         {
