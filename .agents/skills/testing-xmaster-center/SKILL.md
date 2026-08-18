@@ -233,3 +233,92 @@ Useful tables: `billing_invoices` (`status`, `paid_amount`), `billing_payments`,
 
 ## Devin Secrets Needed
 None — all credentials are local dev values (see above).
+
+## Second tenant in the UI (tenant isolation / dedup tests)
+The sidebar logout control can sit below the viewport, so switching users in the same window may be
+impossible. Use a second Chrome window with `ctrl+shift+n` (incognito = separate session), maximize it with
+`wmctrl -r :ACTIVE: -b add,maximized_vert,maximized_horz`, then log in as `mandant2`/`1907`.
+**Trap:** the „Kennung“ field is pre-filled with `admin`; a `triple_click` on the wrong coordinate selects
+page text instead of the input, `ctrl+a` then selects the whole document and the form still submits `admin`.
+Always verify the typed value (zoom or DOM) before submitting, and confirm the tenant afterwards via the
+document list or `select tenant_id …`.
+Deduplication is **per tenant** (`ingestion_documents` unique on `tenant_id`+`sha256`): the same PDF uploaded
+in tenant 2 must create a new document even if tenant 1 already has that hash, while a second upload in the
+same tenant must answer „Bereits vorhanden“ and create no extra row/occurrences.
+
+## Dokument-Einordnung (classification) — testing notes
+- Table `ingestion_document_classifications` (one row per document): per group
+  `*_source` (`filename`|`pdf-metadata`|`title-page`|`first-pages`|`manual`) and `*_confidence`.
+  Groups are: type, publicationName, edition, period (`period_start_year/end_year/issue`),
+  region (`region_place/district/state`).
+- Manual precedence is **per group**: `upsertDerivedClassification` skips a group whose
+  `*_source='manual'`. To prove it, a requeue is not enough — `module.ts` only processes documents in
+  state `uploaded`/`failed`, so reset the document first:
+  `update ingestion_documents set state='uploaded', error=null where id=<id>;` then set its
+  `ingestion.processing.run` job to `status='dead'` and use `/system/jobs` → „Erneut einreihen“.
+  Check `derived_at` changed, otherwise nothing was re-derived.
+- The correction form (`IngestionPage.tsx`) submits only fields touched in the browser
+  (React `touchedFields`, cleared after a successful save). Emptying a field sends `null`.
+  Verify per correction with `select details_json from audit_log where
+  action='ingestion.document.classification.corrected'` — it must contain only the touched fields.
+- **Trap (typing):** the filter inputs on `/ingestion` lose focus after every keystroke, so
+  `type "Sachsen-Anhalt"` lands a single character. Workaround: click the field + `End` before each
+  character (one `key` action per character). Verify the field content in the DOM before judging a
+  filter result — an empty result may be a half-typed value, not a filter bug.
+- Filter semantics to check: state must match exactly (`Sachsen` must not hit `Sachsen-Anhalt`);
+  unclassified documents must never match an active filter; the year filter is supposed to mean
+  "period contains year" — a document with `2020–2026` must appear for 2020 and 2023. It may be
+  implemented as `start >= year AND end <= year` (only exact single-year periods match) — check this
+  first, it is easy to miss.
+- Known runtime findings (PR #15, HEAD 8bdf1f2) that may still be present: raw `Failed query: update
+  ingestion_document_classifications ...` in the UI for an over-long publication name (text columns are
+  `varchar(255)` with `STRICT_TRANS_TABLES`, but the Zod schema has no length limit); validation errors
+  rendered as serialized Zod JSON instead of a field message; saving without changing anything writes an
+  audit row with `details_json = {}` and bumps `corrected_at`.
+- **Cross-field validation must always be tested against the stored row, not the payload.** Because the
+  form submits only touched fields, a rule like „Endjahr darf nicht vor dem Startjahr liegen“ can be
+  bypassed by changing only one of the two fields. The router builds an "effective state" from
+  `repository.getDocument(tenantId, id)`, but the Drizzle `getDocument` returns only the `ingestion_documents`
+  row (no `classification`), so `current?.periodStartYear` is `undefined` and the check silently never fires.
+  (Fixed at HEAD a06a9a0 via a `toDocument` helper in `drizzle-repository.ts`; the pattern — a repository
+  method returning the bare row behind `as never` — is worth re-checking whenever document reads change.)
+  Test procedure: put the row into a known state via SQL, then in the UI change **only** „Bis“ to a value
+  below the stored „Von“ (and separately only „Von“ above the stored „Bis“), and check
+  `ingestion_document_classifications` plus the audit row count afterwards. Both-fields-at-once is the
+  case that passes even when the one-field case is broken — never conclude from it. After a rejection the
+  form keeps the rejected value as "touched", so **reload the page (F5) between year cases**, otherwise the
+  next single-field case silently becomes a two-field case.
+  Also note the two rejection paths produce different texts: the Zod schema path (both fields submitted)
+  yields `Endjahr: Das Endjahr darf nicht vor dem Startjahr liegen.`, the router's effective-state path
+  (single field) yields the same sentence **without** the `Endjahr:` prefix — cosmetic, but do not treat the
+  missing prefix as a missing validation.
+- Forcing a document into state `failed` (exercises `setDocumentState`): back up and delete its object in
+  MinIO, then requeue its processing job.
+  `export AWS_ACCESS_KEY_ID=minioadmin AWS_SECRET_ACCESS_KEY=minioadmin;`
+  `aws --endpoint-url http://127.0.0.1:9000 s3 cp s3://xmaster-center/<storage_key> /tmp/backup.pdf` then
+  `... s3 rm s3://xmaster-center/<storage_key>`, set the job (`select … from jobs where payload like
+  '%"documentId": <id>%'`) to `status='dead'` and click „Erneut einreihen“ in `/system/jobs`. The document
+  then shows `Zustand: failed` with `Fehler: The specified key does not exist.` Restore the object with
+  `s3 cp` afterwards (the document stays `failed` until it is reprocessed).
+- Validation messages must carry German field labels (`Startjahr:`, `Publikationsname:`, `Ausgabe:`, `Ort:`,
+  `Ausgabennummer:`). The label table lives in `packages/kernel/src/trpc.ts` (`fieldLabels`) — it may have
+  gaps, so spread the probe over several fields; a leaking technical key is a finding.
+- Domain errors of other modules must not be masked by the central tRPC formatter. Probes (server side,
+  because the UI hides the buttons): `modules.ingestion.sources.fetch` with an unknown id and with a
+  `proposed` source, `modules.system.jobs.requeue` on a `completed` job, `modules.system.events.requeue` on
+  a row with `dead_letter=0` (table is `event_outbox`), `modules.assistant.proposals.execute` on a proposal
+  in `approval_required`. To see one of them in the UI, flip `ingestion_sources.status` to `approved`, load
+  `/ingestion/sources`, flip it back to `proposed`, then click „Abruf starten“ (the buttons sit far right —
+  the card list scrolls horizontally, scroll right or the click misses).
+- `documents.correct` takes the fields **flat** next to `id` (`{"json":{"id":1104,"periodEndYear":2005}}`).
+  A nested `value` object yields the misleading `Keine Änderung vorgenommen.` instead of an input error.
+- Genuine-error masking: a reliable unexpected error is `modules.crm.customers.create` with a 5000-char
+  `name` (column is `varchar(255)`). Expect `message = "Interner Serverfehler"`; raw SQL may still be in
+  `data.stack` in development. To check the production behaviour, start a second API instance with
+  `NODE_ENV=production PORT=3011 … npm exec --yes pnpm@10.4.1 -- dev:api` — `data.stack` must be `null`.
+  Careful: `pkill -f apps/api/src/main.ts` kills the dev API on 3010 as well; restart it afterwards.
+- Honesty check: a wrong value with high confidence is a defect. Cross-check derived values against the
+  print-ingest JSON in `/home/ubuntu/classification-evidence/*.json`
+  (`python3 -c "import json;d=json.load(open('starnberg.json'));print(d['pages'][0]['text'][:400])"`).
+  Example seen: place `Gilching` at 90 % taken from a single building-permit notice in a
+  Landkreis-Starnberg Amtsblatt.
