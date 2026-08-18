@@ -413,7 +413,8 @@ def test_split_contact_segments_ignore_right_hand_logo_for_alignment(monkeypatch
     assert result.manifest["status"] == "composed"
     assert result.manifest["centred"] is False
     assert result.manifest["anchor_box"][0] == 355
-    assert result.manifest["blocks"][0]["rows"][0]["position"][0] == 355
+    assert result.manifest["fax_inline"] is True
+    assert result.manifest["fax_inline_target"]["box"][0] == 355
 
 
 def test_digits_are_compared_as_contained_sequence(monkeypatch):
@@ -682,14 +683,15 @@ def test_resets_existing_communication_block_and_keeps_removed_values(
 
     assert result.manifest["mode"] == "block_reset"
     assert result.manifest["placement"] == "block_reset"
-    removed = {(item["channel"], item["value"]) for item in result.manifest["removed_values"]}
-    reset = {(item["channel"], item["value"]) for item in result.manifest["reset_values"]}
-    assert removed == reset
-    assert ("phone", "06441 12345") in reset
+    removed = {
+        (item["channel"], item["value"])
+        for item in result.manifest["removed_communication_values"]
+    }
+    assert ("phone", "06441 12345") in removed
     set_values = {
         (item["channel"], item["value"]) for item in result.manifest["set_values"]
     }
-    assert reset <= set_values
+    assert removed <= set_values
     rows = [row for block in result.manifest["blocks"] for row in block["rows"]]
     assert rows[0]["parts"][0]["display_value"].startswith("T ")
     assert rows[0]["parts"][1]["display_value"].startswith("F ")
@@ -716,7 +718,15 @@ def test_mixed_contact_content_is_not_removed_and_falls_back_to_append(monkeypat
     monkeypatch.setattr(extra_lines, "_anchor", lambda _image: anchor)
     monkeypatch.setattr(extra_lines, "_content_bounds", lambda *_args: (0, 600))
 
-    result = compose_extra_lines(image, [("fax", "06441 98765")])
+    result = compose_extra_lines(
+        image,
+        [
+            ("fax", "06441 98765"),
+            ("website", "example.de"),
+            ("facebook", "facebook.com/example"),
+            ("instagram", "instagram.com/example"),
+        ],
+    )
 
     assert result.manifest["mode"] == "append"
     assert result.manifest["placement"] != "block_reset"
@@ -740,3 +750,111 @@ def test_non_homogeneous_contact_background_falls_back_to_append(monkeypatch):
     assert result.manifest["block_reset_skipped_reason"] == (
         "non_homogeneous_background"
     )
+
+
+def test_reset_growth_continues_each_column_from_seam(monkeypatch):
+    image = Image.new("RGB", (600, 90), (20, 80, 140))
+    draw = ImageDraw.Draw(image)
+    draw.line((0, 0, 0, 89), fill=(220, 20, 20), width=2)
+    draw.line((599, 0, 599, 89), fill=(20, 20, 220), width=2)
+    font = ImageFont.truetype(extra_lines._font_path(False), 10)
+    draw.text((30, 40), "Telefon 06441 12345", font=font, fill="white")
+    draw.text((30, 55), "E-Mail info@example.de", font=font, fill="white")
+    anchor = _reset_anchor()
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: anchor)
+    monkeypatch.setattr(extra_lines, "_content_bounds", lambda *_args: (0, 600))
+
+    result = compose_extra_lines(
+        image,
+        [
+            ("fax", "06441 98765"),
+            ("website", "example.de"),
+            ("facebook", "facebook.com/example"),
+            ("instagram", "instagram.com/example"),
+        ],
+    )
+
+    assert result.manifest["mode"] == "block_reset"
+    assert result.image.getpixel((0, 66)) == image.getpixel((0, 65))
+    assert result.image.getpixel((599, 66)) == image.getpixel((599, 65))
+
+
+def test_reset_does_not_move_nonhomogeneous_artwork(monkeypatch):
+    image = Image.new("RGB", (600, 80), (20, 80, 140))
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.truetype(extra_lines._font_path(False), 10)
+    draw.text((30, 40), "Telefon 06441 12345", font=font, fill="white")
+    draw.text((30, 55), "E-Mail info@example.de", font=font, fill="white")
+    for y in range(66, 80):
+        draw.line((0, y, 599, y), fill=(y * 7 % 255, 30, 90))
+    anchor = _reset_anchor()
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: anchor)
+    monkeypatch.setattr(extra_lines, "_content_bounds", lambda *_args: (0, 600))
+
+    result = compose_extra_lines(image, [("fax", "06441 98765")])
+
+    assert result.manifest["mode"] == "append"
+    assert result.manifest["block_reset_skipped_reason"] in {
+        "no_room_without_moving_artwork",
+        "non_homogeneous_background",
+    }
+
+
+def test_inline_fax_rejects_nonhomogeneous_right_hand_area(monkeypatch):
+    image = Image.new("RGB", (600, 140), (20, 80, 140))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((30, 40, 300, 55), fill="white")
+    for y in range(35, 61):
+        draw.line((301, y, 590, y), fill=(y * 5 % 255, 30, 90))
+    anchor = {
+        "text": "06441 12345 | schmidt.example.de",
+        "heights": [("06441", 10), ("12345", 10)],
+        "left": 30,
+        "top": 40,
+        "right": 300,
+        "bottom": 55,
+        "contact_segments": [
+            {
+                "text": "06441 12345 | schmidt.example.de",
+                "heights": [("06441", 10), ("12345", 10)],
+                "left": 30,
+                "top": 40,
+                "right": 300,
+                "bottom": 55,
+                "ocr_source": "whole_image",
+                "confidence": 95,
+            }
+        ],
+        "ocr_lines": [],
+    }
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: anchor)
+    monkeypatch.setattr(extra_lines, "_content_bounds", lambda *_args: (0, 600))
+
+    result = compose_extra_lines(image, [("fax", "06441 98765")])
+
+    assert result.manifest["fax_inline"] is False
+    assert result.manifest["fax_inline_reason"] == "no_homogeneous_space"
+
+
+def test_all_rendered_rows_share_common_left_edge(monkeypatch):
+    image = Image.new("RGB", (600, 140), (20, 80, 140))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((30, 40, 300, 55), fill="white")
+    anchor = _anchor(left=30, right=300, bottom=55)
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: anchor)
+
+    result = compose_extra_lines(
+        image,
+        [
+            ("fax", "06441 98765"),
+            ("facebook", "facebook.com/example"),
+            ("instagram", "instagram.com/example"),
+        ],
+    )
+
+    positions = [
+        row["position"][0]
+        for block in result.manifest["blocks"]
+        for row in block["rows"]
+    ]
+    assert len(set(positions)) == 1

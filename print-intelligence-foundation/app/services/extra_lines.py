@@ -298,6 +298,86 @@ def _reset_background(
     return text, background
 
 
+def _columnwise_homogeneous(
+    image: Image.Image,
+    top: int,
+    bottom: int,
+    tolerance: int = 18,
+    left: int = 0,
+    right: int | None = None,
+) -> bool:
+    if bottom <= top:
+        return True
+    pixels = image.convert("RGB")
+    for x in range(left, right if right is not None else image.width):
+        column = [pixels.getpixel((x, y)) for y in range(top, bottom)]
+        reference = max(set(column), key=column.count)
+        matching = sum(
+            all(abs(pixel[index] - reference[index]) <= tolerance for index in range(3))
+            for pixel in column
+        )
+        if matching / len(column) < 0.90:
+            return False
+    return True
+
+
+def _rowwise_homogeneous(
+    image: Image.Image,
+    top: int,
+    bottom: int,
+    left: int,
+    right: int,
+    tolerance: int = 18,
+) -> bool:
+    pixels = image.convert("RGB")
+    for y in range(top, bottom):
+        row = [pixels.getpixel((x, y)) for x in range(left, right)]
+        if not row:
+            return False
+        reference = max(set(row), key=row.count)
+        matching = sum(
+            all(abs(pixel[index] - reference[index]) <= tolerance for index in range(3))
+            for pixel in row
+        )
+        if matching / len(row) < 0.90:
+            return False
+    return True
+
+
+def _inline_fax_area(
+    image: Image.Image,
+    segment: dict[str, Any],
+    content_right: int,
+    margin: int,
+    cap_height: int,
+) -> tuple[int, int, int, tuple[int, int, int]] | None:
+    left = segment["right"] + max(1, cap_height)
+    right = content_right - margin
+    padding = max(2, int(round(cap_height * 0.35)))
+    top = max(0, segment["top"] - padding)
+    bottom = min(image.height, segment["bottom"] + padding)
+    if right <= left or bottom <= top:
+        return None
+    pixels = image.convert("RGB")
+    run_right = left
+    background = None
+    for x in range(left, right):
+        column = [pixels.getpixel((x, y)) for y in range(top, bottom)]
+        candidate = max(set(column), key=column.count)
+        matching = sum(
+            all(abs(pixel[index] - candidate[index]) <= 18 for index in range(3))
+            for pixel in column
+        )
+        if matching / len(column) < 0.90:
+            break
+        if background is None:
+            background = candidate
+        run_right = x + 1
+    if background is None or run_right - left < max(20, cap_height * 3):
+        return None
+    return left, run_right, top, background
+
+
 def _reset_block(anchor: dict[str, Any]) -> dict[str, Any] | None:
     candidates = []
     all_segments = [
@@ -841,6 +921,7 @@ def compose_extra_lines(
         if reset is None and anchor.get("contact_segments")
         else None
     )
+    reset_colours = None
     if reset is not None:
         reset_colours = _reset_background(source, reset["segments"])
         if reset_colours is None:
@@ -860,6 +941,7 @@ def compose_extra_lines(
             },
         )
     reset_values = reset["values"] if reset is not None else []
+    requested_channels = list(channels)
     rendered_keys: set[tuple[str, str]] = set()
     render_channels = []
     for channel, value in [*reset_values, *channels]:
@@ -888,11 +970,8 @@ def compose_extra_lines(
             },
         )
     text_colour, background = colours
-    if reset is not None:
-        text_colour, background = _reset_background(source, reset["segments"]) or (
-            text_colour,
-            background,
-        )
+    if reset_colours is not None:
+        text_colour, background = reset_colours
     text_colour = _snap(text_colour)
     anchor_heights = sorted(
         [height for word, height in anchor["heights"] if CONTACT_RE.search(word)]
@@ -956,6 +1035,33 @@ def compose_extra_lines(
     margin = max(int(round(source.width * 0.04)), cap_height)
     left_limit = content_left + margin
     right_limit = content_right - margin
+    inline_fax = None
+    fax_values = [item for item in channels if item[0] == "fax"]
+    if len(fax_values) == 1 and not any(item[0] == "phone" for item in channels):
+        fax_value = fax_values[0]
+        for segment in anchor.get("contact_segments", []):
+            segment_values = _contact_values(segment.get("text", ""))
+            if not any(channel == "phone" for channel, _value in segment_values):
+                continue
+            area = _inline_fax_area(
+                source, segment, content_right, margin, cap_height
+            )
+            if area is not None:
+                inline_fax = {
+                    "channel": fax_value[0],
+                    "value": fax_value[1],
+                    "segment": segment,
+                    "left": area[0],
+                    "right": area[1],
+                    "top": area[2],
+                    "background": area[3],
+                }
+                break
+    fax_inline_reason = None if inline_fax else (
+        "no_homogeneous_space" if fax_values else None
+    )
+    if inline_fax:
+        channels = [item for item in channels if item[0] != "fax"]
     if anchor.get("alignment_left") is not None:
         centred = False
     else:
@@ -963,7 +1069,6 @@ def compose_extra_lines(
             abs((anchor["left"] + anchor["right"]) / 2 - source.width / 2)
             < source.width * 0.06
         )
-    max_available = right_limit - left_limit
     desired_left = max(
         left_limit,
         (
@@ -971,6 +1076,11 @@ def compose_extra_lines(
             if anchor.get("alignment_left") is not None
             else anchor["left"]
         ),
+    )
+    max_available = (
+        max(0, right_limit - desired_left)
+        if reset is not None and not centred
+        else right_limit - left_limit
     )
     if max_available <= 0:
         return ExtraLineComposition(
@@ -1045,24 +1155,87 @@ def compose_extra_lines(
     if reset is not None:
         reset_bottom = reset["bottom"]
         required_bottom = reset["top"] + content_height
-        delta = max(0, required_bottom - reset_bottom)
-        grown = Image.new(
-            "RGB", (source.width, source.height + delta), background
+        available_bottom = source.height - reset_bottom
+        needs_shift = required_bottom > source.height
+        homogeneous_room = (
+            available_bottom >= content_height
+            and _rowwise_homogeneous(
+                source,
+                reset_bottom,
+                min(source.height, reset_bottom + content_height),
+                content_left,
+                content_right,
+            )
         )
-        grown.paste(source.crop((0, 0, source.width, reset_bottom)), (0, 0))
-        grown.paste(
-            source.crop((0, reset_bottom, source.width, source.height)),
-            (0, reset_bottom + delta),
+        movable_artwork = _columnwise_homogeneous(
+            source, reset_bottom, source.height, left=content_left, right=content_right
         )
-        reset_box = (
-            max(0, reset["left"] - 2),
-            max(0, reset["top"] - 2),
-            min(grown.width, reset["right"] + 2),
-            min(grown.height, reset["bottom"] + delta + 2),
-        )
-        ImageDraw.Draw(grown).rectangle(reset_box, fill=background)
-        band_end = reset["top"]
-    elif not band_fits:
+        if (not needs_shift and not homogeneous_room) or (
+            needs_shift and not movable_artwork
+        ):
+            reset = None
+            reset_values = []
+            channels = list(requested_channels)
+            reset_skip_reason = "no_room_without_moving_artwork"
+            band_fits = False
+            bottom = list(
+                source.crop(
+                    (0, max(0, source.height - 3), source.width, source.height)
+                ).getdata()
+            )
+            background = max(set(bottom), key=bottom.count)
+            text_colour = (0, 0, 0) if sum(background) > 381 else (255, 255, 255)
+            content_end_value = _content_end(source, background)
+            insertion_gap = max(1, int(round(line_height / 2)))
+            band_end = content_end_value + insertion_gap
+            probe_blocks = _group_lines(
+                channels, draw_probe, probe, cap_height, max_available
+            )
+            font, blocks = (
+                (probe, probe_blocks)
+                if all(block["width"] <= max_available for block in probe_blocks)
+                else fit_blocks(max_available, minimum_font_size)
+            )
+            if font is None:
+                return ExtraLineComposition(
+                    source.copy(),
+                    {
+                        "status": "skipped",
+                        "reason": "font_below_readability_threshold",
+                        "lines": line_values,
+                        "discarded": discarded,
+                    },
+                )
+            content_height, glyph_bottom = _layout_height(
+                blocks, line_height, block_gap, font, cap_height, bottom_air
+            )
+        else:
+            delta = max(0, required_bottom - reset_bottom)
+            if delta:
+                grown = Image.new("RGB", (source.width, source.height + delta))
+                grown.paste(source, (0, 0))
+                seam = source.crop((0, reset_bottom - 1, source.width, reset_bottom))
+                for offset in range(delta):
+                    grown.paste(seam, (0, reset_bottom + offset))
+                grown.paste(
+                    source.crop((0, reset_bottom, source.width, source.height)),
+                    (0, reset_bottom + delta),
+                )
+            else:
+                grown = source.copy()
+            reset_draw = ImageDraw.Draw(grown)
+            for segment in reset["segments"]:
+                reset_draw.rectangle(
+                    (
+                        max(0, segment["left"]),
+                        max(0, segment["top"]),
+                        min(grown.width, segment["right"]),
+                        min(grown.height, segment["bottom"]),
+                    ),
+                    fill=background,
+                )
+            band_end = reset["top"]
+    if reset is None and not band_fits:
         available = max(0, source.height - band_end)
         fits_margin = available >= content_height and _uniform_rows(
             source, band_end, band_end + content_height, background
@@ -1076,7 +1249,7 @@ def compose_extra_lines(
         )
         if not fits_margin:
             grown.paste(source, (0, 0))
-    else:
+    elif reset is None:
         grown = Image.new("RGB", (source.width, source.height + content_height), background)
         grown.paste(source.crop((0, 0, source.width, band_end)), (0, 0))
     if reset is None and band_fits:
@@ -1090,7 +1263,7 @@ def compose_extra_lines(
     draw = ImageDraw.Draw(grown)
     y = band_end
     manifest_blocks = []
-    max_block_width = max(block["width"] for block in blocks)
+    max_block_width = max((block["width"] for block in blocks), default=0)
     desired_common_x = (
         content_left + (content_right - content_left - max_block_width) / 2
         if centred
@@ -1100,6 +1273,14 @@ def compose_extra_lines(
         left_limit,
         min(desired_common_x, right_limit - max_block_width),
     )
+    if inline_fax is not None:
+        fax_display = _display_value(inline_fax["channel"], inline_fax["value"])
+        draw.text(
+            (inline_fax["left"], inline_fax["segment"]["top"]),
+            fax_display,
+            font=font,
+            fill=text_colour,
+        )
     for block in blocks:
         block_start = y
         block_x = common_x
@@ -1191,19 +1372,37 @@ def compose_extra_lines(
             "block_gap": block_gap,
             "lines": line_values,
             "discarded": discarded,
-            "removed_values": [
-                {"channel": channel, "value": value}
-                for channel, value in (reset_values if reset is not None else [])
-            ],
-            "reset_values": [
+            "removed_communication_values": [
                 {"channel": channel, "value": value}
                 for channel, value in (reset_values if reset is not None else [])
             ],
             "set_values": [
                 {"channel": channel, "value": value}
-                for channel, value in channels
+                for channel, value in (
+                    channels
+                    + (
+                        [(inline_fax["channel"], inline_fax["value"])]
+                        if inline_fax is not None
+                        else []
+                    )
+                )
             ],
             "block_reset_skipped_reason": reset_skip_reason,
+            "fax_inline": inline_fax is not None,
+            "fax_inline_reason": fax_inline_reason,
+            "fax_inline_target": (
+                {
+                    "text": inline_fax["segment"]["text"],
+                    "box": [
+                        inline_fax["segment"]["left"],
+                        inline_fax["segment"]["top"],
+                        inline_fax["segment"]["right"],
+                        inline_fax["segment"]["bottom"],
+                    ],
+                }
+                if inline_fax is not None
+                else None
+            ),
             "blocks": manifest_blocks,
             "ocr": anchor.get("ocr_metadata", {}),
             "grew": grown.height > source.height,
