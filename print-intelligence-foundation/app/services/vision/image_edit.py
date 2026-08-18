@@ -160,6 +160,12 @@ class OpenAIImageEditProvider:
                 follow_redirects=False,
             )
             response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = self._response_error_detail(exc.response)
+            suffix = f": {detail}" if detail else ""
+            raise ValueError(
+                f"image edit HTTP request failed: {exc}{suffix}"
+            ) from exc
         except httpx.HTTPError as exc:
             raise ValueError(f"image edit HTTP request failed: {exc}") from exc
         try:
@@ -178,6 +184,24 @@ class OpenAIImageEditProvider:
 
     def available(self) -> bool:
         return bool(self.api_key)
+
+    @staticmethod
+    def _response_error_detail(response: httpx.Response) -> str:
+        try:
+            payload = response.json()
+        except ValueError:
+            return ""
+        error = payload.get("error") if isinstance(payload, dict) else None
+        if not isinstance(error, dict):
+            return ""
+        detail = {
+            key: error[key]
+            for key in ("message", "type", "code", "param")
+            if error.get(key) is not None
+        }
+        if not detail:
+            return ""
+        return json.dumps(detail, ensure_ascii=False)[:500]
 
     def _validate_base_url(self) -> None:
         parsed = urlparse(self.base_url)

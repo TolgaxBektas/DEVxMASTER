@@ -6,6 +6,7 @@ import re
 import tempfile
 from time import monotonic
 from pathlib import Path
+import pikepdf
 from PIL import Image
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -46,6 +47,10 @@ from app.services.text_layer import (
     remove_substring_bleed,
     watermark_markers_in_boxes,
 )
+from app.services.watermark_text_objects import (
+    clean_pdf,
+    verify_cleaned_ad,
+)
 from app.services.vision.image_edit import (
     ImageEditProvider,
     image_sha256,
@@ -84,8 +89,8 @@ class Pipeline:
         vision_consensus_runs=1,
         restoration_enabled=False,
         image_edit_provider: ImageEditProvider | None = None,
-        image_edit_max_cost_cents: int = 100,
-        image_edit_hard_stop_cents: int = 100,
+        image_edit_max_cost_cents: int = 7,
+        image_edit_hard_stop_cents: int = 1000,
         image_edit_max_attempts: int = 1,
         image_edit_color_tolerance: float = 0.12,
         watermark_markers: list[str] | None = None,
@@ -242,6 +247,44 @@ class Pipeline:
             page.form_header_json = form.as_json() if form.is_order_form else "{}"
         self.session.commit()
 
+    def _prepare_watermark_cleaning(
+        self,
+        source,
+        local_root,
+        page_number,
+        index,
+        box,
+        artwork_gate_holds,
+        evidence,
+    ):
+        if not artwork_gate_holds or not evidence:
+            return None
+        try:
+            cleaned_pdf = (
+                local_root
+                / "restoration_source"
+                / f"watermark_cleaned_page_{page_number}_{index}.pdf"
+            )
+            cleaning = clean_pdf(
+                source,
+                cleaned_pdf,
+                {page_number: [box]},
+                self.watermark_markers,
+                self.render_dpi,
+            )
+            return (
+                cleaning.pdf_path,
+                render_page(cleaning.pdf_path, page_number, self.artwork_dpi),
+            )
+        except (OSError, ValueError, TypeError, pikepdf.PdfError):
+            logger.exception(
+                "watermark text-object cleaning failed for page %s "
+                "advertisement %s",
+                page_number,
+                index,
+            )
+            return None
+
     def _detect_pages(self, doc, source, page_paths, digest, local_root, deadline):
         for number, path in page_paths.items():
             self._check_deadline(deadline)
@@ -285,8 +328,15 @@ class Pipeline:
                 }
             for index, box in enumerate(boxes):
                 self._check_deadline(deadline)
-                advert = next(ad for candidate, ad in candidates if candidate == box)
                 key = f"{box.left},{box.top},{box.right},{box.bottom}"
+                advert = next(
+                    (
+                        ad
+                        for candidate, ad in candidates
+                        if candidate == box
+                    ),
+                    {},
+                )
                 existing = self.session.scalar(
                     select(AdOccurrence).where(
                         AdOccurrence.page_id == page.id,
@@ -298,6 +348,19 @@ class Pipeline:
                         self._artwork_gate(
                             page, existing.confidence, box, size
                         )
+                    )
+                    watermark_cleaning = (
+                        self._prepare_watermark_cleaning(
+                            source,
+                            local_root,
+                            number,
+                            index,
+                            box,
+                            artwork_gate_holds,
+                            watermark_evidence.get(key, []),
+                        )
+                        if artwork_gate_holds
+                        else None
                     )
                     if (
                         artwork_page is not None
@@ -318,6 +381,7 @@ class Pipeline:
                             digest,
                             page,
                             watermark_evidence.get(key, []),
+                            watermark_cleaning,
                         )
                     elif (
                         self.restoration_enabled
@@ -341,6 +405,7 @@ class Pipeline:
                             digest,
                             page,
                             watermark_evidence.get(key, []),
+                            watermark_cleaning,
                         )
                     elif self.restoration_enabled:
                         self._refuse_restoration(
@@ -386,6 +451,19 @@ class Pipeline:
                         page, occurrence.confidence, box, size
                     )
                 )
+                watermark_cleaning = (
+                    self._prepare_watermark_cleaning(
+                        source,
+                        local_root,
+                        number,
+                        index,
+                        box,
+                        artwork_gate_holds,
+                        watermark_evidence.get(key, []),
+                    )
+                    if artwork_gate_holds
+                    else None
+                )
                 if artwork_page is not None and artwork_gate_holds:
                     artwork_output, padded_box = self._write_artwork(
                         occurrence, artwork_page, box, size, digest, number, index
@@ -401,6 +479,7 @@ class Pipeline:
                         digest,
                         page,
                         watermark_evidence.get(key, []),
+                        watermark_cleaning,
                     )
                 elif self.restoration_enabled:
                     self._refuse_restoration(
@@ -622,6 +701,34 @@ class Pipeline:
         )
         return output, padded_box
 
+    def _write_cleaned_artwork(
+        self, artwork_page, box, detector_size, digest, occurrence
+    ):
+        scale_x = artwork_page.width / detector_size[0]
+        scale_y = artwork_page.height / detector_size[1]
+        artwork_box = Box(
+            round(box.left * scale_x),
+            round(box.top * scale_y),
+            round(box.right * scale_x),
+            round(box.bottom * scale_y),
+        )
+        output = (
+            self.local_work_dir
+            / digest
+            / "restoration_source"
+            / f"watermark_occurrence_{occurrence.id}.png"
+        )
+        trimmed = output.with_name(f"{output.stem}_trimmed.png")
+        _, _, padded_box = restore_artwork(
+            artwork_page,
+            artwork_box,
+            output,
+            trimmed,
+            self.artwork_padding,
+            self.artwork_trim_cap,
+        )
+        return output, padded_box
+
     def _artwork_padded_box(self, box, detector_size, artwork_size):
         scale_x = artwork_size[0] / detector_size[0]
         scale_y = artwork_size[1] / detector_size[1]
@@ -662,11 +769,118 @@ class Pipeline:
         digest,
         page,
         watermark_evidence=None,
+        watermark_cleaning=None,
     ):
         if not self.restoration_enabled:
             return
         watermark_evidence = watermark_evidence or []
-        if watermark_evidence:
+        deterministic_watermark_passed = False
+        deterministic_candidate = False
+        cleaning_verification = None
+        deterministic_verification = None
+        verification_source = source
+        verification_artwork = artwork_output
+        verification_origin = (padded_box.left, padded_box.top)
+        if watermark_evidence and watermark_cleaning is not None:
+            cleaned_pdf, cleaned_page = watermark_cleaning
+            cleaning_verification = verify_cleaned_ad(
+                source,
+                cleaned_pdf,
+                page_number,
+                box,
+                self.watermark_markers,
+                self.render_dpi,
+                self.artwork_dpi,
+            )
+            if cleaning_verification.passed:
+                cleaned_artwork, cleaned_padded_box = (
+                    self._write_cleaned_artwork(
+                        cleaned_page,
+                        box,
+                        detector_size,
+                        digest,
+                        occurrence,
+                    )
+                )
+                result = propose_level_one(
+                    cleaned_pdf,
+                    page_number,
+                    box,
+                    self.render_dpi,
+                    cleaned_artwork,
+                    (cleaned_padded_box.left, cleaned_padded_box.top),
+                    self.artwork_dpi,
+                )
+                result.manifest.update(
+                    {
+                        "cascade_level": 2,
+                        "restoration_stage": "deterministic_text_object",
+                        "watermark": {
+                            "detected": True,
+                            "markers": watermark_evidence,
+                            "source": "pdf_text_layer",
+                        },
+                        "watermark_text_objects": {
+                            "method": "pikepdf_text_object_removal",
+                            "provenance": {
+                                "original_pdf": str(source),
+                                "cleaned_pdf": str(cleaned_pdf),
+                                "page": page_number,
+                            },
+                            "verification": cleaning_verification.as_dict(),
+                        },
+                    }
+                )
+                deterministic_candidate = result.image is not None
+                verification_source = cleaned_pdf
+                verification_artwork = cleaned_artwork
+                verification_origin = (
+                    cleaned_padded_box.left,
+                    cleaned_padded_box.top,
+                )
+            else:
+                result = RestorationResult(
+                    image=None,
+                    manifest={
+                        "cascade_level": 2,
+                        "geometry_quality": {
+                            "status": "not_assessed",
+                            "text_characters": None,
+                            "invalid_ratio": None,
+                            "overlap_ratio": None,
+                        },
+                        "verification": {"status": "not_assessed", "checks": []},
+                        "watermark": {
+                            "detected": True,
+                            "markers": watermark_evidence,
+                            "source": "pdf_text_layer",
+                        },
+                        "watermark_text_objects": {
+                            "method": "pikepdf_text_object_removal",
+                            "provenance": {
+                                "original_pdf": str(source),
+                                "cleaned_pdf": str(cleaned_pdf),
+                                "page": page_number,
+                            },
+                            "verification": cleaning_verification.as_dict(),
+                        },
+                        "deterministic_restoration": {
+                            "status": "refused",
+                            "reason": (
+                                "The cleaned PDF failed one or more "
+                                "losslessness checks."
+                            ),
+                        },
+                        "findings": [],
+                        "review_status": "pending",
+                        "edit_status": "refused",
+                    },
+                    review_reason=(
+                        "watermark text-object cleaning verification failed; "
+                        "falling back to generative restoration"
+                    ),
+                )
+        elif watermark_evidence:
             reason = (
                 "watermark detected in PDF text layer; deterministic "
                 "pixel-shift restoration is insufficient"
@@ -712,18 +926,36 @@ class Pipeline:
         if proposal_image is not None:
             fields = json.loads(occurrence.fields_json).get("fields", {})
             verification = verify_proposal(
-                source,
+                verification_source,
                 page_number,
                 box,
                 self.render_dpi,
-                artwork_output,
+                verification_artwork,
                 proposal_image,
-                (padded_box.left, padded_box.top),
+                verification_origin,
                 self.artwork_dpi,
                 result.manifest,
                 [str(value) for value in fields.values() if value],
             )
+            if cleaning_verification is not None:
+                cleaning_checks = [
+                    {
+                        "name": f"watermark_{name}",
+                        **check,
+                    }
+                    for name, check in cleaning_verification.as_dict().items()
+                    if isinstance(check, dict)
+                ]
+                verification["checks"].extend(cleaning_checks)
+                verification["status"] = (
+                    "passed"
+                    if verification["status"] == "passed"
+                    and cleaning_verification.passed
+                    else "failed"
+                )
             result.manifest["verification"] = verification
+            if cleaning_verification is not None:
+                deterministic_verification = verification
             if verification["status"] != "passed":
                 proposal_image = None
                 review_reason = (
@@ -734,7 +966,51 @@ class Pipeline:
                 )
                 result.manifest["edit_status"] = "refused"
             else:
-                result.manifest["restoration_mode"] = "pixel_shift"
+                result.manifest["restoration_mode"] = (
+                    "deterministic_text_object"
+                    if cleaning_verification is not None
+                    else "pixel_shift"
+                )
+                deterministic_watermark_passed = (
+                    cleaning_verification is not None
+                )
+                if deterministic_watermark_passed:
+                    result.manifest.update(
+                        {
+                            "deterministic_restoration": {
+                                "status": "passed",
+                                "reason": (
+                                    "The cleaned PDF and independent restoration "
+                                    "verification both passed."
+                                ),
+                            },
+                            "review_status": "not_required",
+                            "review_exemption_reason": (
+                                "Human review is not required because the "
+                                "deterministic PDF cleaning and independent "
+                                "verification both passed."
+                            ),
+                            "edit_status": "applied",
+                        }
+                    )
+        if (
+            cleaning_verification is not None
+            and not deterministic_watermark_passed
+        ):
+            result.manifest["deterministic_restoration"] = {
+                "status": "refused",
+                "reason": (
+                    "Independent verification of the cleaned PDF restoration "
+                    "failed."
+                    if deterministic_candidate
+                    else (
+                        result.review_reason
+                        or "Level-one restoration produced no image."
+                    )
+                ),
+            }
+            result.manifest["review_status"] = "pending"
+            result.manifest["edit_status"] = "refused"
         if proposal_image is None and self.image_edit_provider is not None:
             proposal_image, review_reason = self._try_generative_restoration(
                 result,
@@ -745,20 +1021,33 @@ class Pipeline:
                 padded_box,
                 occurrence,
             )
-        if watermark_evidence:
+            if deterministic_verification is not None:
+                result.manifest["verification"]["checks"].extend(
+                    {
+                        "name": f"deterministic_{check['name']}",
+                        **check,
+                    }
+                    for check in deterministic_verification["checks"]
+                )
+                if deterministic_verification["status"] != "passed":
+                    result.manifest["verification"]["status"] = "failed"
+        if watermark_evidence and not deterministic_watermark_passed:
             result.manifest["watermark"] = {
                 "detected": True,
                 "markers": watermark_evidence,
                 "source": "pdf_text_layer",
             }
             result.manifest["cascade_level"] = 2
-            result.manifest["deterministic_restoration"] = {
-                "status": "refused",
-                "reason": (
-                    "Watermark remains in a deterministic PDF render; "
-                    "pixel-shift restoration is insufficient."
-                ),
-            }
+            result.manifest.setdefault(
+                "deterministic_restoration",
+                {
+                    "status": "refused",
+                    "reason": (
+                        "Watermark remains in a deterministic PDF render; "
+                        "pixel-shift restoration is insufficient."
+                    ),
+                },
+            )
             if proposal_image is None:
                 result.manifest["edit_status"] = "refused"
                 result.manifest["review_status"] = "pending"
@@ -777,6 +1066,13 @@ class Pipeline:
                     f"{generative_reason}."
                 )
                 review_reason = generative_reason
+        elif watermark_evidence:
+            result.manifest["watermark"] = {
+                "detected": True,
+                "markers": watermark_evidence,
+                "source": "pdf_text_layer",
+            }
+            result.manifest["cascade_level"] = 2
         if proposal_image is not None:
             original_image = Image.open(artwork_output).convert("RGB")
             fields = json.loads(occurrence.fields_json or "{}").get("fields", {})
@@ -841,10 +1137,11 @@ class Pipeline:
                 review_reason = "; ".join(
                     reason for reason in [review_reason, *messages] if reason
                 )
-            review_reason = review_reason or (
-                "Restaurierungsvorschlag wartet auf menschliche Freigabe"
-            )
-            if watermark_evidence:
+            if not review_reason and not deterministic_watermark_passed:
+                review_reason = (
+                    "Restaurierungsvorschlag wartet auf menschliche Freigabe"
+                )
+            if watermark_evidence and not deterministic_watermark_passed:
                 review_reason = (
                     "watermark restoration always requires human review; "
                     + review_reason
