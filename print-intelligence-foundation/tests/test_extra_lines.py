@@ -103,12 +103,114 @@ def test_groups_blocks_and_keeps_social_profiles_stacked(monkeypatch):
     blocks = result.manifest["blocks"]
     assert [block["name"] for block in blocks] == ["phone", "email_web", "social"]
     assert len(blocks[0]["rows"]) == 1
-    assert len(blocks[1]["rows"]) == 2
-    assert len(blocks[2]["rows"]) == 2
+    assert len(blocks[1]["rows"]) == 1
+    assert len(blocks[2]["rows"]) == 1
     assert all(row["logo_used"] for row in blocks[2]["rows"])
     assert blocks[2]["top"] - (
-        blocks[1]["top"] + 2 * result.manifest["line_height"]
+        blocks[1]["top"] + result.manifest["line_height"]
     ) == result.manifest["block_gap"]
+
+
+def test_alignment_is_inherited_for_left_right_and_centred_contacts(monkeypatch):
+    image = Image.new("RGB", (600, 180), (20, 80, 140))
+    values = [("website", "example.de"), ("facebook", "facebook.com/acme")]
+    for expected in ("left", "right", "centred"):
+        anchor = {**_anchor(left=40, right=180), "alignment": expected}
+        monkeypatch.setattr(extra_lines, "_anchor", lambda _image, anchor=anchor: anchor)
+        result = compose_extra_lines(image, values)
+        assert result.manifest["alignment"] == expected
+        rows = [row for block in result.manifest["blocks"] for row in block["rows"]]
+        if expected == "centred":
+            frame_center = 110
+            assert all(
+                abs(row["position"][0] + row["width"] / 2 - frame_center) <= 1
+                for row in rows
+            )
+        elif expected == "right":
+            frame_right = result.manifest["content_bounds"][1]
+            assert all(
+                row["position"][0] + row["width"] <= frame_right
+                for row in rows
+            )
+            ends = [row["position"][0] + row["width"] for row in rows]
+            assert max(ends) - min(ends) <= 1
+        else:
+            assert len({row["position"][0] for row in rows}) == 1
+
+
+def test_alignment_uses_contact_column_reference_edges(monkeypatch):
+    image = Image.new("RGB", (700, 180), (20, 80, 140))
+    values = [("website", "example.de"), ("facebook", "facebook.com/acme")]
+    cases = [
+        ("left", {"left": 170, "right": 300, "alignment_left": 170}, "left"),
+        ("right", {"left": 400, "right": 530, "alignment_right": 530}, "right"),
+        ("centred", {"left": 280, "right": 420}, "centred"),
+    ]
+    for expected, geometry, mode in cases:
+        alignment_fields = {
+            key: geometry.pop(key)
+            for key in ("alignment_left", "alignment_right")
+            if key in geometry
+        }
+        anchor = {
+            **_anchor(**geometry),
+            **alignment_fields,
+            "alignment": expected,
+        }
+        monkeypatch.setattr(extra_lines, "_anchor", lambda _image, anchor=anchor: anchor)
+        result = compose_extra_lines(image, values)
+        rows = [row for block in result.manifest["blocks"] for row in block["rows"]]
+        assert result.manifest["alignment"] == expected
+        if mode == "left":
+            assert all(row["position"][0] == 170 for row in rows)
+        elif mode == "right":
+            assert all(abs(row["position"][0] + row["width"] - 530) <= 1 for row in rows)
+        else:
+            assert all(
+                abs(row["position"][0] + row["width"] / 2 - 350) <= 1
+                for row in rows
+            )
+
+
+def test_pairing_and_social_packing_use_available_width():
+    image = Image.new("RGB", (1000, 100), "white")
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.truetype(extra_lines._font_path(False), 20)
+    values = [
+        ("phone", "06441 12345"),
+        ("fax", "06441 98765"),
+        ("email", "info@example.de"),
+        ("website", "example.de"),
+        ("facebook", "facebook.com/a"),
+        ("instagram", "instagram.com/a"),
+        ("linkedin", "linkedin.com/a"),
+    ]
+
+    wide = extra_lines._group_lines(values, draw, font, 20, 600)
+    assert len(wide[0]["rows"][0]["parts"]) == 2
+    assert len(wide[1]["rows"][0]["parts"]) == 2
+    assert len(wide[2]["rows"]) == 1
+    assert all(part["logo_used"] for part in wide[2]["rows"][0]["parts"])
+
+    barely_wide = extra_lines._group_lines(
+        [item for item in values if item[0] not in {"phone", "fax", "email", "website"}],
+        draw,
+        font,
+        20,
+        560,
+    )
+    assert len(barely_wide[0]["rows"]) == 1
+    assert {part["font"].size for part in barely_wide[0]["rows"][0]["parts"]} == {18}
+
+    narrow = extra_lines._group_lines(
+        [item for item in values if item[0] not in {"phone", "fax", "email", "website"}],
+        draw,
+        font,
+        20,
+        300,
+    )
+    assert len(narrow[0]["rows"]) == 3
+    assert all(part["font"].size == 20 for row in narrow[0]["rows"] for part in row["parts"])
 
 
 def test_phone_and_fax_use_short_labels_and_preserve_number_text(monkeypatch):
@@ -145,7 +247,7 @@ def test_existing_phone_leaves_only_labeled_fax(monkeypatch):
     ]
 
 
-def test_all_communication_rows_share_left_edge_and_social_logo_is_centered(
+def test_all_communication_rows_are_individually_centered_with_social_logo(
     monkeypatch,
 ):
     image = Image.new("RGB", (600, 160), "white")
@@ -164,7 +266,11 @@ def test_all_communication_rows_share_left_edge_and_social_logo_is_centered(
     )
 
     rows = [row for block in result.manifest["blocks"] for row in block["rows"]]
-    assert len({row["position"][0] for row in rows}) == 1
+    content_left, content_right = result.manifest["content_bounds"]
+    frame_center = (content_left + content_right) / 2
+    assert result.manifest["alignment"] == "centred"
+    for row in rows:
+        assert abs(row["position"][0] + row["width"] / 2 - frame_center) <= 1
     social_part = result.manifest["blocks"][-1]["rows"][0]["parts"][0]
     assert social_part["display_value"] == "instagram.com/example"
     assert social_part["logo_size"][1] > result.manifest["cap_height"]
@@ -195,6 +301,148 @@ def test_phone_and_fax_stack_when_the_available_width_is_too_small(monkeypatch):
     assert result.manifest["status"] in {"composed", "skipped"}
     assert len(result.manifest["blocks"][0]["rows"]) == 2
     assert all(row["width"] <= 120 - 2 * max(5, result.manifest["cap_height"]) for row in result.manifest["blocks"][0]["rows"])
+
+
+def test_all_supported_social_channels_are_detected_and_display_stripped():
+    text = (
+        "facebook.com/acme instagram.com/acme linkedin.com/acme "
+        "youtube.com/@acme tiktok.com/@acme xing.com/profile"
+    )
+    values = extra_lines._contact_values(text)
+
+    assert [channel for channel, _value in values] == [
+        "facebook",
+        "instagram",
+        "linkedin",
+        "youtube",
+        "tiktok",
+        "xing",
+    ]
+    assert extra_lines._display_value("linkedin", "https://www.linkedin.com/acme") == (
+        "linkedin.com/acme"
+    )
+    assert extra_lines._display_value("youtube", "www.youtube.com/@acme") == (
+        "youtube.com/@acme"
+    )
+    assert extra_lines._display_value("tiktok", "https://tiktok.com/@acme") == (
+        "tiktok.com/@acme"
+    )
+    assert extra_lines._display_value("xing", "www.xing.com/profile") == (
+        "xing.com/profile"
+    )
+
+
+def test_block_reset_rows_are_centered_individually(monkeypatch):
+    image = Image.new("RGB", (600, 180), (20, 80, 140))
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.truetype(extra_lines._font_path(False), 10)
+    draw.text((30, 40), "Telefon 06441 12345", font=font, fill="white")
+    draw.text((30, 55), "E-Mail info@example.de", font=font, fill="white")
+    anchor = _reset_anchor()
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: anchor)
+    monkeypatch.setattr(extra_lines, "_content_bounds", lambda *_args: (0, 600))
+
+    result = compose_extra_lines(
+        image,
+        [
+            ("fax", "06441 98765"),
+            ("website", "example.de"),
+            ("linkedin", "linkedin.com/acme"),
+            ("youtube", "youtube.com/@acme"),
+        ],
+    )
+
+    assert result.manifest["mode"] == "block_reset"
+    assert result.manifest["alignment"] == "centred"
+    frame_center = 275
+    content_left, content_right = result.manifest["content_bounds"]
+    for block in result.manifest["blocks"]:
+        for row in block["rows"]:
+            assert abs(row["position"][0] + row["width"] / 2 - frame_center) <= 1
+            assert row["position"][0] >= content_left
+            assert row["position"][0] + row["width"] <= content_right
+    assert all(
+        part["logo_used"]
+        for row in result.manifest["blocks"][-1]["rows"]
+        for part in row["parts"]
+    )
+
+
+def test_reset_preserves_phone_and_fax_with_identical_digits(monkeypatch):
+    image = Image.new("RGB", (600, 180), (20, 80, 140))
+    segment = {
+        "text": "Telefon 06441 12345 / Fax 06441 12345",
+        "left": 30,
+        "top": 40,
+        "right": 520,
+        "bottom": 55,
+    }
+    reset = {
+        "segments": [segment],
+        "values": [
+            ("phone", "06441 12345"),
+            ("fax", "06441 12345"),
+        ],
+        "left": 30,
+        "top": 40,
+        "right": 520,
+        "bottom": 55,
+    }
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: _anchor())
+    monkeypatch.setattr(extra_lines, "_reset_block", lambda _anchor: reset)
+    monkeypatch.setattr(extra_lines, "_content_bounds", lambda *_args: (0, 600))
+    monkeypatch.setattr(extra_lines, "_inline_fax_area", lambda *_args: None)
+
+    result = compose_extra_lines(image, [("fax", "06441 98765")])
+
+    assert result.manifest["mode"] == "block_reset"
+    phone_rows = result.manifest["blocks"][0]["rows"]
+    assert [
+        (part["channel"], part["value"])
+        for row in phone_rows
+        for part in row["parts"]
+    ][:2] == [
+        ("phone", "06441 12345"),
+        ("fax", "06441 12345"),
+    ]
+    assert {
+        (item["channel"], item["value"])
+        for item in result.manifest["removed_communication_values"]
+    } == {
+        ("phone", "06441 12345"),
+        ("fax", "06441 12345"),
+    }
+
+
+def test_reset_falls_back_when_erased_value_guard_reports_missing(monkeypatch):
+    image = Image.new("RGB", (600, 140), (20, 80, 140))
+    anchor = _reset_anchor()
+    reset = {
+        "segments": anchor["contact_segments"],
+        "values": [("phone", "06441 12345")],
+        "left": 30,
+        "top": 40,
+        "right": 520,
+        "bottom": 65,
+    }
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: anchor)
+    monkeypatch.setattr(extra_lines, "_reset_block", lambda _anchor: reset)
+    original_group_lines = extra_lines._group_lines
+    monkeypatch.setattr(
+        extra_lines,
+        "_group_lines",
+        lambda values, *args: original_group_lines(
+            [item for item in values if item[0] != "phone"],
+            *args,
+        ),
+    )
+
+    result = compose_extra_lines(image, [("fax", "06441 98765")])
+
+    assert result.manifest["mode"] == "append"
+    assert result.manifest["block_reset_skipped_reason"] == (
+        "removed_value_not_preserved"
+    )
 
 
 def test_long_value_is_fit_within_image_bounds(monkeypatch):
@@ -366,7 +614,11 @@ def test_whole_image_anchor_controls_alignment_while_band_detects_duplicate(
     assert result.manifest["status"] == "composed"
     assert result.manifest["anchor_box"][0] == 100
     assert result.manifest["discarded"][0]["reason"] == "already_present"
-    assert result.manifest["blocks"][0]["rows"][0]["position"][0] == 100
+    row = result.manifest["blocks"][0]["rows"][0]
+    content_left, content_right = result.manifest["content_bounds"]
+    assert result.manifest["alignment"] == "left"
+    assert row["position"][0] >= content_left
+    assert row["position"][0] + row["width"] <= content_right
 
 
 def test_split_contact_segments_ignore_right_hand_logo_for_alignment(monkeypatch):
@@ -412,6 +664,7 @@ def test_split_contact_segments_ignore_right_hand_logo_for_alignment(monkeypatch
 
     assert result.manifest["status"] == "composed"
     assert result.manifest["centred"] is False
+    assert result.manifest["alignment"] == "left"
     assert result.manifest["anchor_box"][0] == 355
     assert result.manifest["fax_inline"] is True
     assert result.manifest["fax_inline_target"]["box"][0] == 355
@@ -594,7 +847,7 @@ def test_right_aligned_anchor_shrinks_social_line_inside_right_margin(monkeypatc
         for row in block["rows"]:
             assert margin <= row["position"][0]
             assert row["position"][0] + row["width"] <= image.width - margin
-    assert all(block["shifted"] for block in result.manifest["blocks"])
+    assert all(not block["shifted"] for block in result.manifest["blocks"])
 
 
 def test_descender_on_last_line_has_full_glyph_clearance(monkeypatch):
@@ -647,7 +900,12 @@ def test_appended_strip_fits_font_after_final_centering(monkeypatch):
     assert result.manifest["status"] == "composed"
     assert result.manifest["placement"] == "appended_strip"
     assert result.manifest["centred"] is False
-    assert result.manifest["blocks"][0]["rows"][0]["position"][0] == 80
+    assert result.manifest["alignment"] == "left"
+    row = result.manifest["blocks"][0]["rows"][0]
+    content_left, content_right = result.manifest["content_bounds"]
+    assert result.manifest["alignment"] == "left"
+    assert row["position"][0] >= content_left
+    assert row["position"][0] + row["width"] <= content_right
     probe = extra_lines._fit_font(
         "X", result.manifest["cap_height"], result.manifest["bold"]
     )
@@ -728,7 +986,10 @@ def test_resets_existing_communication_block_and_keeps_removed_values(
     rows = [row for block in result.manifest["blocks"] for row in block["rows"]]
     assert rows[0]["parts"][0]["display_value"].startswith("T ")
     assert rows[0]["parts"][1]["display_value"].startswith("F ")
-    assert rows[0]["position"][0] == rows[1]["position"][0]
+    assert all(
+        abs(row["position"][0] + row["width"] / 2 - 275) <= 1
+        for row in rows
+    )
 
 
 def test_mixed_contact_content_is_not_removed_and_falls_back_to_append(monkeypatch):
@@ -892,7 +1153,7 @@ def test_inline_fax_area_reserves_cap_height_before_foreign_content():
     assert area[1] <= 180
 
 
-def test_all_rendered_rows_share_common_left_edge(monkeypatch):
+def test_all_rendered_rows_are_centered_in_the_content_frame(monkeypatch):
     image = Image.new("RGB", (600, 140), (20, 80, 140))
     draw = ImageDraw.Draw(image)
     draw.rectangle((30, 40, 300, 55), fill="white")
@@ -908,12 +1169,11 @@ def test_all_rendered_rows_share_common_left_edge(monkeypatch):
         ],
     )
 
-    positions = [
-        row["position"][0]
-        for block in result.manifest["blocks"]
-        for row in block["rows"]
-    ]
-    assert len(set(positions)) == 1
+    content_left, content_right = result.manifest["content_bounds"]
+    frame_center = (content_left + content_right) / 2
+    for block in result.manifest["blocks"]:
+        for row in block["rows"]:
+            assert abs(row["position"][0] + row["width"] / 2 - frame_center) <= 1
 
 
 def test_reset_rejects_element_over_existing_artwork():
@@ -960,7 +1220,7 @@ def test_group_lines_keeps_communication_channel_order():
         "phone",
         "fax",
     ]
-    assert [row["parts"][0]["channel"] for row in blocks[1]["rows"]] == [
+    assert [part["channel"] for part in blocks[1]["rows"][0]["parts"]] == [
         "email",
         "website",
     ]
@@ -1102,7 +1362,7 @@ def test_layout_geometry_matches_every_drawn_part_and_logo():
                 assert part_layout["text_box"] == draw.textbbox(
                     part_layout["text_position"],
                     part["display_value"],
-                    font=font,
+                    font=part.get("font", font),
                 )
                 if part_layout["logo_box"] is not None:
                     left, top, right, bottom = part_layout["logo_box"]
