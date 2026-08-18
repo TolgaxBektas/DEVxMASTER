@@ -174,6 +174,7 @@ def test_qr_decoder_region_accounts_for_tile_offset(monkeypatch):
     class Item:
         data = b"https://example.de"
         rect = Rect()
+        type = "QRCODE"
 
     def decode(image):
         calls.append(image.size)
@@ -190,7 +191,7 @@ def test_qr_decoder_region_accounts_for_tile_offset(monkeypatch):
     assert region == {"x": 660.0, "y": 30.0, "width": 120.0, "height": 60.0}
 
 
-def test_qr_decoder_ignores_unaccepted_barcode_payload_region(monkeypatch):
+def test_qr_decoder_ignores_non_qr_payload_region(monkeypatch):
     class Rect:
         left = 10
         top = 20
@@ -198,8 +199,9 @@ def test_qr_decoder_ignores_unaccepted_barcode_payload_region(monkeypatch):
         height = 40
 
     class Item:
-        data = b"12345"
+        data = b"https://example.de"
         rect = Rect()
+        type = "CODE128"
 
     monkeypatch.setitem(
         __import__("sys").modules,
@@ -207,7 +209,7 @@ def test_qr_decoder_ignores_unaccepted_barcode_payload_region(monkeypatch):
         types.SimpleNamespace(decode=lambda _image: [Item()]),
     )
     values, finding, region = _decode_qr(Image.new("RGB", (32, 32), "white"))
-    assert values == []
+    assert values == ["https://example.de"]
     assert finding is None
     assert region is None
 

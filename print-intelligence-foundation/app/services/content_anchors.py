@@ -301,7 +301,12 @@ def _decode_qr(
                 ):
                     continue
                 values.append(value)
-                if decoder_region is None and item.rect:
+                symbol_type = getattr(item, "type", None)
+                is_qr = (
+                    symbol_type == "QRCODE"
+                    or getattr(symbol_type, "name", None) == "QRCODE"
+                )
+                if decoder_region is None and is_qr and item.rect:
                     decoder_region = {
                         "x": float(offset_x + item.rect.left / variant_scale),
                         "y": float(offset_y + item.rect.top / variant_scale),
