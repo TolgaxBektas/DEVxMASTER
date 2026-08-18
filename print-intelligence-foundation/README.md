@@ -10,7 +10,14 @@ Pipeline: discover → download → deduplicate → render → classify → dete
 
 ## Configuration and running
 
-Copy `.env.example` to `.env`. Configuration includes `DATABASE_URL`, `STORAGE_BACKEND`, `STORAGE_PATH`, `LOCAL_WORK_DIR`, `S3_ENDPOINT_URL`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_REGION`, `VISION_PROVIDER=recorded|ollama`, `VISION_RECORDED_DIR`, `OLLAMA_URL`, `OLLAMA_MODEL`, `OLLAMA_TIMEOUT`, `VISION_CONSENSUS_RUNS`, `RESTORATION_ENABLED`, `IMAGE_EDIT_PROVIDER=none|recorded|openai`, `IMAGE_EDIT_RECORDED_DIR`, `IMAGE_EDIT_BASE_URL`, `IMAGE_EDIT_MODEL`, `IMAGE_EDIT_API_KEY`, `IMAGE_EDIT_TIMEOUT`, `IMAGE_EDIT_MAX_COST_CENTS`, `IMAGE_EDIT_HARD_STOP_CENTS`, `IMAGE_EDIT_MAX_ATTEMPTS`, `IMAGE_EDIT_COLOR_TOLERANCE`, `RENDER_DPI`, `ARTWORK_DPI`, `ARTWORK_PADDING`, `ARTWORK_TRIM_CAP`, `CONFIDENCE_THRESHOLD`, `MAX_DOWNLOAD_BYTES`, `BBOX_IOU_THRESHOLD`, `MAX_JOB_ATTEMPTS`, `STAGE_TIMEOUT_SECONDS`, `REDIS_URL`, and `REDIS_QUEUE`.
+Copy `.env.example` to `.env`. Configuration includes `DATABASE_URL`, `STORAGE_BACKEND`, `STORAGE_PATH`, `LOCAL_WORK_DIR`, `S3_ENDPOINT_URL`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_REGION`, `VISION_PROVIDER=recorded|ollama`, `VISION_RECORDED_DIR`, `OLLAMA_URL`, `OLLAMA_MODEL`, `OLLAMA_TIMEOUT`, `VISION_CONSENSUS_RUNS`, `RESTORATION_ENABLED`, `IMAGE_EDIT_PROVIDER=none|recorded|openai`, `IMAGE_EDIT_RECORDED_DIR`, `IMAGE_EDIT_BASE_URL`, `IMAGE_EDIT_MODEL`, `IMAGE_EDIT_API_KEY`, `IMAGE_EDIT_TIMEOUT`, `IMAGE_EDIT_QUALITY`, `IMAGE_EDIT_MAX_COST_CENTS`, `IMAGE_EDIT_HARD_STOP_CENTS`, `IMAGE_EDIT_MAX_ATTEMPTS`, `IMAGE_EDIT_COLOR_TOLERANCE`, `WATERMARK_MARKERS`, `RENDER_DPI`, `ARTWORK_DPI`, `ARTWORK_PADDING`, `ARTWORK_TRIM_CAP`, `CONFIDENCE_THRESHOLD`, `MAX_DOWNLOAD_BYTES`, `BBOX_IOU_THRESHOLD`, `MAX_JOB_ATTEMPTS`, `STAGE_TIMEOUT_SECONDS`, `REDIS_URL`, and `REDIS_QUEUE`.
+
+`WATERMARK_MARKERS` is a JSON list of case-insensitive text-layer markers
+(default `["inixmedia"]`). The list is configurable because additional
+publishers and source collections can introduce different watermark names.
+A marker is evidence only when its PDF text object overlaps the advertisement
+box; the restoration manifest records the marker, object text, PDF and render
+bounds, object index, and `pdf_text_layer` provenance.
 
 `VISION_CONSENSUS_RUNS` defaults to `1`, preserving the existing single-run
 behaviour. Values above one run vision detection repeatedly and retain only
@@ -108,6 +115,15 @@ before the image is stored. Its `verification` manifest entry records the
 verdict and checks for boundary containment, dimensions, source text anchors,
 new content, and duplicated content. A refusal before verification records
 `verification.status: "not_assessed"`; it never implies verification passed.
+If a PDF text-layer watermark marker overlaps an advertisement, the
+deterministic render-plus-pixel-shift path is explicitly insufficient because
+the watermark remains in the rendered artwork. The cascade skips that level
+and escalates directly to the configured generative stage. If no generative
+provider is configured, no restoration is written and the occurrence receives
+a review reason explaining the missing stage. A generated watermark removal
+always remains pending human review, even when automated anchor and motif
+checks pass. Original and restoration artifacts remain separate.
+
 If the pixel-only level-one proposal is refused and `IMAGE_EDIT_PROVIDER` is
 configured, exactly one generative cascade stage may receive only the approved
 advertisement crop. Its result is composited back into a copy of the artwork;
@@ -117,8 +133,9 @@ anchors (exactly once), absence of new OCR tokens, and dominant quantized
 brand colors. If the original is not OCR-assessable, the verdict is
 `not_assessed`, never `passed`. A passed generative result is still stored only
 with a pending human review item and records provider, model, prompt version
-and digest, image hashes, attempt, and cost. A missing provider leaves the
-existing pixel-only behavior unchanged. Calls are reserved against
+and digest, image hashes, attempt, and cost. For unmarked advertisements, a
+missing provider leaves the existing pixel-only behavior unchanged. Calls are
+reserved against
 `IMAGE_EDIT_HARD_STOP_CENTS` before execution and fail closed when the next
 upper bound would exceed it. The hard stop applies per document run and is
 reset when ingestion of a document begins. The OpenAI-compatible
@@ -130,6 +147,12 @@ requested size, fitted region, source and normalized dimensions, resampling
 method, and lower-resolution indicator are recorded in the manifest. A
 provider response with any other dimensions is refused; the provider requires
 `IMAGE_EDIT_API_KEY` and HTTPS.
+`IMAGE_EDIT_QUALITY` defaults to `medium`, which is intended for the
+offer-form workflow. Set it to `high` only after the order has been accepted
+and the same advertisement is being restored for brochure printing. The
+default `IMAGE_EDIT_MAX_COST_CENTS` and `IMAGE_EDIT_HARD_STOP_CENTS` are
+`1000` (10 USD) so a run can cover roughly 150 medium-quality images; both
+limits remain configurable.
 Restoration does not upscale source detail, remove backgrounds, sharpen, or add
 transparency. Order-form artwork is only exported when the framed advert has
 sufficient detector confidence and passes a cheap geometric plausibility check.

@@ -32,6 +32,7 @@ from app.services.order_forms import (
 from app.services.ocr import OCRResult
 from app.services.render import render_page, render_pdf
 from app.services.restoration import (
+    RestorationResult,
     approved_artwork_box,
     communication_lines_for_box,
     propose_level_one,
@@ -43,6 +44,7 @@ from app.services.text_layer import (
     page_texts_in_boxes,
     page_text_in_box,
     remove_substring_bleed,
+    watermark_markers_in_boxes,
 )
 from app.services.vision.image_edit import (
     ImageEditProvider,
@@ -86,6 +88,7 @@ class Pipeline:
         image_edit_hard_stop_cents: int = 100,
         image_edit_max_attempts: int = 1,
         image_edit_color_tolerance: float = 0.12,
+        watermark_markers: list[str] | None = None,
     ):
         self.session, self.provider, self.storage = session, provider, storage
         self.render_dpi, self.confidence_threshold = render_dpi, confidence_threshold
@@ -111,6 +114,13 @@ class Pipeline:
         self.image_edit_hard_stop_cents = max(0, int(image_edit_hard_stop_cents))
         self.image_edit_max_attempts = max(1, int(image_edit_max_attempts))
         self.image_edit_color_tolerance = image_edit_color_tolerance
+        self.watermark_markers = [
+            marker.casefold().strip()
+            for marker in (
+                ["inixmedia"] if watermark_markers is None else watermark_markers
+            )
+            if marker.strip()
+        ]
         self._restoration_cost_used = 0
         self._form_results: dict[int, FormParseResult] = {}
         self._form_results_source: str | None = None
@@ -254,6 +264,25 @@ class Pipeline:
             boxes = deduplicate_boxes(
                 [box for box, _ in candidates], self.bbox_iou_threshold
             )
+            watermark_evidence = {}
+            if (
+                self.restoration_enabled
+                and self.watermark_markers
+                and boxes
+            ):
+                watermark_evidence = {
+                    f"{box.left},{box.top},{box.right},{box.bottom}": evidence
+                    for box, evidence in zip(
+                        boxes,
+                        watermark_markers_in_boxes(
+                            source,
+                            number,
+                            boxes,
+                            self.render_dpi,
+                            self.watermark_markers,
+                        ),
+                    )
+                }
             for index, box in enumerate(boxes):
                 self._check_deadline(deadline)
                 advert = next(ad for candidate, ad in candidates if candidate == box)
@@ -288,6 +317,7 @@ class Pipeline:
                             padded_box,
                             digest,
                             page,
+                            watermark_evidence.get(key, []),
                         )
                     elif (
                         self.restoration_enabled
@@ -310,11 +340,13 @@ class Pipeline:
                             padded_box,
                             digest,
                             page,
+                            watermark_evidence.get(key, []),
                         )
                     elif self.restoration_enabled:
                         self._refuse_restoration(
                             existing,
                             gate_reason or "restoration refused: artwork is unavailable",
+                            watermark_evidence.get(key, []),
                         )
                     self._add_order_form_reviews(
                         existing, page, frame_plausible
@@ -368,11 +400,13 @@ class Pipeline:
                         padded_box,
                         digest,
                         page,
+                        watermark_evidence.get(key, []),
                     )
                 elif self.restoration_enabled:
                     self._refuse_restoration(
                         occurrence,
                         gate_reason or "restoration refused: artwork is unavailable",
+                        watermark_evidence.get(key, []),
                     )
                 company_name = fields.get("company") or advert.get("company_name")
                 if company_name and not page.is_order_form:
@@ -627,18 +661,52 @@ class Pipeline:
         padded_box,
         digest,
         page,
+        watermark_evidence=None,
     ):
         if not self.restoration_enabled:
             return
-        result = propose_level_one(
-            source,
-            page_number,
-            box,
-            self.render_dpi,
-            artwork_output,
-            (padded_box.left, padded_box.top),
-            self.artwork_dpi,
-        )
+        watermark_evidence = watermark_evidence or []
+        if watermark_evidence:
+            reason = (
+                "watermark detected in PDF text layer; deterministic "
+                "pixel-shift restoration is insufficient"
+            )
+            result = RestorationResult(
+                image=None,
+                manifest={
+                    "cascade_level": 2,
+                    "watermark": {
+                        "detected": True,
+                        "markers": watermark_evidence,
+                        "source": "pdf_text_layer",
+                    },
+                    "deterministic_restoration": {
+                        "status": "refused",
+                        "reason": reason,
+                    },
+                    "geometry_quality": {
+                        "status": "not_assessed",
+                        "text_characters": None,
+                        "invalid_ratio": None,
+                        "overlap_ratio": None,
+                    },
+                    "findings": [],
+                    "verification": {"status": "not_assessed", "checks": []},
+                    "review_status": "pending",
+                    "edit_status": "refused",
+                },
+                review_reason=reason,
+            )
+        else:
+            result = propose_level_one(
+                source,
+                page_number,
+                box,
+                self.render_dpi,
+                artwork_output,
+                (padded_box.left, padded_box.top),
+                self.artwork_dpi,
+            )
         proposal_image = result.image
         review_reason = result.review_reason
         if proposal_image is not None:
@@ -677,6 +745,38 @@ class Pipeline:
                 padded_box,
                 occurrence,
             )
+        if watermark_evidence:
+            result.manifest["watermark"] = {
+                "detected": True,
+                "markers": watermark_evidence,
+                "source": "pdf_text_layer",
+            }
+            result.manifest["cascade_level"] = 2
+            result.manifest["deterministic_restoration"] = {
+                "status": "refused",
+                "reason": (
+                    "Watermark remains in a deterministic PDF render; "
+                    "pixel-shift restoration is insufficient."
+                ),
+            }
+            if proposal_image is None:
+                result.manifest["edit_status"] = "refused"
+                result.manifest["review_status"] = "pending"
+                if self.image_edit_provider is None:
+                    generative_reason = (
+                        "watermark detected; generative restoration is not configured"
+                    )
+                else:
+                    generative_reason = (
+                        review_reason
+                        or "restoration refused: generative restoration failed"
+                    )
+                result.manifest["cascade_justification"] = (
+                    "Refused deterministic restoration because the PDF text layer "
+                    "marks this advertisement with a watermark; "
+                    f"{generative_reason}."
+                )
+                review_reason = generative_reason
         if proposal_image is not None:
             original_image = Image.open(artwork_output).convert("RGB")
             fields = json.loads(occurrence.fields_json or "{}").get("fields", {})
@@ -695,8 +795,23 @@ class Pipeline:
                 company_name=company_name,
                 ocr_size=ocr_size,
             )
-            comparison = compare_content_anchors(original_anchors, restored_anchors)
-            visual_comparison = compare_visual_motifs(original_image, proposal_image)
+            comparison = compare_content_anchors(
+                original_anchors,
+                restored_anchors,
+                watermark_markers=self.watermark_markers,
+            )
+            excluded_lost_regions = []
+            if (
+                comparison["qr_removed"]
+                and original_anchors.get("qr_detection") == "available"
+                and original_anchors.get("qr_region")
+            ):
+                excluded_lost_regions.append(original_anchors["qr_region"])
+            visual_comparison = compare_visual_motifs(
+                original_image,
+                proposal_image,
+                excluded_lost_regions=excluded_lost_regions,
+            )
             comparison["findings"].extend(visual_comparison["findings"])
             comparison["status"] = comparison["severity"] = (
                 "abweichung"
@@ -713,6 +828,13 @@ class Pipeline:
                 "restored": restored_anchors,
             }
             result.manifest["content_comparison"] = comparison
+            result.manifest["qr_removed"] = comparison["qr_removed"]
+            result.manifest["watermark_removed"] = comparison["watermark_removed"]
+            result.manifest["watermark_comparison"] = {
+                "markers_original": comparison["watermark_markers_original"],
+                "markers_restored": comparison["watermark_markers_restored"],
+                "removed_intentionally": comparison["watermark_removed"],
+            }
             result.manifest["visual_comparison"] = visual_comparison
             messages = finding_messages(comparison)
             if messages:
@@ -722,6 +844,11 @@ class Pipeline:
             review_reason = review_reason or (
                 "Restaurierungsvorschlag wartet auf menschliche Freigabe"
             )
+            if watermark_evidence:
+                review_reason = (
+                    "watermark restoration always requires human review; "
+                    + review_reason
+                )
         occurrence.restoration_manifest_json = json.dumps(
             result.manifest, ensure_ascii=False
         )
@@ -970,28 +1097,35 @@ class Pipeline:
             ]
         return None, "restoration refused: generative verification failed"
 
-    def _refuse_restoration(self, occurrence, reason):
-        occurrence.restoration_manifest_json = json.dumps(
-            {
-                "cascade_level": 1,
-                "cascade_justification": reason,
-                "source_regions": [],
-                "destination_regions": [],
-                "removed_regions": [],
-                "background_regions": [],
-                "protected_regions": [],
-                "ad_boundary": [],
-                "geometry_quality": {
-                    "status": "not_assessed",
-                    "text_characters": None,
-                    "invalid_ratio": None,
-                    "overlap_ratio": None,
-                },
-                "findings": [],
-                "verification": {"status": "not_assessed", "checks": []},
-                "review_status": "pending",
-                "edit_status": "refused",
+    def _refuse_restoration(self, occurrence, reason, watermark_evidence=None):
+        manifest = {
+            "cascade_level": 1,
+            "cascade_justification": reason,
+            "source_regions": [],
+            "destination_regions": [],
+            "removed_regions": [],
+            "background_regions": [],
+            "protected_regions": [],
+            "ad_boundary": [],
+            "geometry_quality": {
+                "status": "not_assessed",
+                "text_characters": None,
+                "invalid_ratio": None,
+                "overlap_ratio": None,
             },
+            "findings": [],
+            "verification": {"status": "not_assessed", "checks": []},
+            "review_status": "pending",
+            "edit_status": "refused",
+        }
+        if watermark_evidence:
+            manifest["watermark"] = {
+                "detected": True,
+                "markers": watermark_evidence,
+                "source": "pdf_text_layer",
+            }
+        occurrence.restoration_manifest_json = json.dumps(
+            manifest,
             ensure_ascii=False,
         )
         occurrence.restoration_path = None

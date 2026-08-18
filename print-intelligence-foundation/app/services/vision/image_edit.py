@@ -122,11 +122,13 @@ class OpenAIImageEditProvider:
         model: str,
         api_key: str,
         timeout: float = 120.0,
+        quality: str = "medium",
     ):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key
         self.timeout = timeout
+        self.quality = quality
 
     def edit(
         self,
@@ -152,6 +154,7 @@ class OpenAIImageEditProvider:
                     "model": self.model,
                     "prompt": full_prompt,
                     "size": size or "auto",
+                    "quality": self.quality,
                 },
                 timeout=self.timeout,
                 follow_redirects=False,

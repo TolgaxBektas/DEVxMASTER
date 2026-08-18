@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -26,10 +27,12 @@ class Settings(BaseSettings):
     image_edit_model: str = "gpt-image-1"
     image_edit_api_key: str | None = None
     image_edit_timeout: float = 120.0
-    image_edit_max_cost_cents: int = 100
-    image_edit_hard_stop_cents: int = 100
+    image_edit_quality: str = "medium"
+    image_edit_max_cost_cents: int = 1000
+    image_edit_hard_stop_cents: int = 1000
     image_edit_max_attempts: int = 1
     image_edit_color_tolerance: float = 0.12
+    watermark_markers: list[str] = Field(default_factory=lambda: ["inixmedia"])
     confidence_threshold: float = 0.7
     vision_consensus_runs: int = 1
     max_download_bytes: int = 50_000_000

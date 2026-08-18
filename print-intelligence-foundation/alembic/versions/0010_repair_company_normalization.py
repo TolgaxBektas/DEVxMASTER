@@ -7,14 +7,13 @@ from alembic import op
 import sqlalchemy as sa
 
 from app.services.companies import (
-    XDATA_GERMANY,
     XDATA_NB_HIGH_QUALITY,
     _contact_values,
 )
 from app.services.dedupe import normalize_name
 
 
-revision = "0010_repair_company_normalization"
+revision = "0010_repair_company_norm"
 down_revision = "0009_deferred_channels"
 branch_labels = None
 depends_on = None
@@ -135,7 +134,6 @@ def _merge_deferred_channels(connection, winner_id, loser_id):
 
 
 def _merge_company(connection, winner, loser):
-    winner_fields = _json_object(winner["canonical_fields_json"])
     loser_fields = _json_object(loser["canonical_fields_json"])
     findings = _json_list(winner["secondary_findings_json"])
     findings.extend(_json_list(loser["secondary_findings_json"]))
