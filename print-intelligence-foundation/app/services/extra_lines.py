@@ -57,6 +57,7 @@ def _lines(
                 "text": [],
                 "heights": [],
                 "words": [],
+                "confidences": [],
                 "left": left,
                 "top": top,
                 "right": left,
@@ -65,6 +66,7 @@ def _lines(
         )
         line["text"].append(text)
         line["heights"].append((text, data["height"][index]))
+        line["confidences"].append(float(data["conf"][index]))
         line["words"].append(
             {
                 "text": text,
@@ -183,6 +185,7 @@ def _contact_segments(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "bottom": max(word["bottom"] for word in group),
                     "ocr_source": line.get("ocr_source"),
                     "full_text": line.get("text", ""),
+                    "confidence": min(line.get("confidences") or [0]),
                 }
             )
     return segments
@@ -195,6 +198,169 @@ def _contact_score(segment: dict[str, Any]) -> int:
         + 3 * bool(re.search(r"@", text))
         + 2 * bool(re.search(r"(?:www\.|https?://|\.de\b)", text, re.I))
     )
+
+
+def _contact_values(text: str) -> list[tuple[str, str]]:
+    values: list[tuple[str, str]] = []
+    for match in re.finditer(r"[\w.+-]+@[\w.-]+\.[a-z]{2,}", text, re.I):
+        values.append(("email", match.group(0)))
+    for match in re.finditer(
+        r"(?:(?:https?://)?(?:www\.)?"
+        r"(?:facebook|instagram)\.[a-z]{2,}(?:/[^\s,;)]*)?)",
+        text,
+        re.I,
+    ):
+        domain = match.group(0)
+        channel = "facebook" if "facebook." in domain.lower() else "instagram"
+        values.append((channel, domain))
+    without_email = re.sub(r"[\w.+-]+@[\w.-]+\.[a-z]{2,}", "", text, flags=re.I)
+    for match in re.finditer(
+        r"(?:(?:https?://)?(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+"
+        r"(?:/[^\s,;)]*)?)",
+        without_email,
+        re.I,
+    ):
+        values.append(("website", match.group(0)))
+    if re.search(r"\d{3,}", text):
+        number_text = re.sub(
+            r"^\s*(?:telefax|fax|telefon|tel\.?|phone)\s*[:\-]?\s*",
+            "",
+            text,
+            flags=re.I,
+        ).strip()
+        number_match = re.search(r"\d[\d\s./-]{4,}", number_text)
+        if number_match:
+            values.append(
+                (
+                    "fax" if re.search(r"fax", text, re.I) else "phone",
+                    number_match.group(0).strip(),
+                )
+            )
+    return values
+
+
+def _pure_contact_segment(segment: dict[str, Any]) -> list[tuple[str, str]] | None:
+    values = _contact_values(segment.get("text", ""))
+    if not values:
+        return None
+    remainder = segment.get("text", "")
+    for _channel, value in values:
+        remainder = remainder.replace(value, "")
+    remainder = re.sub(
+        r"\b(?:telefax|fax|telefon|tel\.?|phone|e-?mail|www)\b",
+        "",
+        remainder,
+        flags=re.I,
+    )
+    if re.search(r"[A-Za-zÄÖÜäöüß]", remainder):
+        return None
+    return values
+
+
+def _reset_background(
+    image: Image.Image,
+    segments: list[dict[str, Any]],
+) -> tuple[tuple[int, int, int], tuple[int, int, int]] | None:
+    left = min(segment["left"] for segment in segments)
+    right = max(segment["right"] for segment in segments)
+    top = min(segment["top"] for segment in segments)
+    bottom = max(segment["bottom"] for segment in segments)
+    padding = max(2, int(round(max(segment["bottom"] - segment["top"] for segment in segments) * 0.35)))
+    box = (
+        max(0, left - padding),
+        max(0, top - padding),
+        min(image.width, right + padding),
+        min(image.height, bottom + padding),
+    )
+    region = image.crop(box).convert("RGB")
+    width, height = region.size
+    border_pixels = []
+    for y in range(height):
+        for x in range(width):
+            if x < padding or x >= width - padding or y < padding or y >= height - padding:
+                border_pixels.append(region.getpixel((x, y)))
+    pixels = list(region.getdata())
+    if not border_pixels:
+        return None
+    if not pixels:
+        return None
+    background = max(set(border_pixels), key=border_pixels.count)
+    tolerance = 18
+    matching = [
+        pixel
+        for pixel in pixels
+        if all(abs(pixel[index] - background[index]) <= tolerance for index in range(3))
+    ]
+    if len(matching) / len(pixels) < 0.72:
+        return None
+    luma = 0.299 * background[0] + 0.587 * background[1] + 0.114 * background[2]
+    text = (0, 0, 0) if luma > 127 else (255, 255, 255)
+    return text, background
+
+
+def _reset_block(anchor: dict[str, Any]) -> dict[str, Any] | None:
+    candidates = []
+    all_segments = [
+        segment
+        for segment in anchor.get("contact_segments", [])
+        if segment.get("ocr_source") == "whole_image"
+    ]
+    for segment in anchor.get("contact_segments", []):
+        if segment.get("ocr_source") != "whole_image":
+            continue
+        values = _pure_contact_segment(segment)
+        if values and segment.get("confidence", 0) >= 60:
+            candidates.append({**segment, "values": values})
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (item["top"], item["left"]))
+    selected = []
+    reference_left = candidates[0]["left"]
+    column_segments = [
+        segment
+        for segment in all_segments
+        if abs(segment["left"] - reference_left)
+        <= max(segment["bottom"] - segment["top"], 1)
+    ]
+    if any(_pure_contact_segment(segment) is None for segment in column_segments):
+        return None
+    for segment in candidates:
+        if abs(segment["left"] - reference_left) > max(
+            segment["bottom"] - segment["top"], 1
+        ):
+            continue
+        if selected and segment["top"] - selected[-1]["bottom"] > max(
+            segment["bottom"] - segment["top"], 1
+        ) * 2:
+            break
+        selected.append(segment)
+    if not selected:
+        return None
+    unique: list[dict[str, Any]] = []
+    seen = set()
+    for segment in selected:
+        key = (
+            segment["text"],
+            segment["left"],
+            segment["top"],
+            segment["right"],
+            segment["bottom"],
+        )
+        if key not in seen:
+            unique.append(segment)
+            seen.add(key)
+    selected = unique
+    values = [value for segment in selected for value in segment["values"]]
+    if not values:
+        return None
+    return {
+        "segments": selected,
+        "values": values,
+        "left": min(segment["left"] for segment in selected),
+        "top": min(segment["top"] for segment in selected),
+        "right": max(segment["right"] for segment in selected),
+        "bottom": max(segment["bottom"] for segment in selected),
+    }
 
 
 def _anchor(image: Image.Image) -> dict[str, Any] | None:
@@ -669,6 +835,17 @@ def compose_extra_lines(
                 "lines": line_values,
             },
         )
+    reset = _reset_block(anchor)
+    reset_skip_reason = (
+        "mixed_or_uncertain_contact_block"
+        if reset is None and anchor.get("contact_segments")
+        else None
+    )
+    if reset is not None:
+        reset_colours = _reset_background(source, reset["segments"])
+        if reset_colours is None:
+            reset = None
+            reset_skip_reason = "non_homogeneous_background"
     channels, discarded = _filter_existing(channels, anchor)
     line_values = [value for _channel, value in channels]
     if not channels:
@@ -682,6 +859,23 @@ def compose_extra_lines(
                 "ocr": anchor.get("ocr_metadata", {}),
             },
         )
+    reset_values = reset["values"] if reset is not None else []
+    rendered_keys: set[tuple[str, str]] = set()
+    render_channels = []
+    for channel, value in [*reset_values, *channels]:
+        key = _normal_key(channel, value)
+        if key in rendered_keys:
+            continue
+        rendered_keys.add(key)
+        render_channels.append((channel, value))
+    if reset is not None and any(
+        _normal_key(channel, value) not in rendered_keys
+        for channel, value in reset_values
+    ):
+        reset = None
+        reset_skip_reason = "removed_value_not_preserved"
+        render_channels = channels
+    channels = render_channels
     colours = _colours(source, anchor)
     if colours is None:
         return ExtraLineComposition(
@@ -694,6 +888,11 @@ def compose_extra_lines(
             },
         )
     text_colour, background = colours
+    if reset is not None:
+        text_colour, background = _reset_background(source, reset["segments"]) or (
+            text_colour,
+            background,
+        )
     text_colour = _snap(text_colour)
     anchor_heights = sorted(
         [height for word, height in anchor["heights"] if CONTACT_RE.search(word)]
@@ -721,9 +920,12 @@ def compose_extra_lines(
     band_fits = band_end - anchor["bottom"] >= line_height * 0.4 and _row_uniform(
         source, band_end - 1, background
     )
+    if reset is not None:
+        band_fits = True
+        band_end = reset["top"]
     content_end_value = None
     insertion_gap = None
-    if not band_fits:
+    if reset is None and not band_fits:
         bottom = list(
             source.crop(
                 (0, max(0, source.height - 3), source.width, source.height)
@@ -840,7 +1042,27 @@ def compose_extra_lines(
         blocks, line_height, block_gap, font, cap_height, bottom_air
     )
     font_floor_applied = probe.size > minimum_font_size and font.size == minimum_font_size
-    if not band_fits:
+    if reset is not None:
+        reset_bottom = reset["bottom"]
+        required_bottom = reset["top"] + content_height
+        delta = max(0, required_bottom - reset_bottom)
+        grown = Image.new(
+            "RGB", (source.width, source.height + delta), background
+        )
+        grown.paste(source.crop((0, 0, source.width, reset_bottom)), (0, 0))
+        grown.paste(
+            source.crop((0, reset_bottom, source.width, source.height)),
+            (0, reset_bottom + delta),
+        )
+        reset_box = (
+            max(0, reset["left"] - 2),
+            max(0, reset["top"] - 2),
+            min(grown.width, reset["right"] + 2),
+            min(grown.height, reset["bottom"] + delta + 2),
+        )
+        ImageDraw.Draw(grown).rectangle(reset_box, fill=background)
+        band_end = reset["top"]
+    elif not band_fits:
         available = max(0, source.height - band_end)
         fits_margin = available >= content_height and _uniform_rows(
             source, band_end, band_end + content_height, background
@@ -857,7 +1079,7 @@ def compose_extra_lines(
     else:
         grown = Image.new("RGB", (source.width, source.height + content_height), background)
         grown.paste(source.crop((0, 0, source.width, band_end)), (0, 0))
-    if band_fits:
+    if reset is None and band_fits:
         seam = source.crop((0, band_end - 1, source.width, band_end))
         for offset in range(content_height):
             grown.paste(seam, (0, band_end + offset))
@@ -940,7 +1162,10 @@ def compose_extra_lines(
         grown,
         {
             "status": "composed",
-            "placement": "contact_bar" if band_fits else "appended_strip",
+            "placement": "block_reset" if reset is not None else (
+                "contact_bar" if band_fits else "appended_strip"
+            ),
+            "mode": "block_reset" if reset is not None else "append",
             "anchor_text": anchor["text"],
             "anchor_box": [
                 anchor["left"],
@@ -966,6 +1191,19 @@ def compose_extra_lines(
             "block_gap": block_gap,
             "lines": line_values,
             "discarded": discarded,
+            "removed_values": [
+                {"channel": channel, "value": value}
+                for channel, value in (reset_values if reset is not None else [])
+            ],
+            "reset_values": [
+                {"channel": channel, "value": value}
+                for channel, value in (reset_values if reset is not None else [])
+            ],
+            "set_values": [
+                {"channel": channel, "value": value}
+                for channel, value in channels
+            ],
+            "block_reset_skipped_reason": reset_skip_reason,
             "blocks": manifest_blocks,
             "ocr": anchor.get("ocr_metadata", {}),
             "grew": grown.height > source.height,

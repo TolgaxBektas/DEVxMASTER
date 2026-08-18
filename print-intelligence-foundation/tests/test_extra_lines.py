@@ -619,3 +619,124 @@ def test_appended_strip_fits_font_after_final_centering(monkeypatch):
     )
     assert probe is not None
     assert result.manifest["font_size"] == probe.size
+
+
+def _reset_anchor(mixed: bool = False):
+    segments = [
+        {
+            "text": "Telefon 06441 12345",
+            "heights": [("Telefon", 10), ("06441", 10)],
+            "left": 30,
+            "top": 40,
+            "right": 520,
+            "bottom": 50,
+            "ocr_source": "whole_image",
+            "confidence": 95,
+        },
+        {
+            "text": (
+                "Telefon 06441 12345 Öffnungszeiten 9-17"
+                if mixed
+                else "E-Mail info@example.de"
+            ),
+            "heights": [("E-Mail", 10), ("info@example.de", 10)],
+            "left": 30,
+            "top": 55,
+            "right": 520,
+            "bottom": 65,
+            "ocr_source": "whole_image",
+            "confidence": 95,
+        },
+    ]
+    return {
+        "text": segments[-1]["text"],
+        "heights": segments[-1]["heights"],
+        "left": segments[-1]["left"],
+        "top": segments[-1]["top"],
+        "right": segments[-1]["right"],
+        "bottom": segments[-1]["bottom"],
+        "contact_segments": segments,
+        "ocr_lines": segments,
+    }
+
+
+def test_resets_existing_communication_block_and_keeps_removed_values(
+    monkeypatch,
+):
+    image = Image.new("RGB", (600, 140), (20, 80, 140))
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.truetype(extra_lines._font_path(False), 10)
+    draw.text((30, 40), "Telefon 06441 12345", font=font, fill="white")
+    draw.text((30, 55), "E-Mail info@example.de", font=font, fill="white")
+    anchor = _reset_anchor()
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: anchor)
+    monkeypatch.setattr(extra_lines, "_content_bounds", lambda *_args: (0, 600))
+
+    result = compose_extra_lines(
+        image,
+        [
+            ("fax", "06441 98765"),
+            ("website", "www.example.de"),
+        ],
+    )
+
+    assert result.manifest["mode"] == "block_reset"
+    assert result.manifest["placement"] == "block_reset"
+    removed = {(item["channel"], item["value"]) for item in result.manifest["removed_values"]}
+    reset = {(item["channel"], item["value"]) for item in result.manifest["reset_values"]}
+    assert removed == reset
+    assert ("phone", "06441 12345") in reset
+    set_values = {
+        (item["channel"], item["value"]) for item in result.manifest["set_values"]
+    }
+    assert reset <= set_values
+    rows = [row for block in result.manifest["blocks"] for row in block["rows"]]
+    assert rows[0]["parts"][0]["display_value"].startswith("T ")
+    assert rows[0]["parts"][1]["display_value"].startswith("F ")
+    assert rows[0]["position"][0] == rows[1]["position"][0]
+
+
+def test_mixed_contact_content_is_not_removed_and_falls_back_to_append(monkeypatch):
+    image = Image.new("RGB", (600, 140), (20, 80, 140))
+    font = ImageFont.truetype(extra_lines._font_path(False), 10)
+    draw = ImageDraw.Draw(image)
+    draw.text(
+        (30, 40),
+        "Telefon 06441 12345",
+        font=font,
+        fill="white",
+    )
+    draw.text(
+        (30, 55),
+        "Telefon 06441 12345 Öffnungszeiten 9-17",
+        font=font,
+        fill="white",
+    )
+    anchor = _reset_anchor(mixed=True)
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: anchor)
+    monkeypatch.setattr(extra_lines, "_content_bounds", lambda *_args: (0, 600))
+
+    result = compose_extra_lines(image, [("fax", "06441 98765")])
+
+    assert result.manifest["mode"] == "append"
+    assert result.manifest["placement"] != "block_reset"
+    assert result.manifest["block_reset_skipped_reason"] == (
+        "mixed_or_uncertain_contact_block"
+    )
+
+
+def test_non_homogeneous_contact_background_falls_back_to_append(monkeypatch):
+    image = Image.new("RGB", (600, 140), (20, 80, 140))
+    draw = ImageDraw.Draw(image)
+    for y in range(38, 68, 2):
+        draw.line((25, y, 540, y), fill=(y * 3 % 255, 20, 40))
+    anchor = _reset_anchor()
+    monkeypatch.setattr(extra_lines, "_anchor", lambda _image: anchor)
+    monkeypatch.setattr(extra_lines, "_content_bounds", lambda *_args: (0, 600))
+
+    result = compose_extra_lines(image, [("fax", "06441 98765")])
+
+    assert result.manifest["mode"] == "append"
+    assert result.manifest["block_reset_skipped_reason"] == (
+        "non_homogeneous_background"
+    )
