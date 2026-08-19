@@ -10,6 +10,7 @@ import pikepdf
 from PIL import Image
 
 from app.services.bbox import Box
+from app.services.content_anchors import extract_content_anchors
 from app.services.render import render_page
 from app.services.text_layer import page_text_in_box
 
@@ -102,6 +103,7 @@ def verify_qr_removed_ad(
     artwork_dpi: int,
     pixel_dpi: int = 300,
     margin: int = 5,
+    extra_allowed_regions: Iterable[Box] | None = None,
 ) -> QRRemovalVerification:
     original_crop = _render_ad(original_pdf, page_number, box, render_dpi, pixel_dpi)
     cleaned_crop = _render_ad(cleaned_pdf, page_number, box, render_dpi, pixel_dpi)
@@ -153,6 +155,20 @@ def verify_qr_removed_ad(
     y1 = min(changed.shape[0], round(qr_top + qr_height) + margin)
     if x0 < x1 and y0 < y1:
         allowed[y0:y1, x0:x1] = True
+    for region in extra_allowed_regions or ():
+        region_x0 = max(0, round(
+            (region.left - box.left) * pixel_dpi / render_dpi
+        ) - margin)
+        region_y0 = max(0, round(
+            (region.top - box.top) * pixel_dpi / render_dpi
+        ) - margin)
+        region_x1 = min(changed.shape[1], round(
+            (region.right - box.left) * pixel_dpi / render_dpi
+        ) + margin)
+        region_y1 = min(changed.shape[0], round(
+            (region.bottom - box.top) * pixel_dpi / render_dpi
+        ) + margin)
+        allowed[region_y0:region_y1, region_x0:region_x1] = True
     inside = int((changed & allowed).sum())
     outside = int((changed & ~allowed).sum())
     pixel_check = {
@@ -310,8 +326,6 @@ def _image_payloads(xobject) -> set[str]:
 
 
 def _anchors(image: Image.Image) -> dict:
-    from app.services.content_anchors import extract_content_anchors
-
     return extract_content_anchors(image, text="")
 
 

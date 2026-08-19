@@ -214,14 +214,7 @@ def test_qr_decoder_ignores_non_qr_payload_region(monkeypatch):
     assert region is None
 
 
-def test_qr_heuristic_without_decoder_confirmation_is_not_presence(
-    monkeypatch,
-):
-    monkeypatch.setattr(
-        anchors_module,
-        "_qr_presence",
-        lambda _image: (True, 0.99, {"x": 4, "y": 4, "width": 20, "height": 20}),
-    )
+def test_qr_without_decoder_confirmation_is_not_presence(monkeypatch):
     monkeypatch.setattr(
         anchors_module,
         "_decode_qr",
@@ -233,7 +226,6 @@ def test_qr_heuristic_without_decoder_confirmation_is_not_presence(
     )
     assert anchors["qr_present"] is False
     assert anchors["qr_region"] is None
-    assert anchors["qr_presence_score"] is None
     comparison = compare_content_anchors(anchors, anchors)
     assert not any(
         finding["category"] == "QR-Code-Anwesenheit"

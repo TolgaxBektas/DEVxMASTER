@@ -90,8 +90,7 @@ def test_pipeline_ignores_heuristic_without_decoder_confirmation(
     monkeypatch.setattr(
         "app.services.pipeline.extract_content_anchors",
         lambda *_args, **_kwargs: {
-            "qr_present": False,
-            "qr_presence_score": 0.99,
+        "qr_present": False,
             "qr_detection": "available",
             "qr_codes": [],
             "qr_region": None,

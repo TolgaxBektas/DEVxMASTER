@@ -1,7 +1,4 @@
-import ctypes
 from pathlib import Path
-
-from pypdfium2 import raw
 
 from app.services.pdfium import open_document
 from app.services.bbox import Box
@@ -121,66 +118,129 @@ def watermark_markers_in_boxes(
     with open_document(pdf_path) as pdf:
         page = pdf[page_number - 1]
         try:
-            _, page_height = page.get_size()
-            scale = render_dpi / 72
             text_page = page.get_textpage()
             try:
-                for object_index, obj in enumerate(page.get_objects()):
-                    if obj.type != 1:
-                        continue
-                    try:
-                        bounds = list(obj.get_pos())
-                    except Exception:
-                        continue
-                    if len(bounds) != 4:
-                        continue
-                    buffer = (ctypes.c_ushort * 4096)()
-                    try:
-                        raw.FPDFTextObj_GetText(
-                            obj.raw, text_page.raw, buffer, len(buffer)
-                        )
-                    except Exception:
-                        continue
-                    text = "".join(chr(value) for value in buffer if value)
-                    lowered = text.casefold()
-                    matched = [
-                        marker for marker in normalized_markers if marker in lowered
-                    ]
-                    if not matched:
-                        continue
-                    left, bottom, right, top = bounds
-                    pixel_box = Box(
-                        round(left * scale),
-                        round((page_height - top) * scale),
-                        round(right * scale),
-                        round((page_height - bottom) * scale),
+                _, page_height = page.get_size()
+                full_text = text_page.get_text_range()
+                characters = []
+                for index, char in enumerate(full_text):
+                    if index >= text_page.count_chars():
+                        break
+                    left, bottom, right, top = text_page.get_charbox(index)
+                    characters.append(
+                        (index, char, (left, bottom, right, top))
                     )
-                    for box_index, box in enumerate(boxes):
-                        if (
-                            pixel_box.left < box.right
-                            and pixel_box.right > box.left
-                            and pixel_box.top < box.bottom
-                            and pixel_box.bottom > box.top
+                scale = render_dpi / 72
+                for box_index, box in enumerate(boxes):
+                    in_box = [
+                        item
+                        for item in characters
+                        if _char_in_box(item[2], box, scale, page_height)
+                    ]
+                    compact = [
+                        item
+                        for item in in_box
+                        if not item[1].isspace()
+                    ]
+                    compact_text = "".join(
+                        item[1] for item in compact
+                    ).casefold()
+                    for marker in normalized_markers:
+                        _append_marker_matches(
+                            evidence[box_index],
+                            marker,
+                            compact_text,
+                            compact,
+                            page_height,
+                            scale,
+                            kind="confirmed",
+                        )
+                    if not any(
+                        item.get("kind") == "confirmed"
+                        for item in evidence[box_index]
+                    ):
+                        for fragment in (
+                            "inix",
+                            "ixmedia",
+                            "inmedia",
+                            "india",
                         ):
-                            evidence[box_index].append(
-                                {
-                                    "marker": matched[0],
-                                    "text": text,
-                                    "object_index": object_index,
-                                    "bounds_pdf": [
-                                        float(value) for value in bounds
-                                    ],
-                                    "bounds": [
-                                        pixel_box.left,
-                                        pixel_box.top,
-                                        pixel_box.right,
-                                        pixel_box.bottom,
-                                    ],
-                                    "source": "pdf_text_layer",
-                                }
+                            _append_marker_matches(
+                                evidence[box_index],
+                                fragment,
+                                compact_text,
+                                compact,
+                                page_height,
+                                scale,
+                                kind="suspected",
                             )
             finally:
                 text_page.close()
         finally:
             page.close()
     return evidence
+
+
+def _char_in_box(charbox, box, scale, page_height):
+    left, bottom, right, top = charbox
+    return (
+        left * scale < box.right
+        and right * scale > box.left
+        and (page_height - top) * scale < box.bottom
+        and (page_height - bottom) * scale > box.top
+    )
+
+
+def _append_marker_matches(
+    target,
+    marker,
+    compact_text,
+    compact,
+    page_height,
+    scale,
+    *,
+    kind,
+):
+    start = 0
+    while True:
+        start = compact_text.find(marker, start)
+        if start < 0:
+            return
+        evidence_start = start
+        while (
+            evidence_start
+            and start - evidence_start < 3
+            and not compact[evidence_start - 1][1].isalnum()
+        ):
+            evidence_start -= 1
+        evidence_items = compact[
+            evidence_start : start + len(marker)
+        ]
+        bounds = [item[2] for item in evidence_items]
+        left = min(item[0] for item in bounds)
+        bottom = min(item[1] for item in bounds)
+        right = max(item[2] for item in bounds)
+        top = max(item[3] for item in bounds)
+        text = "".join(item[1] for item in evidence_items)
+        target.append(
+            {
+                "marker": marker,
+                "text": text,
+                "object_index": compact[start][0],
+                "bounds_pdf": [
+                    float(left),
+                    float(bottom),
+                    float(right),
+                    float(top),
+                ],
+                "bounds": [
+                    round(left * scale) - 40,
+                    round((page_height - top) * scale) - 40,
+                    round(right * scale) + 40,
+                    round((page_height - bottom) * scale) + 40,
+                ],
+                "source": "pdf_text_layer",
+                "kind": kind,
+            }
+        )
+        start += len(marker)
