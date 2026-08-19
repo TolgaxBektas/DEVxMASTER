@@ -53,11 +53,31 @@ def test_appends_strip_when_no_uniform_contact_bar_exists(monkeypatch):
 
 
 def test_social_brand_substrings_remain_plain_websites():
-    values = extra_lines._contact_values("boxing.de mixing.de")
+    values = extra_lines._contact_values(
+        "boxing.de mixing.de auto-xing.de my-tiktok.de "
+        "www.xing.de xing.com/profil"
+    )
 
-    assert values == [("website", "boxing.de"), ("website", "mixing.de")]
+    assert values == [
+        ("xing", "www.xing.de"),
+        ("xing", "xing.com/profil"),
+        ("website", "boxing.de"),
+        ("website", "mixing.de"),
+        ("website", "auto-xing.de"),
+        ("website", "my-tiktok.de"),
+    ]
+    assert extra_lines._contact_values("auto-xing.de") == [
+        ("website", "auto-xing.de")
+    ]
+    assert extra_lines._contact_values("my-tiktok.de") == [
+        ("website", "my-tiktok.de")
+    ]
     assert extra_lines._channel_value("boxing.de")[0] == "website"
     assert extra_lines._channel_value("mixing.de")[0] == "website"
+    assert extra_lines._channel_value("auto-xing.de")[0] == "website"
+    assert extra_lines._channel_value("my-tiktok.de")[0] == "website"
+    assert extra_lines._channel_value("www.xing.de")[0] == "xing"
+    assert extra_lines._channel_value("xing.com/profil")[0] == "xing"
 
 
 def test_fails_closed_without_contact_line(monkeypatch):

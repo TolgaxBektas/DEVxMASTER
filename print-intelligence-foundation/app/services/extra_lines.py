@@ -206,7 +206,7 @@ def _contact_values(text: str) -> list[tuple[str, str]]:
         values.append(("email", match.group(0)))
     social_pattern = (
         r"(?:(?:https?://)?(?:www\.)?"
-        r"(?<![A-Za-z0-9])"
+        r"(?<![A-Za-z0-9_-])"
         r"(?:facebook|instagram|linkedin|youtube|tiktok|xing)\.[a-z]{2,}"
         r"(?:/[^\s,;)]*)?)"
     )
@@ -223,7 +223,7 @@ def _contact_values(text: str) -> list[tuple[str, str]]:
                 "tiktok",
                 "xing",
             )
-            if re.search(rf"(?<![a-z0-9]){social}\.", lowered)
+            if re.search(rf"(?<![a-z0-9_-]){social}\.", lowered)
         )
         values.append((channel, domain))
     without_email = re.sub(r"[\w.+-]+@[\w.-]+\.[a-z]{2,}", "", text, flags=re.I)
@@ -1181,17 +1181,17 @@ def _channel_value(
             "fax"
             if lowered.startswith("fax")
             else "facebook"
-            if re.search(r"(?<![a-z0-9])facebook\.", lowered)
+            if re.search(r"(?<![a-z0-9_-])facebook\.", lowered)
             else "instagram"
-            if re.search(r"(?<![a-z0-9])instagram\.", lowered)
+            if re.search(r"(?<![a-z0-9_-])instagram\.", lowered)
             else "linkedin"
-            if re.search(r"(?<![a-z0-9])linkedin\.", lowered)
+            if re.search(r"(?<![a-z0-9_-])linkedin\.", lowered)
             else "youtube"
-            if re.search(r"(?<![a-z0-9])youtube\.", lowered)
+            if re.search(r"(?<![a-z0-9_-])youtube\.", lowered)
             else "tiktok"
-            if re.search(r"(?<![a-z0-9])tiktok\.", lowered)
+            if re.search(r"(?<![a-z0-9_-])tiktok\.", lowered)
             else "xing"
-            if re.search(r"(?<![a-z0-9])xing\.", lowered)
+            if re.search(r"(?<![a-z0-9_-])xing\.", lowered)
             else "website"
             if "www." in lowered or ".de" in lowered
             else "phone"
