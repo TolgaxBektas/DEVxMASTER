@@ -300,13 +300,15 @@ def _decode_qr(
                     )
                 ):
                     continue
-                values.append(value)
                 symbol_type = getattr(item, "type", None)
                 is_qr = (
                     symbol_type == "QRCODE"
                     or getattr(symbol_type, "name", None) == "QRCODE"
                 )
-                if decoder_region is None and is_qr and item.rect:
+                if not is_qr or not item.rect:
+                    continue
+                values.append(value)
+                if decoder_region is None:
                     decoder_region = {
                         "x": float(offset_x + item.rect.left / variant_scale),
                         "y": float(offset_y + item.rect.top / variant_scale),
@@ -701,7 +703,7 @@ def extract_content_anchors(
         if not value.replace(".", "").isdigit()
     })
     qr_codes, qr_finding, decoder_region = _decode_qr(image)
-    qr_present, qr_score, _ = _qr_presence(image)
+    qr_present = bool(qr_codes and decoder_region)
     return {
         "text_lines": lines,
         "company_name": _normalize(company_name) if company_name else None,
@@ -710,7 +712,7 @@ def extract_content_anchors(
         "domains": domains,
         "qr_codes": qr_codes,
         "qr_present": qr_present,
-        "qr_presence_score": round(qr_score, 4),
+        "qr_presence_score": None,
         "qr_region": decoder_region,
         "qr_detection": "available" if qr_finding is None else "unavailable",
         "ocr_token_count": len(_words(lines)),
