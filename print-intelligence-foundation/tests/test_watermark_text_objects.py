@@ -13,6 +13,7 @@ from app.services.pipeline import Pipeline
 from app.services.restoration import RestorationResult
 from app.services.storage import LocalStorage
 from app.services.watermark_text_objects import (
+    _form_contains_marker,
     clean_pdf,
     verify_cleaned_ad,
 )
@@ -87,6 +88,19 @@ def test_malformed_marker_is_suspect_and_not_removed(tmp_path):
 
     assert any(item["kind"] == "suspected" for item in evidence)
     assert not result.removed_blocks
+
+
+def test_form_marker_scan_terminates_on_self_reference():
+    pdf = pikepdf.Pdf.new()
+    form = pdf.make_stream(b"/Self Do")
+    form["/Subtype"] = pikepdf.Name("/Form")
+    resources = pikepdf.Dictionary()
+    xobjects = pikepdf.Dictionary()
+    resources["/XObject"] = xobjects
+    form["/Resources"] = resources
+    xobjects["/Self"] = form
+
+    assert not _form_contains_marker(form, resources, ["inixmedia"])
 
 
 def _pipeline(tmp_path, provider=object()):

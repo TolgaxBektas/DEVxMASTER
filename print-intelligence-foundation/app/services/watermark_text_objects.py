@@ -306,7 +306,14 @@ def _clean_page(pdf, page, boxes, markers, render_dpi):
     return removed, usage
 
 
-def _form_contains_marker(form, resources, markers):
+def _form_contains_marker(form, resources, markers, visited=None):
+    if visited is None:
+        visited = set()
+    objgen = getattr(form, "objgen", None)
+    if objgen is not None:
+        if objgen in visited:
+            return False
+        visited.add(objgen)
     fonts = {
         str(name): _cmap_for(font)
         for name, font in resources.get("/Font", {}).items()
@@ -348,6 +355,7 @@ def _form_contains_marker(form, resources, markers):
                     nested,
                     nested.get("/Resources", resources),
                     markers,
+                    visited,
                 )
             ):
                 return True

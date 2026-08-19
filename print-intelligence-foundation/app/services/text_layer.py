@@ -1,3 +1,4 @@
+import math
 from pathlib import Path
 
 from app.services.pdfium import open_document
@@ -222,6 +223,12 @@ def _append_marker_matches(
         right = max(item[2] for item in bounds)
         top = max(item[3] for item in bounds)
         text = "".join(item[1] for item in evidence_items)
+        glyph_height = max(
+            (item[2][3] - item[2][1]) * scale
+            for item in evidence_items
+        )
+        # Cover the measured glyph overhang using the marker's own height.
+        padding = math.ceil(glyph_height)
         target.append(
             {
                 "marker": marker,
@@ -234,10 +241,10 @@ def _append_marker_matches(
                     float(top),
                 ],
                 "bounds": [
-                    round(left * scale) - 40,
-                    round((page_height - top) * scale) - 40,
-                    round(right * scale) + 40,
-                    round((page_height - bottom) * scale) + 40,
+                    round(left * scale) - padding,
+                    round((page_height - top) * scale) - padding,
+                    round(right * scale) + padding,
+                    round((page_height - bottom) * scale) + padding,
                 ],
                 "source": "pdf_text_layer",
                 "kind": kind,
