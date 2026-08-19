@@ -39,6 +39,42 @@ def test_cleaned_pdf_removes_marker_without_external_pixel_changes(tmp_path):
     assert verification.pixel_check["changed_pixels_outside"] == 0
 
 
+def test_changed_pixels_outside_removed_blocks_fail_closed(tmp_path):
+    source = tmp_path / "source.pdf"
+    cleaned = tmp_path / "cleaned.pdf"
+    damaged = tmp_path / "damaged.pdf"
+    source.write_bytes(_pdf([["© inixmedia"]]))
+    box = Box(0, 0, 1020, 1320)
+    clean_pdf(source, cleaned, {1: [box]}, ["inixmedia"])
+    with pikepdf.Pdf.open(cleaned) as pdf:
+        page = pdf.pages[0]
+        page.Contents = pdf.make_stream(
+            page.Contents.read_bytes()
+            + b" BT /F1 10 Tf 1 0 0 1 500 500 Tm "
+            + b"(UNAUTHORIZED) Tj ET"
+        )
+        pdf.save(damaged)
+
+    verification = verify_cleaned_ad(
+        source,
+        damaged,
+        1,
+        box,
+        ["inixmedia"],
+        120,
+        removed_blocks=[
+            {
+                "text": "© inixmedia",
+                "bounds": [20, 20, 200, 100],
+            }
+        ],
+    )
+
+    assert verification.marker_check["status"] == "passed"
+    assert verification.pixel_check["status"] == "failed"
+    assert verification.pixel_check["changed_pixels_outside"] > 0
+
+
 def test_split_marker_is_detected_and_removed_as_one_text_block(tmp_path):
     source = tmp_path / "split-source.pdf"
     cleaned = tmp_path / "split-cleaned.pdf"
@@ -235,7 +271,7 @@ def test_passed_cleaning_is_deterministic_without_review(tmp_path, monkeypatch):
         "digest",
         None,
         evidence,
-        (tmp_path / "cleaned.pdf", cleaned_page),
+            (tmp_path / "cleaned.pdf", cleaned_page, []),
     )
 
     manifest = json.loads(occurrence.restoration_manifest_json)
@@ -400,7 +436,7 @@ def test_combined_cleaning_runs_qr_after_watermark_on_same_pdf(
         "digest",
         None,
         [{"marker": "inixmedia", "text": "© inixmedia", "kind": "confirmed"}],
-        (watermark_pdf, cleaned_page),
+        (watermark_pdf, cleaned_page, []),
     )
 
     manifest = json.loads(occurrence.restoration_manifest_json)
@@ -485,7 +521,11 @@ def test_failed_cleaning_falls_back_to_generative_review(tmp_path, monkeypatch):
         "digest",
         None,
         [{"marker": "inixmedia", "text": "© inixmedia"}],
-        (tmp_path / "cleaned.pdf", Image.new("RGB", (40, 40), "white")),
+            (
+                tmp_path / "cleaned.pdf",
+                Image.new("RGB", (40, 40), "white"),
+                [],
+            ),
     )
 
     manifest = json.loads(occurrence.restoration_manifest_json)
@@ -547,7 +587,11 @@ def test_passed_cleaning_without_level_one_image_falls_back(
         "digest",
         None,
         [{"marker": "inixmedia", "text": "© inixmedia"}],
-        (tmp_path / "cleaned.pdf", Image.new("RGB", (40, 40), "white")),
+        (
+            tmp_path / "cleaned.pdf",
+            Image.new("RGB", (40, 40), "white"),
+            [],
+        ),
     )
 
     manifest = json.loads(occurrence.restoration_manifest_json)

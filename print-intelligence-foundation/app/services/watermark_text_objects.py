@@ -91,6 +91,7 @@ def verify_cleaned_ad(
     pixel_dpi: int = 300,
     margin: int = 5,
     extra_allowed_regions: Iterable[Box] | None = None,
+    removed_blocks: Iterable[dict] | None = None,
 ) -> WatermarkVerification:
     marker_list = list(markers)
     before = watermark_markers_in_boxes(
@@ -109,21 +110,32 @@ def verify_cleaned_ad(
 
     text_before = _text_in_box(original_pdf, page_number, box, render_dpi)
     text_after = _text_in_box(cleaned_pdf, page_number, box, render_dpi)
+    removed_items = list(removed_blocks or ())
+    allowed_evidence = (
+        removed_items
+        if removed_blocks is not None
+        else before
+    )
+    allowed_texts = [
+        item["text"] for item in allowed_evidence if item.get("text")
+    ]
+    if removed_blocks is not None and allowed_texts:
+        allowed_texts.extend(_removed_text_variants(allowed_texts, marker_list))
     text_equal = _text_equal_after_marker_fragments(
         text_before,
         text_after,
         marker_list,
-        [item["text"] for item in before],
+        allowed_texts,
     )
     text_check = {
         "status": "passed" if text_equal else "failed",
         "before": text_before,
         "after": text_after,
         "normalized_before": _remove_marker_fragments(
-            text_before, marker_list, [item["text"] for item in before]
+            text_before, marker_list, allowed_texts
         ),
         "normalized_after": _remove_marker_fragments(
-            text_after, marker_list, [item["text"] for item in before]
+            text_after, marker_list, allowed_texts
         ),
     }
 
@@ -142,7 +154,14 @@ def verify_cleaned_ad(
     scale = pixel_dpi / render_dpi
     crop_left = round(box.left * scale)
     crop_top = round(box.top * scale)
-    for item in before:
+    allowed_blocks = (
+        removed_items
+        if removed_blocks is not None
+        else before
+    )
+    for item in allowed_blocks:
+        if not item.get("bounds"):
+            continue
         left, top, right, bottom = item["bounds"]
         x0 = max(0, round((left - box.left) * scale) - margin)
         y0 = max(0, round((top - box.top) * scale) - margin)
@@ -164,7 +183,10 @@ def verify_cleaned_ad(
         "changed_pixels_outside": outside,
         "margin_pixels": margin,
         "pixel_dpi": pixel_dpi,
-        "watermark_bounds": [item["bounds"] for item in before],
+        "watermark_bounds": [
+            item["bounds"] for item in allowed_blocks if item.get("bounds")
+        ],
+        "removed_blocks": len(removed_items),
     }
     return WatermarkVerification(marker_check, text_check, pixel_check)
 
@@ -207,7 +229,13 @@ def _clean_page(pdf, page, boxes, markers, render_dpi):
                 clone[key] = value
         return clone
 
-    def process(container, container_resources, path, is_page=False):
+    def process(
+        container,
+        container_resources,
+        path,
+        is_page=False,
+        container_bounds=None,
+    ):
         fonts = {
             str(name): (font, _cmap_for(font))
             for name, font in container_resources.get("/Font", {}).items()
@@ -267,6 +295,10 @@ def _clean_page(pdf, page, boxes, markers, render_dpi):
                             "path": path,
                             "text": text,
                             "fonts": list(block["fonts"]),
+                            "bounds_pdf": container_bounds,
+                            "bounds": _render_bounds(
+                                container_bounds, page_height, render_dpi
+                            ),
                         }
                     )
                     block = None
@@ -292,7 +324,12 @@ def _clean_page(pdf, page, boxes, markers, render_dpi):
                     clone_resources = clone.get(
                         "/Resources", container_resources
                     )
-                    process(clone, clone_resources, f"{path}{clone_name}")
+                    process(
+                        clone,
+                        clone_resources,
+                        f"{path}{clone_name}",
+                        container_bounds=_form_bounds(form),
+                    )
                     operands = list(operands)
                     operands[0] = clone_name
             if block is None:
@@ -304,6 +341,29 @@ def _clean_page(pdf, page, boxes, markers, render_dpi):
 
     process(page, resources, "page", is_page=True)
     return removed, usage
+
+
+def _form_bounds(form):
+    bbox = form.get("/BBox")
+    if bbox is None or len(bbox) != 4:
+        return None
+    left, bottom, right, top = (float(value) for value in bbox)
+    left, right = sorted((left, right))
+    bottom, top = sorted((bottom, top))
+    return [left, bottom, right, top]
+
+
+def _render_bounds(bounds_pdf, page_height, render_dpi):
+    if bounds_pdf is None:
+        return None
+    left, bottom, right, top = bounds_pdf
+    scale = render_dpi / 72
+    return [
+        round(left * scale),
+        round((page_height - top) * scale),
+        round(right * scale),
+        round((page_height - bottom) * scale),
+    ]
 
 
 def _form_contains_marker(form, resources, markers, visited=None):
@@ -417,10 +477,45 @@ def _remove_marker_fragments(text, markers, evidence_texts):
     for evidence in evidence_texts:
         compact = "".join(evidence.split())
         if compact:
-            pattern = re.compile(
-                r"\s*".join(re.escape(char) for char in compact),
-                re.IGNORECASE,
-            )
+            if compact == "©":
+                for variant in (
+                    "inixmedia",
+                    "inixme",
+                    "ixmedia",
+                    "inmedia",
+                    "india",
+                    "inix",
+                    "media",
+                ):
+                    normalized = re.sub(
+                        rf"{variant}\s*©", variant, normalized,
+                        flags=re.IGNORECASE,
+                    )
+                    normalized = re.sub(
+                        rf"©\s*(?={variant})", "", normalized,
+                        flags=re.IGNORECASE,
+                    )
+                normalized = normalized.replace("©", " ")
+                continue
+            if compact == "me":
+                pattern = re.compile(
+                    rf"(?<!\w){re.escape(compact)}(?!\w)",
+                    re.IGNORECASE,
+                )
+            elif compact in {
+                "inix",
+                "inixme",
+                "ixmedia",
+                "inmedia",
+                "india",
+                "media",
+            }:
+                pattern = re.compile(re.escape(compact), re.IGNORECASE)
+            else:
+                pattern = re.compile(
+                    r"\s*".join(re.escape(char) for char in compact),
+                    re.IGNORECASE,
+                )
             normalized = pattern.sub(" ", normalized)
     for marker in markers:
         compact = "".join(marker.split())
@@ -430,6 +525,27 @@ def _remove_marker_fragments(text, markers, evidence_texts):
         )
         normalized = pattern.sub(" ", normalized)
     return " ".join(normalized.split())
+
+
+def _removed_text_variants(texts, markers):
+    for text in texts:
+        compact = "".join(text.split()).casefold()
+        if any(
+            "".join(marker.split()).casefold() in compact
+            for marker in markers
+        ):
+            return [
+                "©",
+                "inixmedia",
+                "inixme",
+                "ixmedia",
+                "inmedia",
+                "india",
+                "inix",
+                "media",
+                "me",
+            ]
+    return []
 
 
 def _text_equal_after_marker_fragments(

@@ -284,6 +284,7 @@ class Pipeline:
             return (
                 cleaning.pdf_path,
                 render_page(cleaning.pdf_path, page_number, self.artwork_dpi),
+                cleaning.removed_blocks,
             )
         except (OSError, ValueError, TypeError, pikepdf.PdfError):
             logger.exception(
@@ -871,7 +872,11 @@ class Pipeline:
         watermark_artwork = artwork_output
         watermark_padded_box = padded_box
         if watermark_evidence and watermark_cleaning is not None:
-            watermark_source, cleaned_page = watermark_cleaning
+            (
+                watermark_source,
+                cleaned_page,
+                watermark_removed_blocks,
+            ) = watermark_cleaning
             watermark_artwork, watermark_padded_box = (
                 self._write_cleaned_artwork(
                     cleaned_page,
@@ -883,8 +888,8 @@ class Pipeline:
             )
         watermark_regions = [
             Box(*item["bounds"])
-            for item in watermark_evidence
-            if item.get("kind") != "suspected" and item.get("bounds")
+            for item in (watermark_removed_blocks if watermark_cleaning else ())
+            if item.get("bounds")
         ]
         watermark_ready = (
             not watermark_evidence
@@ -963,6 +968,7 @@ class Pipeline:
                     self.render_dpi,
                     self.artwork_dpi,
                     extra_allowed_regions=[qr_allowed_region],
+                    removed_blocks=watermark_removed_blocks,
                 )
             cleaned_page = render_page(cleaned_pdf, page_number, self.artwork_dpi)
             cleaned_artwork, cleaned_padded_box = self._write_cleaned_artwork(
@@ -1009,6 +1015,7 @@ class Pipeline:
                         },
                         "watermark_text_objects": {
                             "method": "pikepdf_text_object_removal",
+                            "removed_blocks": watermark_removed_blocks,
                             "provenance": {
                                 "original_pdf": str(source),
                                 "cleaned_pdf": str(watermark_source),
@@ -1052,7 +1059,9 @@ class Pipeline:
                 review_reason=reason,
             )
         elif watermark_evidence and watermark_cleaning is not None:
-            cleaned_pdf, cleaned_page = watermark_cleaning
+            cleaned_pdf, cleaned_page, watermark_removed_blocks = (
+                watermark_cleaning
+            )
             cleaning_verification = verify_cleaned_ad(
                 source,
                 cleaned_pdf,
@@ -1061,6 +1070,7 @@ class Pipeline:
                 self.watermark_markers,
                 self.render_dpi,
                 self.artwork_dpi,
+                removed_blocks=watermark_removed_blocks,
             )
             if cleaning_verification.passed:
                 cleaned_artwork, cleaned_padded_box = (
@@ -1092,6 +1102,7 @@ class Pipeline:
                         },
                         "watermark_text_objects": {
                             "method": "pikepdf_text_object_removal",
+                            "removed_blocks": watermark_removed_blocks,
                             "provenance": {
                                 "original_pdf": str(source),
                                 "cleaned_pdf": str(cleaned_pdf),
@@ -1127,6 +1138,7 @@ class Pipeline:
                         },
                         "watermark_text_objects": {
                             "method": "pikepdf_text_object_removal",
+                            "removed_blocks": watermark_removed_blocks,
                             "provenance": {
                                 "original_pdf": str(source),
                                 "cleaned_pdf": str(cleaned_pdf),
