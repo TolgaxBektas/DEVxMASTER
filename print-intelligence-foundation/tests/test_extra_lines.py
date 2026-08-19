@@ -52,6 +52,34 @@ def test_appends_strip_when_no_uniform_contact_bar_exists(monkeypatch):
     assert result.image.height > image.height
 
 
+def test_social_brand_substrings_remain_plain_websites():
+    values = extra_lines._contact_values(
+        "boxing.de mixing.de auto-xing.de my-tiktok.de "
+        "www.xing.de xing.com/profil"
+    )
+
+    assert values == [
+        ("xing", "www.xing.de"),
+        ("xing", "xing.com/profil"),
+        ("website", "boxing.de"),
+        ("website", "mixing.de"),
+        ("website", "auto-xing.de"),
+        ("website", "my-tiktok.de"),
+    ]
+    assert extra_lines._contact_values("auto-xing.de") == [
+        ("website", "auto-xing.de")
+    ]
+    assert extra_lines._contact_values("my-tiktok.de") == [
+        ("website", "my-tiktok.de")
+    ]
+    assert extra_lines._channel_value("boxing.de")[0] == "website"
+    assert extra_lines._channel_value("mixing.de")[0] == "website"
+    assert extra_lines._channel_value("auto-xing.de")[0] == "website"
+    assert extra_lines._channel_value("my-tiktok.de")[0] == "website"
+    assert extra_lines._channel_value("www.xing.de")[0] == "xing"
+    assert extra_lines._channel_value("xing.com/profil")[0] == "xing"
+
+
 def test_fails_closed_without_contact_line(monkeypatch):
     image = Image.new("RGB", (120, 80), (12, 34, 56))
     monkeypatch.setattr(extra_lines, "_anchor", lambda _image: None)
@@ -211,6 +239,21 @@ def test_pairing_and_social_packing_use_available_width():
     )
     assert len(narrow[0]["rows"]) == 3
     assert all(part["font"].size == 20 for row in narrow[0]["rows"] for part in row["parts"])
+
+
+def test_tiny_social_font_stacks_without_constructing_zero_size_font():
+    image = Image.new("RGB", (100, 40), "white")
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.truetype(extra_lines._font_path(False), 1)
+    values = [
+        ("facebook", "facebook.com/a"),
+        ("instagram", "instagram.com/a"),
+        ("linkedin", "linkedin.com/a"),
+    ]
+
+    blocks = extra_lines._group_lines(values, draw, font, 1, 1)
+
+    assert len(blocks[0]["rows"]) == 3
 
 
 def test_phone_and_fax_use_short_labels_and_preserve_number_text(monkeypatch):
@@ -416,6 +459,10 @@ def test_reset_preserves_phone_and_fax_with_identical_digits(monkeypatch):
 
 def test_reset_falls_back_when_erased_value_guard_reports_missing(monkeypatch):
     image = Image.new("RGB", (600, 140), (20, 80, 140))
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.truetype(extra_lines._font_path(False), 10)
+    draw.text((30, 40), "Telefon 06441 12345", font=font, fill="white")
+    before = image.copy()
     anchor = _reset_anchor()
     reset = {
         "segments": anchor["contact_segments"],
@@ -440,8 +487,20 @@ def test_reset_falls_back_when_erased_value_guard_reports_missing(monkeypatch):
     result = compose_extra_lines(image, [("fax", "06441 98765")])
 
     assert result.manifest["mode"] == "append"
+    assert result.manifest["placement"] == "appended_strip"
     assert result.manifest["block_reset_skipped_reason"] == (
         "removed_value_not_preserved"
+    )
+    assert (
+        ImageChops.difference(
+            result.image.crop((0, 0, image.width, 70)),
+            before.crop((0, 0, image.width, 70)),
+        ).getbbox()
+        is None
+    )
+    assert all(
+        block["top"] >= anchor["bottom"]
+        for block in result.manifest["blocks"]
     )
 
 
