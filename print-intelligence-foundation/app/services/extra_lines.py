@@ -1166,6 +1166,14 @@ def _append_geometry(
     return content_end, insertion_gap
 
 
+def _contact_block_bottom(anchor: Mapping[str, object]) -> int:
+    minimum_end = int(anchor.get("bottom", 0))
+    for segment in anchor.get("contact_segments", []):
+        if isinstance(segment, Mapping):
+            minimum_end = max(minimum_end, int(segment.get("bottom", 0)))
+    return minimum_end
+
+
 def _channel_value(
     item: str | tuple[str, str] | Mapping[str, str],
 ) -> tuple[str, str]:
@@ -1496,7 +1504,7 @@ def compose_extra_lines(
         background = max(set(bottom), key=bottom.count)
         text_colour = (0, 0, 0) if sum(background) > 381 else (255, 255, 255)
         content_end_value, insertion_gap = _append_geometry(
-            source, background, line_height, anchor["bottom"]
+            source, background, line_height, _contact_block_bottom(anchor)
         )
         band_end = content_end_value + insertion_gap
     content_bounds = _content_bounds(source, _edge_colour(source)) or (
@@ -1664,7 +1672,7 @@ def compose_extra_lines(
         background = max(set(bottom), key=bottom.count)
         text_colour = (0, 0, 0) if sum(background) > 381 else (255, 255, 255)
         content_end_value, insertion_gap = _append_geometry(
-            source, background, line_height, anchor["bottom"]
+            source, background, line_height, _contact_block_bottom(anchor)
         )
         band_end = content_end_value + insertion_gap
         font, blocks = fit_channel_blocks(channels)

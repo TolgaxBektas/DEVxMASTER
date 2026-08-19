@@ -464,6 +464,7 @@ def test_reset_falls_back_when_erased_value_guard_reports_missing(monkeypatch):
     draw.text((30, 40), "Telefon 06441 12345", font=font, fill="white")
     before = image.copy()
     anchor = _reset_anchor()
+    anchor["contact_segments"][-1]["bottom"] = 90
     reset = {
         "segments": anchor["contact_segments"],
         "values": [("phone", "06441 12345")],
@@ -499,7 +500,7 @@ def test_reset_falls_back_when_erased_value_guard_reports_missing(monkeypatch):
         is None
     )
     assert all(
-        block["top"] >= anchor["bottom"]
+        block["top"] >= 90
         for block in result.manifest["blocks"]
     )
 
