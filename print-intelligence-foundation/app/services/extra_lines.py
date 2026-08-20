@@ -332,7 +332,13 @@ def _reset_background(
         )
         text = (0, 0, 0) if luma > 127 else (255, 255, 255)
         return text, background
-    ink = max(set(non_background), key=non_background.count)
+    ink = max(
+        non_background,
+        key=lambda pixel: sum(
+            (pixel[index] - background[index]) ** 2
+            for index in range(3)
+        ),
+    )
     ink_tolerance = 18
     vector = tuple(ink[index] - background[index] for index in range(3))
     vector_length = sum(component * component for component in vector)
