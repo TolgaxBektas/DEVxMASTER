@@ -30,10 +30,17 @@ def test_cleaned_pdf_removes_marker_without_external_pixel_changes(tmp_path):
 
     result = clean_pdf(source, cleaned, {1: [box]}, ["inixmedia"])
     verification = verify_cleaned_ad(
-        source, result.pdf_path, 1, box, ["inixmedia"], 120
+        source,
+        result.pdf_path,
+        1,
+        box,
+        ["inixmedia"],
+        120,
+        removed_blocks=result.removed_blocks,
     )
 
     assert result.removed_blocks
+    assert result.removed_blocks[0]["bounds"]
     assert verification.passed
     assert verification.marker_check["markers_after"] == 0
     assert verification.pixel_check["changed_pixels_outside"] == 0
@@ -45,7 +52,7 @@ def test_changed_pixels_outside_removed_blocks_fail_closed(tmp_path):
     damaged = tmp_path / "damaged.pdf"
     source.write_bytes(_pdf([["© inixmedia"]]))
     box = Box(0, 0, 1020, 1320)
-    clean_pdf(source, cleaned, {1: [box]}, ["inixmedia"])
+    result = clean_pdf(source, cleaned, {1: [box]}, ["inixmedia"])
     with pikepdf.Pdf.open(cleaned) as pdf:
         page = pdf.pages[0]
         page.Contents = pdf.make_stream(
@@ -62,12 +69,7 @@ def test_changed_pixels_outside_removed_blocks_fail_closed(tmp_path):
         box,
         ["inixmedia"],
         120,
-        removed_blocks=[
-            {
-                "text": "© inixmedia",
-                "bounds": [20, 20, 200, 100],
-            }
-        ],
+        removed_blocks=result.removed_blocks,
     )
 
     assert verification.marker_check["status"] == "passed"
