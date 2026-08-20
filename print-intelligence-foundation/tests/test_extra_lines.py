@@ -1051,6 +1051,26 @@ def test_reset_background_accepts_dense_two_colour_text():
     assert result is not None
 
 
+def test_reset_background_ignores_single_ink_outlier():
+    image = Image.new("RGB", (180, 80), (245, 245, 235))
+    font = ImageFont.truetype(extra_lines._font_path(False), 24)
+    draw = ImageDraw.Draw(image)
+    draw.text(
+        (25, 25),
+        "diako.de",
+        font=font,
+        fill=(105, 115, 82),
+    )
+    draw.point((90, 30), fill=(0, 0, 0))
+
+    result = extra_lines._reset_background(
+        image,
+        [_ocr_segment("diako.de", left=25, top=25, right=155, bottom=52)],
+    )
+
+    assert result is not None
+
+
 def test_reset_background_rejects_structured_multicolour_content():
     image = Image.new("RGB", (180, 80), (0, 0, 0))
     draw = ImageDraw.Draw(image)

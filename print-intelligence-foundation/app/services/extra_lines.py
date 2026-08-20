@@ -332,12 +332,22 @@ def _reset_background(
         )
         text = (0, 0, 0) if luma > 127 else (255, 255, 255)
         return text, background
-    ink = max(
-        non_background,
-        key=lambda pixel: sum(
+    def ink_distance(pixel: tuple[int, int, int]) -> int:
+        return sum(
             (pixel[index] - background[index]) ** 2
             for index in range(3)
-        ),
+        )
+
+    sample_size = min(
+        len(non_background),
+        max(5, (len(non_background) + 9) // 10),
+    )
+    ink_candidates = sorted(non_background, key=ink_distance, reverse=True)[
+        :sample_size
+    ]
+    ink = tuple(
+        sorted(pixel[index] for pixel in ink_candidates)[len(ink_candidates) // 2]
+        for index in range(3)
     )
     ink_tolerance = 18
     vector = tuple(ink[index] - background[index] for index in range(3))
