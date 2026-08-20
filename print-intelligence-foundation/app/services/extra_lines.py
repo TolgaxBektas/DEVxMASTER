@@ -337,7 +337,6 @@ def _reset_background(
     vector = tuple(ink[index] - background[index] for index in range(3))
     vector_length = sum(component * component for component in vector)
     ink_count = 0
-    blend_count = 0
     foreign_count = 0
     for pixel in non_background:
         if all(
@@ -360,14 +359,10 @@ def _reset_background(
             ) <= ink_tolerance:
                 if projection >= 0.5:
                     ink_count += 1
-                else:
-                    blend_count += 1
                 continue
         foreign_count += 1
-    ink_share = ink_count / len(pixels)
-    blend_share = blend_count / len(pixels)
     foreign_share = foreign_count / len(pixels)
-    if foreign_share > 0.02 or blend_share > ink_share or ink_count == 0:
+    if foreign_share > 0.02 or ink_count == 0:
         return None
     luma = 0.299 * background[0] + 0.587 * background[1] + 0.114 * background[2]
     text = (0, 0, 0) if luma > 127 else (255, 255, 255)
