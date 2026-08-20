@@ -313,7 +313,72 @@ def _reset_background(
         for pixel in pixels
         if all(abs(pixel[index] - background[index]) <= tolerance for index in range(3))
     ]
-    if len(matching) / len(pixels) < 0.72:
+    background_share = len(matching) / len(pixels)
+    if background_share <= 0.5:
+        return None
+    non_background = [
+        pixel
+        for pixel in pixels
+        if any(
+            abs(pixel[index] - background[index]) > tolerance
+            for index in range(3)
+        )
+    ]
+    if not non_background:
+        luma = (
+            0.299 * background[0]
+            + 0.587 * background[1]
+            + 0.114 * background[2]
+        )
+        text = (0, 0, 0) if luma > 127 else (255, 255, 255)
+        return text, background
+    def ink_distance(pixel: tuple[int, int, int]) -> int:
+        return sum(
+            (pixel[index] - background[index]) ** 2
+            for index in range(3)
+        )
+
+    sample_size = min(
+        len(non_background),
+        max(5, (len(non_background) + 9) // 10),
+    )
+    ink_candidates = sorted(non_background, key=ink_distance, reverse=True)[
+        :sample_size
+    ]
+    ink = tuple(
+        sorted(pixel[index] for pixel in ink_candidates)[len(ink_candidates) // 2]
+        for index in range(3)
+    )
+    ink_tolerance = 18
+    vector = tuple(ink[index] - background[index] for index in range(3))
+    vector_length = sum(component * component for component in vector)
+    ink_count = 0
+    foreign_count = 0
+    for pixel in non_background:
+        if all(
+            abs(pixel[index] - ink[index]) <= ink_tolerance
+            for index in range(3)
+        ):
+            ink_count += 1
+            continue
+        if vector_length:
+            projection = sum(
+                (pixel[index] - background[index]) * vector[index]
+                for index in range(3)
+            ) / vector_length
+            expected = tuple(
+                background[index] + projection * vector[index]
+                for index in range(3)
+            )
+            if 0.0 < projection < 1.0 and max(
+                abs(pixel[index] - expected[index]) for index in range(3)
+            ) <= ink_tolerance:
+                if projection >= 0.5:
+                    ink_count += 1
+                continue
+        foreign_count += 1
+    foreign_share = foreign_count / len(pixels)
+    if foreign_share > 0.02 or ink_count == 0:
         return None
     luma = 0.299 * background[0] + 0.587 * background[1] + 0.114 * background[2]
     text = (0, 0, 0) if luma > 127 else (255, 255, 255)
@@ -506,14 +571,6 @@ def _reset_block(anchor: dict[str, Any]) -> dict[str, Any] | None:
     candidates.sort(key=lambda item: (item["top"], item["left"]))
     selected = []
     reference_left = candidates[0]["left"]
-    column_segments = [
-        segment
-        for segment in all_segments
-        if abs(segment["left"] - reference_left)
-        <= max(segment["bottom"] - segment["top"], 1)
-    ]
-    if any(_pure_contact_segment(segment) is None for segment in column_segments):
-        return None
     for segment in candidates:
         if abs(segment["left"] - reference_left) > max(
             segment["bottom"] - segment["top"], 1
@@ -521,7 +578,7 @@ def _reset_block(anchor: dict[str, Any]) -> dict[str, Any] | None:
             continue
         if selected and segment["top"] - selected[-1]["bottom"] > max(
             segment["bottom"] - segment["top"], 1
-        ) * 2:
+        ) * 3:
             break
         selected.append(segment)
     if not selected:
@@ -540,6 +597,60 @@ def _reset_block(anchor: dict[str, Any]) -> dict[str, Any] | None:
             unique.append(segment)
             seen.add(key)
     selected = unique
+    selected_keys = {
+        (
+            segment["text"],
+            segment["left"],
+            segment["top"],
+            segment["right"],
+            segment["bottom"],
+        )
+        for segment in selected
+    }
+    for segment in all_segments:
+        if (
+            (
+                segment["text"],
+                segment["left"],
+                segment["top"],
+                segment["right"],
+                segment["bottom"],
+            )
+            in selected_keys
+            or _pure_contact_segment(segment) is not None
+            or not _contact_values(segment.get("text", ""))
+        ):
+            continue
+        segment_values = _contact_values(segment.get("text", ""))
+        segment_confidence = segment.get("confidence", 0)
+        duplicate_pure = False
+        for candidate in selected:
+            if candidate.get("confidence", 0) <= segment_confidence:
+                continue
+            candidate_values = _pure_contact_segment(candidate) or []
+            if {
+                _normal_key(channel, value)
+                for channel, value in candidate_values
+            } != {
+                _normal_key(channel, value)
+                for channel, value in segment_values
+            }:
+                continue
+            overlap_left = max(candidate["left"], segment["left"])
+            overlap_top = max(candidate["top"], segment["top"])
+            overlap_right = min(candidate["right"], segment["right"])
+            overlap_bottom = min(candidate["bottom"], segment["bottom"])
+            overlap_area = max(0, overlap_right - overlap_left) * max(
+                0, overlap_bottom - overlap_top
+            )
+            candidate_area = max(1, candidate["right"] - candidate["left"]) * max(
+                1, candidate["bottom"] - candidate["top"]
+            )
+            if overlap_area / candidate_area >= 0.8:
+                duplicate_pure = True
+                break
+        if not duplicate_pure:
+            return None
     values = [value for segment in selected for value in segment["values"]]
     if not values:
         return None

@@ -1012,6 +1012,144 @@ def _reset_anchor(mixed: bool = False):
     }
 
 
+def _ocr_segment(
+    text,
+    *,
+    left=30,
+    top=40,
+    right=300,
+    bottom=60,
+    confidence=90,
+):
+    return {
+        "text": text,
+        "heights": [("value", bottom - top)],
+        "left": left,
+        "top": top,
+        "right": right,
+        "bottom": bottom,
+        "ocr_source": "whole_image",
+        "confidence": confidence,
+    }
+
+
+def test_reset_background_accepts_dense_two_colour_text():
+    image = Image.new("RGB", (180, 80), (245, 245, 235))
+    font = ImageFont.truetype(extra_lines._font_path(False), 24)
+    ImageDraw.Draw(image).text(
+        (25, 25),
+        "diako.de",
+        font=font,
+        fill=(105, 115, 82),
+    )
+
+    result = extra_lines._reset_background(
+        image,
+        [_ocr_segment("diako.de", left=25, top=25, right=155, bottom=52)],
+    )
+
+    assert result is not None
+
+
+def test_reset_background_ignores_single_ink_outlier():
+    image = Image.new("RGB", (180, 80), (245, 245, 235))
+    font = ImageFont.truetype(extra_lines._font_path(False), 24)
+    draw = ImageDraw.Draw(image)
+    draw.text(
+        (25, 25),
+        "diako.de",
+        font=font,
+        fill=(105, 115, 82),
+    )
+    draw.point((90, 30), fill=(0, 0, 0))
+
+    result = extra_lines._reset_background(
+        image,
+        [_ocr_segment("diako.de", left=25, top=25, right=155, bottom=52)],
+    )
+
+    assert result is not None
+
+
+def test_reset_background_rejects_structured_multicolour_content():
+    image = Image.new("RGB", (180, 80), (0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    for y in range(20, 60):
+        for x in range(20, 160):
+            draw.point((x, y), fill=((x * 17) % 256, (y * 23) % 256, 80))
+
+    result = extra_lines._reset_background(
+        image,
+        [_ocr_segment("www.enwag.de/mehr", left=20, top=20, right=160, bottom=60)],
+    )
+
+    assert result is None
+
+
+def test_reset_block_keeps_a_contact_column_across_a_single_line_gap():
+    phone = _ocr_segment("Telefon 06441 42071", top=10, bottom=36)
+    website = _ocr_segment("www.example.de", top=93, bottom=119)
+    reset = extra_lines._reset_block(
+        {
+            "contact_segments": [phone, website],
+        }
+    )
+
+    assert reset is not None
+    assert [segment["text"] for segment in reset["segments"]] == [
+        phone["text"],
+        website["text"],
+    ]
+
+
+def test_reset_block_uses_pure_duplicate_and_ignores_address_line():
+    mixed = _ocr_segment(
+        "| 06441 42071 | schmidt-wetzlar.de MÜBEL SCHMIDT",
+        left=355,
+        top=25,
+        right=600,
+        bottom=70,
+        confidence=33,
+    )
+    pure = _ocr_segment(
+        "06441 42071 | schmidt-wetzlar.de",
+        left=418,
+        top=40,
+        right=520,
+        bottom=66,
+        confidence=90,
+    )
+    address = _ocr_segment(
+        "Hintergasse 13 | 35576 Wetzlar",
+        left=418,
+        top=5,
+        right=520,
+        bottom=30,
+        confidence=91,
+    )
+    reset = extra_lines._reset_block(
+        {
+            "contact_segments": [address, mixed, pure],
+        }
+    )
+
+    assert reset is not None
+    assert [segment["text"] for segment in reset["segments"]] == [pure["text"]]
+    assert reset["values"] == [
+        ("website", "schmidt-wetzlar.de"),
+        ("phone", "06441 42071"),
+    ]
+
+
+def test_reset_block_rejects_mixed_contact_without_pure_duplicate():
+    mixed = _ocr_segment(
+        "06441 42071 Logo",
+        confidence=90,
+    )
+
+    assert extra_lines._reset_block({"contact_segments": [mixed]}) is None
+
+
 def test_resets_existing_communication_block_and_keeps_removed_values(
     monkeypatch,
 ):
