@@ -60,25 +60,14 @@ def clean_pdf(
     with pikepdf.Pdf.open(source_pdf) as pdf:
         for page_number, boxes in page_boxes.items():
             page = pdf.pages[page_number - 1]
-            page_evidence = [
-                item
-                for items in watermark_markers_in_boxes(
-                    source_pdf,
-                    page_number,
-                    boxes,
-                    render_dpi,
-                    normalized_markers,
-                )
-                for item in items
-                if item.get("kind") == "confirmed"
-            ]
             removed, usage = _clean_page(
                 pdf,
                 page,
                 boxes,
                 normalized_markers,
                 render_dpi,
-                page_evidence,
+                source_pdf,
+                page_number,
             )
             removed_blocks.extend(
                 [{"page": page_number, **block} for block in removed]
@@ -214,7 +203,8 @@ def _clean_page(
     boxes,
     markers,
     render_dpi,
-    page_evidence=None,
+    source_pdf=None,
+    page_number=None,
 ):
     resources = page.get("/Resources", {})
     media_box = page.get("/MediaBox")
@@ -231,6 +221,27 @@ def _clean_page(
     removed: list[dict] = []
     usage: dict[str, dict] = {}
     used_page_evidence: set[int] = set()
+    page_evidence = None
+
+    def get_page_evidence():
+        nonlocal page_evidence
+        if page_evidence is None:
+            if source_pdf is None or page_number is None:
+                page_evidence = []
+            else:
+                page_evidence = [
+                    item
+                    for items in watermark_markers_in_boxes(
+                        source_pdf,
+                        page_number,
+                        boxes,
+                        render_dpi,
+                        markers,
+                    )
+                    for item in items
+                    if item.get("kind") == "confirmed"
+                ]
+        return page_evidence
 
     def intersects(form) -> bool:
         bbox = form.get("/BBox")
@@ -315,20 +326,17 @@ def _clean_page(
                     state["blocks"] += 1
                     state["marker_blocks"] += int(marker_block)
                 if marker_block:
-                    measured_bounds = _measured_page_bounds(
-                        compact_text,
-                        page_evidence or (),
-                        used_page_evidence,
-                    )
+                    measured_bounds = None
+                    if container_bounds is None:
+                        measured_bounds = _measured_page_bounds(
+                            compact_text,
+                            get_page_evidence(),
+                            used_page_evidence,
+                        )
                     removed.append(
                         {
                             "path": path,
-                            "text": (
-                                measured_bounds["text"]
-                                if container_bounds is None
-                                and measured_bounds
-                                else text
-                            ),
+                            "text": text,
                             "fonts": list(block["fonts"]),
                             "bounds_pdf": (
                                 container_bounds
@@ -393,21 +401,28 @@ def _clean_page(
 
 
 def _measured_page_bounds(text, evidence, used):
-    matches = []
     compact = re.sub(r"\s+", "", text).casefold()
-    for index, item in enumerate(evidence):
-        if index in used:
-            continue
+    marker_counts = {}
+    for item in evidence:
         marker = re.sub(r"\s+", "", item.get("marker", "")).casefold()
-        if marker and compact.count(marker) > sum(
-            1
-            for match in matches
-            if re.sub(
-                r"\s+", "", match.get("marker", "")
-            ).casefold() == marker
-        ):
+        if marker:
+            marker_counts[marker] = compact.count(marker)
+    matches = []
+    for marker, count in marker_counts.items():
+        taken = 0
+        for index, item in enumerate(evidence):
+            if index in used:
+                continue
+            item_marker = re.sub(
+                r"\s+", "", item.get("marker", "")
+            ).casefold()
+            if item_marker != marker:
+                continue
             matches.append(item)
             used.add(index)
+            taken += 1
+            if taken == count:
+                break
     if not matches:
         return None
     bounds_pdf = [
@@ -427,7 +442,6 @@ def _measured_page_bounds(text, evidence, used):
     return {
         "bounds_pdf": bounds_pdf,
         "bounds": bounds,
-        "text": "".join(item.get("text", "") for item in matches),
     }
 
 
@@ -622,7 +636,11 @@ def _removed_text_variants(texts, markers):
             "".join(marker.split()).casefold() in compact
             for marker in markers
         ):
-            return [
+            variants = [
+                f"{prefix} {marker}"
+                for prefix in ("©", "´'")
+                for marker in markers
+            ] + [
                 "©",
                 "inixmedia",
                 "inixme",
@@ -633,6 +651,7 @@ def _removed_text_variants(texts, markers):
                 "media",
                 "me",
             ]
+            return variants
     return []
 
 
