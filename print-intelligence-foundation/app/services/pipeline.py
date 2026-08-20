@@ -51,6 +51,11 @@ from app.services.watermark_text_objects import (
     clean_pdf,
     verify_cleaned_ad,
 )
+from app.services.qr_objects import (
+    page_box_from_artwork_region,
+    remove_confirmed_qr,
+    verify_qr_removed_ad,
+)
 from app.services.vision.image_edit import (
     ImageEditProvider,
     image_sha256,
@@ -257,7 +262,11 @@ class Pipeline:
         artwork_gate_holds,
         evidence,
     ):
-        if not artwork_gate_holds or not evidence:
+        if (
+            not artwork_gate_holds
+            or not evidence
+            or any(item.get("kind") == "suspected" for item in evidence)
+        ):
             return None
         try:
             cleaned_pdf = (
@@ -275,6 +284,7 @@ class Pipeline:
             return (
                 cleaning.pdf_path,
                 render_page(cleaning.pdf_path, page_number, self.artwork_dpi),
+                cleaning.removed_blocks,
             )
         except (OSError, ValueError, TypeError, pikepdf.PdfError):
             logger.exception(
@@ -284,6 +294,80 @@ class Pipeline:
                 index,
             )
             return None
+
+    def _prepare_qr_removal(
+        self,
+        source,
+        digest,
+        occurrence,
+        page_number,
+        box,
+        artwork_output,
+        padded_box,
+        extra_allowed_regions=None,
+    ):
+        with Image.open(artwork_output) as artwork:
+            anchors = extract_content_anchors(artwork.convert("RGB"), text="")
+        if not (
+            anchors.get("qr_detection") == "available"
+            and anchors.get("qr_present") is True
+            and anchors.get("qr_codes")
+            and anchors.get("qr_region")
+        ):
+            return None
+        with pikepdf.Pdf.open(source) as pdf:
+            media_box = pdf.pages[page_number - 1].get("/MediaBox")
+            page_height_points = float(media_box[3])
+        qr_page_box = page_box_from_artwork_region(
+            anchors["qr_region"],
+            padded_box,
+            page_height_points,
+            self.artwork_dpi,
+        )
+        cleaned_pdf = (
+            self.local_work_dir
+            / digest
+            / "restoration_source"
+            / f"qr_occurrence_{occurrence.id}.pdf"
+        )
+        removal = remove_confirmed_qr(
+            source,
+            cleaned_pdf,
+            page_number,
+            anchors["qr_codes"],
+            qr_page_box,
+        )
+        if removal is None:
+            return {
+                "removal": None,
+                "verification": None,
+                "reason": (
+                    "Confirmed QR payload has no unique image-XObject "
+                    "assignment in the QR geometry."
+                ),
+                "anchors": anchors,
+                "qr_page_box": qr_page_box,
+            }
+        verification = verify_qr_removed_ad(
+            source,
+            removal.pdf_path,
+            page_number,
+            box,
+            anchors["qr_region"],
+            padded_box,
+            self.render_dpi,
+            self.artwork_dpi,
+            extra_allowed_regions=extra_allowed_regions,
+        )
+        return {
+            "removal": removal,
+            "verification": verification,
+            "reason": (
+                "QR image-object removal failed one or more losslessness checks."
+            ),
+            "anchors": anchors,
+            "qr_page_box": qr_page_box,
+        }
 
     def _detect_pages(self, doc, source, page_paths, digest, local_root, deadline):
         for number, path in page_paths.items():
@@ -775,14 +859,209 @@ class Pipeline:
             return
         watermark_evidence = watermark_evidence or []
         deterministic_watermark_passed = False
+        deterministic_qr_passed = False
         deterministic_candidate = False
         cleaning_verification = None
+        qr_verification = None
+        qr_cleaning = None
         deterministic_verification = None
         verification_source = source
         verification_artwork = artwork_output
         verification_origin = (padded_box.left, padded_box.top)
+        watermark_source = source
+        watermark_artwork = artwork_output
+        watermark_padded_box = padded_box
         if watermark_evidence and watermark_cleaning is not None:
-            cleaned_pdf, cleaned_page = watermark_cleaning
+            (
+                watermark_source,
+                cleaned_page,
+                watermark_removed_blocks,
+            ) = watermark_cleaning
+            watermark_artwork, watermark_padded_box = (
+                self._write_cleaned_artwork(
+                    cleaned_page,
+                    box,
+                    detector_size,
+                    digest,
+                    occurrence,
+                )
+            )
+        watermark_regions = [
+            Box(*item["bounds"])
+            for item in (watermark_removed_blocks if watermark_cleaning else ())
+            if item.get("bounds")
+        ]
+        watermark_ready = (
+            not watermark_evidence
+            or (
+                watermark_cleaning is not None
+                and not any(
+                    item.get("kind") == "suspected"
+                    for item in watermark_evidence
+                )
+            )
+        )
+        if watermark_ready:
+            qr_cleaning = self._prepare_qr_removal(
+                watermark_source,
+                digest,
+                occurrence,
+                page_number,
+                box,
+                watermark_artwork,
+                watermark_padded_box,
+                extra_allowed_regions=watermark_regions,
+            )
+        if qr_cleaning and qr_cleaning["verification"] is not None:
+            qr_verification = qr_cleaning["verification"]
+        if (
+            qr_cleaning
+            and qr_cleaning["removal"] is not None
+            and qr_verification is not None
+            and qr_verification.passed
+        ):
+            cleaned_pdf = qr_cleaning["removal"].pdf_path
+            if watermark_evidence and watermark_cleaning is not None:
+                qr_region = qr_cleaning["anchors"]["qr_region"]
+                qr_allowed_region = Box(
+                    round(
+                        (
+                            watermark_padded_box.left
+                            + qr_region["x"]
+                        )
+                        * self.render_dpi
+                        / self.artwork_dpi
+                    ),
+                    round(
+                        (
+                            watermark_padded_box.top
+                            + qr_region["y"]
+                        )
+                        * self.render_dpi
+                        / self.artwork_dpi
+                    ),
+                    round(
+                        (
+                            watermark_padded_box.left
+                            + qr_region["x"]
+                            + qr_region["width"]
+                        )
+                        * self.render_dpi
+                        / self.artwork_dpi
+                    ),
+                    round(
+                        (
+                            watermark_padded_box.top
+                            + qr_region["y"]
+                            + qr_region["height"]
+                        )
+                        * self.render_dpi
+                        / self.artwork_dpi
+                    ),
+                )
+                cleaning_verification = verify_cleaned_ad(
+                    source,
+                    cleaned_pdf,
+                    page_number,
+                    box,
+                    self.watermark_markers,
+                    self.render_dpi,
+                    self.artwork_dpi,
+                    extra_allowed_regions=[qr_allowed_region],
+                    removed_blocks=watermark_removed_blocks,
+                )
+            cleaned_page = render_page(cleaned_pdf, page_number, self.artwork_dpi)
+            cleaned_artwork, cleaned_padded_box = self._write_cleaned_artwork(
+                cleaned_page,
+                box,
+                detector_size,
+                digest,
+                occurrence,
+            )
+            result = propose_level_one(
+                cleaned_pdf,
+                page_number,
+                box,
+                self.render_dpi,
+                cleaned_artwork,
+                (cleaned_padded_box.left, cleaned_padded_box.top),
+                self.artwork_dpi,
+            )
+            result.manifest.update(
+                {
+                    "cascade_level": 1,
+                    "restoration_stage": "deterministic_qr_object",
+                    "qr_removal": {
+                        "method": "pikepdf_image_xobject_removal",
+                        "provenance": {
+                            "original_pdf": str(source),
+                            "cleaned_pdf": str(cleaned_pdf),
+                            "page": page_number,
+                        },
+                        "object": qr_cleaning["removal"].removed_object,
+                        "verification": qr_verification.as_dict(),
+                    },
+                }
+            )
+            if cleaning_verification is not None:
+                result.manifest.update(
+                    {
+                        "cascade_level": 2,
+                        "restoration_stage": "deterministic_text_and_qr",
+                        "watermark": {
+                            "detected": True,
+                            "markers": watermark_evidence,
+                            "source": "pdf_text_layer",
+                        },
+                        "watermark_text_objects": {
+                            "method": "pikepdf_text_object_removal",
+                            "removed_blocks": watermark_removed_blocks,
+                            "provenance": {
+                                "original_pdf": str(source),
+                                "cleaned_pdf": str(watermark_source),
+                                "page": page_number,
+                            },
+                            "verification": cleaning_verification.as_dict(),
+                        },
+                    }
+                )
+            deterministic_candidate = result.image is not None
+            verification_source = cleaned_pdf
+            verification_artwork = cleaned_artwork
+            verification_origin = (
+                cleaned_padded_box.left,
+                cleaned_padded_box.top,
+            )
+        elif qr_cleaning:
+            reason = qr_cleaning["reason"]
+            result = RestorationResult(
+                image=None,
+                manifest={
+                    "cascade_level": 1,
+                    "restoration_stage": "deterministic_qr_object",
+                    "qr_removal": {
+                        "method": "pikepdf_image_xobject_removal",
+                        "verification": (
+                            qr_verification.as_dict()
+                            if qr_verification is not None
+                            else None
+                        ),
+                        "status": "refused",
+                        "reason": reason,
+                    },
+                    "deterministic_restoration": {
+                        "status": "refused",
+                        "reason": reason,
+                    },
+                    "review_status": "pending",
+                    "edit_status": "refused",
+                },
+                review_reason=reason,
+            )
+        elif watermark_evidence and watermark_cleaning is not None:
+            cleaned_pdf, cleaned_page, watermark_removed_blocks = (
+                watermark_cleaning
+            )
             cleaning_verification = verify_cleaned_ad(
                 source,
                 cleaned_pdf,
@@ -791,6 +1070,7 @@ class Pipeline:
                 self.watermark_markers,
                 self.render_dpi,
                 self.artwork_dpi,
+                removed_blocks=watermark_removed_blocks,
             )
             if cleaning_verification.passed:
                 cleaned_artwork, cleaned_padded_box = (
@@ -822,6 +1102,7 @@ class Pipeline:
                         },
                         "watermark_text_objects": {
                             "method": "pikepdf_text_object_removal",
+                            "removed_blocks": watermark_removed_blocks,
                             "provenance": {
                                 "original_pdf": str(source),
                                 "cleaned_pdf": str(cleaned_pdf),
@@ -857,6 +1138,7 @@ class Pipeline:
                         },
                         "watermark_text_objects": {
                             "method": "pikepdf_text_object_removal",
+                            "removed_blocks": watermark_removed_blocks,
                             "provenance": {
                                 "original_pdf": str(source),
                                 "cleaned_pdf": str(cleaned_pdf),
@@ -956,6 +1238,23 @@ class Pipeline:
             result.manifest["verification"] = verification
             if cleaning_verification is not None:
                 deterministic_verification = verification
+            if qr_verification is not None:
+                qr_checks = [
+                    {
+                        "name": f"qr_{name}",
+                        **check,
+                    }
+                    for name, check in qr_verification.as_dict().items()
+                    if isinstance(check, dict)
+                ]
+                verification["checks"].extend(qr_checks)
+                verification["status"] = (
+                    "passed"
+                    if verification["status"] == "passed"
+                    and qr_verification.passed
+                    else "failed"
+                )
+                deterministic_verification = verification
             if verification["status"] != "passed":
                 proposal_image = None
                 review_reason = (
@@ -974,14 +1273,16 @@ class Pipeline:
                 deterministic_watermark_passed = (
                     cleaning_verification is not None
                 )
+                deterministic_qr_passed = qr_verification is not None
                 if deterministic_watermark_passed:
                     result.manifest.update(
                         {
                             "deterministic_restoration": {
                                 "status": "passed",
                                 "reason": (
-                                    "The cleaned PDF and independent restoration "
-                                    "verification both passed."
+                                    "The deterministic PDF cleaning and "
+                                    "independent restoration verification "
+                                    "both passed."
                                 ),
                             },
                             "review_status": "not_required",
@@ -993,21 +1294,50 @@ class Pipeline:
                             "edit_status": "applied",
                         }
                     )
-        if (
-            cleaning_verification is not None
-            and not deterministic_watermark_passed
-        ):
+                if (
+                    deterministic_qr_passed
+                    and not deterministic_watermark_passed
+                ):
+                    result.manifest.update(
+                        {
+                            "deterministic_restoration": {
+                                "status": "passed",
+                                "reason": (
+                                    "The QR image-object removal and independent "
+                                    "verification both passed."
+                                ),
+                            },
+                            "review_status": "not_required",
+                            "review_exemption_reason": (
+                                "Human review is not required because the "
+                                "confirmed QR image-object removal and "
+                                "independent verification both passed."
+                            ),
+                            "edit_status": "applied",
+                        }
+                    )
+                    deterministic_qr_passed = True
+        deterministic_checks_failed = (
+            (
+                cleaning_verification is not None
+                and not deterministic_watermark_passed
+            )
+            or (qr_verification is not None and not deterministic_qr_passed)
+        )
+        if deterministic_checks_failed:
+            if deterministic_candidate:
+                reason = (
+                    "Independent verification of the deterministic "
+                    "restoration failed."
+                )
+            else:
+                reason = (
+                    result.review_reason
+                    or "Level-one restoration produced no image."
+                )
             result.manifest["deterministic_restoration"] = {
                 "status": "refused",
-                "reason": (
-                    "Independent verification of the cleaned PDF restoration "
-                    "failed."
-                    if deterministic_candidate
-                    else (
-                        result.review_reason
-                        or "Level-one restoration produced no image."
-                    )
-                ),
+                "reason": reason,
             }
             result.manifest["review_status"] = "pending"
             result.manifest["edit_status"] = "refused"
@@ -1137,7 +1467,11 @@ class Pipeline:
                 review_reason = "; ".join(
                     reason for reason in [review_reason, *messages] if reason
                 )
-            if not review_reason and not deterministic_watermark_passed:
+            if (
+                not review_reason
+                and not deterministic_watermark_passed
+                and not deterministic_qr_passed
+            ):
                 review_reason = (
                     "Restaurierungsvorschlag wartet auf menschliche Freigabe"
                 )

@@ -2,6 +2,7 @@ import json
 from types import SimpleNamespace
 
 from PIL import Image
+import pikepdf
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
@@ -12,9 +13,11 @@ from app.services.pipeline import Pipeline
 from app.services.restoration import RestorationResult
 from app.services.storage import LocalStorage
 from app.services.watermark_text_objects import (
+    _form_contains_marker,
     clean_pdf,
     verify_cleaned_ad,
 )
+from app.services.text_layer import watermark_markers_in_boxes
 from app.services.vision.recorded import RecordedVisionProvider
 from tests.test_order_forms import _pdf
 
@@ -34,6 +37,106 @@ def test_cleaned_pdf_removes_marker_without_external_pixel_changes(tmp_path):
     assert verification.passed
     assert verification.marker_check["markers_after"] == 0
     assert verification.pixel_check["changed_pixels_outside"] == 0
+
+
+def test_changed_pixels_outside_removed_blocks_fail_closed(tmp_path):
+    source = tmp_path / "source.pdf"
+    cleaned = tmp_path / "cleaned.pdf"
+    damaged = tmp_path / "damaged.pdf"
+    source.write_bytes(_pdf([["© inixmedia"]]))
+    box = Box(0, 0, 1020, 1320)
+    clean_pdf(source, cleaned, {1: [box]}, ["inixmedia"])
+    with pikepdf.Pdf.open(cleaned) as pdf:
+        page = pdf.pages[0]
+        page.Contents = pdf.make_stream(
+            page.Contents.read_bytes()
+            + b" BT /F1 10 Tf 1 0 0 1 500 500 Tm "
+            + b"(UNAUTHORIZED) Tj ET"
+        )
+        pdf.save(damaged)
+
+    verification = verify_cleaned_ad(
+        source,
+        damaged,
+        1,
+        box,
+        ["inixmedia"],
+        120,
+        removed_blocks=[
+            {
+                "text": "© inixmedia",
+                "bounds": [20, 20, 200, 100],
+            }
+        ],
+    )
+
+    assert verification.marker_check["status"] == "passed"
+    assert verification.pixel_check["status"] == "failed"
+    assert verification.pixel_check["changed_pixels_outside"] > 0
+
+
+def test_split_marker_is_detected_and_removed_as_one_text_block(tmp_path):
+    source = tmp_path / "split-source.pdf"
+    cleaned = tmp_path / "split-cleaned.pdf"
+    source.write_bytes(_pdf([["Anzeige"]]))
+    with pikepdf.Pdf.open(source) as pdf:
+        pdf.pages[0].Contents = pdf.make_stream(
+            b"BT /F1 10 Tf 1 0 0 1 20 760 Tm "
+            b"(Anzeige) Tj ET BT /F1 10 Tf 1 0 0 1 20 740 Tm "
+            b"( \\251 inix) Tj ( media) Tj ET"
+        )
+        modified = tmp_path / "split-source-modified.pdf"
+        pdf.save(modified)
+    source = modified
+    box = Box(0, 0, 1020, 1320)
+
+    evidence = watermark_markers_in_boxes(
+        source, 1, [box], 120, ["inixmedia"]
+    )[0]
+    result = clean_pdf(source, cleaned, {1: [box]}, ["inixmedia"], 120)
+    verification = verify_cleaned_ad(
+        source, result.pdf_path, 1, box, ["inixmedia"], 120
+    )
+
+    assert any(item["kind"] == "confirmed" for item in evidence)
+    assert result.removed_blocks
+    assert verification.passed
+
+
+def test_malformed_marker_is_suspect_and_not_removed(tmp_path):
+    source = tmp_path / "malformed-source.pdf"
+    cleaned = tmp_path / "malformed-cleaned.pdf"
+    source.write_bytes(_pdf([["Anzeige"]]))
+    with pikepdf.Pdf.open(source) as pdf:
+        pdf.pages[0].Contents = pdf.make_stream(
+            b"BT /F1 10 Tf 1 0 0 1 20 760 Tm "
+            b"(Anzeige inmedia) Tj ET"
+        )
+        modified = tmp_path / "malformed-source-modified.pdf"
+        pdf.save(modified)
+    source = modified
+    box = Box(0, 0, 1020, 1320)
+
+    evidence = watermark_markers_in_boxes(
+        source, 1, [box], 120, ["inixmedia"]
+    )[0]
+    result = clean_pdf(source, cleaned, {1: [box]}, ["inixmedia"], 120)
+
+    assert any(item["kind"] == "suspected" for item in evidence)
+    assert not result.removed_blocks
+
+
+def test_form_marker_scan_terminates_on_self_reference():
+    pdf = pikepdf.Pdf.new()
+    form = pdf.make_stream(b"/Self Do")
+    form["/Subtype"] = pikepdf.Name("/Form")
+    resources = pikepdf.Dictionary()
+    xobjects = pikepdf.Dictionary()
+    resources["/XObject"] = xobjects
+    form["/Resources"] = resources
+    xobjects["/Self"] = form
+
+    assert not _form_contains_marker(form, resources, ["inixmedia"])
 
 
 def _pipeline(tmp_path, provider=object()):
@@ -112,6 +215,17 @@ def test_passed_cleaning_is_deterministic_without_review(tmp_path, monkeypatch):
         lambda *_args: (tmp_path / "cleaned-artwork.png", Box(0, 0, 40, 40)),
     )
     monkeypatch.setattr(
+        pipeline,
+        "_prepare_qr_removal",
+        lambda source_pdf, *_args, **_kwargs: (
+            None
+            if source_pdf == tmp_path / "cleaned.pdf"
+            else (_ for _ in ()).throw(
+                AssertionError("QR removal must use the watermark-cleaned PDF")
+            )
+        ),
+    )
+    monkeypatch.setattr(
         "app.services.pipeline.verify_cleaned_ad",
         lambda *_args, **_kwargs: verification,
     )
@@ -157,7 +271,7 @@ def test_passed_cleaning_is_deterministic_without_review(tmp_path, monkeypatch):
         "digest",
         None,
         evidence,
-        (tmp_path / "cleaned.pdf", cleaned_page),
+            (tmp_path / "cleaned.pdf", cleaned_page, []),
     )
 
     manifest = json.loads(occurrence.restoration_manifest_json)
@@ -182,6 +296,165 @@ def test_passed_cleaning_is_deterministic_without_review(tmp_path, monkeypatch):
         assert restored.size == cleaned_page.size
         assert list(restored.getdata()) == list(cleaned_page.getdata())
     assert session.scalar(select(ReviewItem).where(ReviewItem.ad_id == occurrence.id)) is None
+    session.close()
+
+
+def test_combined_cleaning_runs_qr_after_watermark_on_same_pdf(
+    tmp_path, monkeypatch
+):
+    factory, session, pipeline, occurrence = _pipeline(tmp_path, None)
+    source = tmp_path / "source.pdf"
+    source.write_bytes(_pdf([["Anzeige © inixmedia"]]))
+    watermark_pdf = tmp_path / "watermark.pdf"
+    watermark_pdf.write_bytes(source.read_bytes())
+    qr_pdf = tmp_path / "qr.pdf"
+    qr_pdf.write_bytes(source.read_bytes())
+    artwork = tmp_path / "artwork.png"
+    Image.new("RGB", (40, 40), "white").save(artwork)
+    cleaned_page = Image.new("RGB", (40, 40), "white")
+    verification = SimpleNamespace(
+        passed=True,
+        as_dict=lambda: {
+            "status": "passed",
+            "marker": {"status": "passed"},
+            "text": {"status": "passed"},
+            "pixels": {"status": "passed"},
+        },
+    )
+    qr_verification = SimpleNamespace(
+        passed=True,
+        as_dict=lambda: {
+            "status": "passed",
+            "decoder": {"status": "passed"},
+            "text": {"status": "passed"},
+            "pixels": {"status": "passed"},
+        },
+    )
+    qr_removal = SimpleNamespace(
+        pdf_path=qr_pdf,
+        removed_object={"name": "/Im1", "object": [83, 0]},
+    )
+    qr_cleaning_sources = []
+
+    monkeypatch.setattr(
+        pipeline,
+        "_prepare_qr_removal",
+        lambda source_pdf, *_args, **_kwargs: (
+            qr_cleaning_sources.append(source_pdf)
+            or {
+                "removal": qr_removal,
+                "verification": qr_verification,
+                "anchors": {
+                    "qr_region": {
+                        "x": 4,
+                        "y": 4,
+                        "width": 20,
+                        "height": 20,
+                    }
+                },
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.pipeline.render_page",
+        lambda *_args, **_kwargs: cleaned_page,
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_write_cleaned_artwork",
+        lambda *_args: (artwork, Box(0, 0, 40, 40)),
+    )
+    monkeypatch.setattr(
+        "app.services.pipeline.verify_cleaned_ad",
+        lambda *_args, **_kwargs: verification,
+    )
+    monkeypatch.setattr(
+        "app.services.pipeline.propose_level_one",
+        lambda *_args, **_kwargs: RestorationResult(
+            cleaned_page.copy(),
+            {
+                "cascade_level": 1,
+                "geometry_quality": {
+                    "status": "assessed",
+                    "text_characters": 1,
+                    "invalid_ratio": 0,
+                    "overlap_ratio": 0,
+                },
+                "verification": {"status": "not_assessed", "checks": []},
+            },
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.pipeline.verify_proposal",
+        lambda *_args, **_kwargs: {
+            "status": "passed",
+            "checks": [
+                {"name": "dimensions", "status": "passed"},
+                {"name": "approved_boundary", "status": "passed"},
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        "app.services.pipeline.extract_content_anchors",
+        lambda *_args, **_kwargs: {
+            "text_lines": [],
+            "phones": [],
+            "emails": [],
+            "domains": [],
+            "qr_removed": True,
+        },
+    )
+    monkeypatch.setattr(
+        "app.services.pipeline.compare_content_anchors",
+        lambda *_args, **_kwargs: {
+            "findings": [],
+            "severity": "passed",
+            "status": "passed",
+            "qr_removed": True,
+            "watermark_removed": True,
+            "watermark_markers_original": ["inixmedia"],
+            "watermark_markers_restored": [],
+        },
+    )
+    monkeypatch.setattr(
+        "app.services.pipeline.compare_visual_motifs",
+        lambda *_args, **_kwargs: {"findings": []},
+    )
+    monkeypatch.setattr(
+        "app.services.pipeline.finding_messages", lambda *_args: []
+    )
+
+    pipeline._maybe_write_restoration(
+        occurrence,
+        source,
+        1,
+        Box(0, 0, 40, 40),
+        (40, 40),
+        artwork,
+        Box(0, 0, 40, 40),
+        "digest",
+        None,
+        [{"marker": "inixmedia", "text": "© inixmedia", "kind": "confirmed"}],
+        (watermark_pdf, cleaned_page, []),
+    )
+
+    manifest = json.loads(occurrence.restoration_manifest_json)
+    assert qr_cleaning_sources == [watermark_pdf]
+    assert manifest["restoration_stage"] == "deterministic_text_and_qr"
+    assert manifest["review_status"] == "not_required"
+    assert {
+        check["name"] for check in manifest["verification"]["checks"]
+    } == {
+        "dimensions",
+        "approved_boundary",
+        "watermark_marker",
+        "watermark_text",
+        "watermark_pixels",
+        "qr_decoder",
+        "qr_text",
+        "qr_pixels",
+    }
     session.close()
 
 
@@ -248,7 +521,11 @@ def test_failed_cleaning_falls_back_to_generative_review(tmp_path, monkeypatch):
         "digest",
         None,
         [{"marker": "inixmedia", "text": "© inixmedia"}],
-        (tmp_path / "cleaned.pdf", Image.new("RGB", (40, 40), "white")),
+            (
+                tmp_path / "cleaned.pdf",
+                Image.new("RGB", (40, 40), "white"),
+                [],
+            ),
     )
 
     manifest = json.loads(occurrence.restoration_manifest_json)
@@ -310,7 +587,11 @@ def test_passed_cleaning_without_level_one_image_falls_back(
         "digest",
         None,
         [{"marker": "inixmedia", "text": "© inixmedia"}],
-        (tmp_path / "cleaned.pdf", Image.new("RGB", (40, 40), "white")),
+        (
+            tmp_path / "cleaned.pdf",
+            Image.new("RGB", (40, 40), "white"),
+            [],
+        ),
     )
 
     manifest = json.loads(occurrence.restoration_manifest_json)

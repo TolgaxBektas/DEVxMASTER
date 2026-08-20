@@ -209,9 +209,28 @@ def test_qr_decoder_ignores_non_qr_payload_region(monkeypatch):
         types.SimpleNamespace(decode=lambda _image: [Item()]),
     )
     values, finding, region = _decode_qr(Image.new("RGB", (32, 32), "white"))
-    assert values == ["https://example.de"]
+    assert values == []
     assert finding is None
     assert region is None
+
+
+def test_qr_without_decoder_confirmation_is_not_presence(monkeypatch):
+    monkeypatch.setattr(
+        anchors_module,
+        "_decode_qr",
+        lambda _image: ([], None, None),
+    )
+    anchors = extract_content_anchors(
+        Image.new("RGB", (32, 32), "white"),
+        text="Anzeigentext",
+    )
+    assert anchors["qr_present"] is False
+    assert anchors["qr_region"] is None
+    comparison = compare_content_anchors(anchors, anchors)
+    assert not any(
+        finding["category"] == "QR-Code-Anwesenheit"
+        for finding in comparison["findings"]
+    )
 
 
 def test_phone_ocr_difference_is_uncertain_not_passed():
