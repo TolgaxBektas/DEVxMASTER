@@ -1,4 +1,6 @@
-import io, math, re
+import io
+import math
+import re
 from collections import Counter
 import fitz
 from PIL import Image
@@ -13,11 +15,15 @@ PHONE_SIGNALS = re.compile(
 )
 EMAIL_SIGNAL = re.compile(r"\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b", re.I)
 WEBSITE_SIGNAL = re.compile(
-    r"(?<![@\w])(?:https?://)?(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:/[^\s<>,;)]*)?",
+    r"(?<![@\w])(?:"
+    r"(?:https?://|www\.)[a-z0-9-]+(?:\.[a-z0-9-]+)+"
+    r"|[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:de|com|net|org|eu|info|at|ch)"
+    r")(?:/[^\s<>,;)]*)?",
     re.I,
 )
 POSTCODE_LOCATION_SIGNAL = re.compile(
-    r"\b\d{5}\s+[A-ZÄÖÜ][\wÄÖÜäöüß.-]*(?:\s+[A-ZÄÖÜ][\wÄÖÜäöüß.-]*){0,3}\b",
+    r"\b(?P<postal_code>\d{5})\s+"
+    r"(?P<city>[A-ZÄÖÜ][\wÄÖÜäöüß.-]*(?:\s+[A-ZÄÖÜ][\wÄÖÜäöüß.-]*){0,3})\b",
 )
 ADVERTISER_SIGNALS = re.compile(r'\b[\wÄÖÜäöüß&.-]+\s+(?:GmbH|AG|KG|e\.V\.)\b', re.I)
 EDITORIAL_SIGNALS = re.compile(
@@ -220,7 +226,7 @@ def _has_phone(text):
     return bool(PHONE_SIGNALS.search(text))
 
 
-def _extract_contacts(text):
+def extract_contacts(text):
     phone_match = PHONE_SIGNALS.search(text)
     phone = phone_match.group(0).strip() if phone_match else None
     if phone:
@@ -228,8 +234,8 @@ def _extract_contacts(text):
     email_match = EMAIL_SIGNAL.search(text)
     website_match = WEBSITE_SIGNAL.search(text)
     location_match = POSTCODE_LOCATION_SIGNAL.search(text)
-    postal_code = location_match.group(0)[:5] if location_match else None
-    city = location_match.group(0)[6:] if location_match else None
+    postal_code = location_match.group("postal_code") if location_match else None
+    city = location_match.group("city") if location_match else None
     return {
         "phone": phone,
         "email": email_match.group(0) if email_match else None,

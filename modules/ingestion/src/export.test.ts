@@ -3,6 +3,7 @@ import { NoopStorage } from "@xmaster-center/integrations";
 import { MemoryIngestionRepository } from "./memory-repository.js";
 import {
   buildOccurrenceExportRows,
+  createOccurrenceExportZip,
   occurrenceExportHeaders,
   attachOccurrenceExportImages,
 } from "./rest.js";
@@ -128,7 +129,7 @@ describe("Fundstellen-Export", () => {
   it("liefert die Spalten und Zeilen nur für den authentifizierten Mandanten", async () => {
     const rows = await buildOccurrenceExportRows(seedRepository(), "1");
     expect(occurrenceExportHeaders).toEqual([
-      "Firma", "Telefon", "E-Mail", "Website", "Ort/PLZ", "Heft",
+      "Firma", "Telefon", "E-Mail", "Website", "PLZ/Ort", "Heft",
       "Ausgabe", "Seite", "Jahr", "Aktualität", "Status", "Zuversicht",
       "Belege", "Anzeigentext", "Bilddatei", "Fundstelle-ID", "Dokument-ID",
     ]);
@@ -168,6 +169,14 @@ describe("Fundstellen-Export", () => {
   it("leert fehlende Bildpfade vor der Tabellenerzeugung", async () => {
     const rows = await buildOccurrenceExportRows(seedRepository(), "1", { status: "detected" });
     await attachOccurrenceExportImages(rows, new NoopStorage());
-    expect(rows[0]?.values[14]).toBe("");
+    const imagePathIndex = occurrenceExportHeaders.indexOf("Bilddatei");
+    expect(rows[0]?.values[imagePathIndex]).toBe("");
+  });
+
+  it("legt keinen leeren Bilder-Ordner als ZIP-Eintrag an", async () => {
+    const rows = await buildOccurrenceExportRows(seedRepository(), "1", { status: "detected" });
+    const archive = await createOccurrenceExportZip(rows, new NoopStorage());
+    expect(archive.includes(Buffer.from("anzeigen.xlsx"))).toBe(true);
+    expect(archive.includes(Buffer.from("bilder/"))).toBe(false);
   });
 });

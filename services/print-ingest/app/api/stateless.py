@@ -5,7 +5,7 @@ from fastapi.responses import Response
 
 from app.core.config import settings
 from app.services.processor import (
-    _extract_contacts,
+    extract_contacts,
     extract_pdf_metadata,
     heuristic_ad_regions,
     render_ad_crop,
@@ -78,7 +78,7 @@ async def process_upload(
                     "evidence": region.get("evidence", []),
                     "company": _company_from_text(ad_text),
                     "preview": ad_text[:1000],
-                    "contacts": _extract_contacts(ad_text),
+                    "contacts": extract_contacts(ad_text),
                 }
             )
         result.append(

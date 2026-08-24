@@ -3,7 +3,7 @@ import Busboy from "busboy";
 import { createHash } from "node:crypto";
 import { PassThrough } from "node:stream";
 import archiver from "archiver";
-import * as XLSX from "xlsx";
+import * as ExcelJS from "exceljs";
 import type { Storage } from "@xmaster-center/integrations";
 import {
   appendAudit,
@@ -182,7 +182,7 @@ export const occurrenceExportHeaders = [
   "Telefon",
   "E-Mail",
   "Website",
-  "Ort/PLZ",
+  "PLZ/Ort",
   "Heft",
   "Ausgabe",
   "Seite",
@@ -273,16 +273,11 @@ export async function createOccurrenceExportZip(
   storage: Storage,
 ) {
   const imageEntries = await attachOccurrenceExportImages(rows, storage);
-  const workbook = XLSX.utils.book_new();
-  const sheet = XLSX.utils.aoa_to_sheet([
-    [...occurrenceExportHeaders],
-    ...rows.map((row) => row.values),
-  ]);
-  XLSX.utils.book_append_sheet(workbook, sheet, "Anzeigen");
-  const workbookBytes = XLSX.write(workbook, {
-    bookType: "xlsx",
-    type: "buffer",
-  }) as Buffer;
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Anzeigen");
+  sheet.addRow([...occurrenceExportHeaders]);
+  for (const row of rows) sheet.addRow(row.values);
+  const workbookBytes = Buffer.from(await workbook.xlsx.writeBuffer());
   const stream = new PassThrough();
   const chunks: Buffer[] = [];
   const result = new Promise<Buffer>((resolve, reject) => {
@@ -294,7 +289,6 @@ export async function createOccurrenceExportZip(
   archive.on("error", rejectArchive);
   archive.pipe(stream);
   archive.append(workbookBytes, { name: "anzeigen.xlsx" });
-  archive.append("", { name: "bilder/" });
   for (const image of imageEntries) {
     archive.append(Buffer.from(image.bytes), { name: image.name });
   }
@@ -310,6 +304,8 @@ export async function attachOccurrenceExportImages(
   rows: OccurrenceExportRow[],
   storage: Storage,
 ) {
+  const imagePathIndex = occurrenceExportHeaders.indexOf("Bilddatei");
+  if (imagePathIndex < 0) throw new Error("Exportspalte Bilddatei fehlt");
   const imageEntries: Array<{ name: string; bytes: Uint8Array }> = [];
   for (const row of rows) {
     if (!row.imageKey) continue;
@@ -317,7 +313,7 @@ export async function attachOccurrenceExportImages(
       ? await storage.get(row.sourceImageKey)
       : null;
     if (!occurrenceImage) {
-      row.values[14] = "";
+      row.values[imagePathIndex] = "";
       continue;
     }
     imageEntries.push({ name: row.imageKey, bytes: occurrenceImage });
