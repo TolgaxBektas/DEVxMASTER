@@ -20,6 +20,8 @@ export const envSchema = z.object({
   PIF_SERVICE_TOKEN: z.string().optional(),
   PIF_REVIEW_TENANT_ID: z.string().min(1).optional(),
   INGESTION_MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(25 * 1024 * 1024),
+  INGESTION_WATCH_FOLDER: z.string().optional(),
+  INGESTION_WATCH_INTERVAL_SECONDS: z.coerce.number().int().positive().default(60),
   OPENAI_API_KEY: z.string().optional(),
   GEMINI_API_KEY: z.string().optional(),
   XAI_API_KEY: z.string().optional(),

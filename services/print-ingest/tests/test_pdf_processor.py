@@ -4,6 +4,7 @@ import fitz
 from PIL import Image
 from app.services.processor import (
     _add_candidate_without_nested_duplicates,
+    _extract_contacts,
     extract_pdf_metadata,
     heuristic_ad_regions,
     render_ad_crop,
@@ -13,6 +14,20 @@ from app.services.processor import (
 def make_pdf():
     d=fitz.open(); p=d.new_page(); p.insert_text((72,72),'Beispiel GmbH Telefon 01234 567890 www.beispiel.de Werbung')
     return d.tobytes()
+
+
+def test_extract_contacts_returns_only_values_in_ad_text():
+    assert _extract_contacts(
+        "Muster GmbH Telefon 01234 567890 info@muster.de "
+        "www.muster.de 12345 Musterstadt"
+    ) == {
+        "phone": "01234 567890",
+        "email": "info@muster.de",
+        "website": "www.muster.de",
+        "postal_code": "12345",
+        "city": "Musterstadt",
+    }
+
 
 def test_render_extract():
     pages=render_and_extract(make_pdf(), dpi=72)

@@ -11,6 +11,14 @@ PHONE_SIGNALS = re.compile(
     r'|(?<!\d)(?:\+49|0)\s*(?:\(?\d{2,5}\)?[\s./-]*)\d(?:[\d\s./-]{3,}\d)(?!\d))',
     re.I,
 )
+EMAIL_SIGNAL = re.compile(r"\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b", re.I)
+WEBSITE_SIGNAL = re.compile(
+    r"(?<![@\w])(?:https?://)?(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:/[^\s<>,;)]*)?",
+    re.I,
+)
+POSTCODE_LOCATION_SIGNAL = re.compile(
+    r"\b\d{5}\s+[A-ZÄÖÜ][\wÄÖÜäöüß.-]*(?:\s+[A-ZÄÖÜ][\wÄÖÜäöüß.-]*){0,3}\b",
+)
 ADVERTISER_SIGNALS = re.compile(r'\b[\wÄÖÜäöüß&.-]+\s+(?:GmbH|AG|KG|e\.V\.)\b', re.I)
 EDITORIAL_SIGNALS = re.compile(
     r'\b(?:impressum|herausgeber|verantwortlich|redaktion|bekanntmachung|anlage|amtliche\s+mitteilung)\b',
@@ -210,6 +218,25 @@ def _advertiser_and_contact(text, blocks):
 
 def _has_phone(text):
     return bool(PHONE_SIGNALS.search(text))
+
+
+def _extract_contacts(text):
+    phone_match = PHONE_SIGNALS.search(text)
+    phone = phone_match.group(0).strip() if phone_match else None
+    if phone:
+        phone = re.sub(r"^(?:tel(?:efon)?|fon|ruf)\b\s*[:.]?\s*", "", phone, flags=re.I)
+    email_match = EMAIL_SIGNAL.search(text)
+    website_match = WEBSITE_SIGNAL.search(text)
+    location_match = POSTCODE_LOCATION_SIGNAL.search(text)
+    postal_code = location_match.group(0)[:5] if location_match else None
+    city = location_match.group(0)[6:] if location_match else None
+    return {
+        "phone": phone,
+        "email": email_match.group(0) if email_match else None,
+        "website": website_match.group(0).rstrip(".,;:") if website_match else None,
+        "postal_code": postal_code,
+        "city": city,
+    }
 
 
 def _ocr_region_text(page_image, box, width, height):

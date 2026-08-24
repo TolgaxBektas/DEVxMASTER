@@ -1,6 +1,9 @@
 import type { Express, Request, Response } from "express";
 import Busboy from "busboy";
 import { createHash } from "node:crypto";
+import { PassThrough } from "node:stream";
+import archiver from "archiver";
+import * as XLSX from "xlsx";
 import type { Storage } from "@xmaster-center/integrations";
 import {
   appendAudit,
@@ -10,7 +13,7 @@ import {
   type AuditRepository,
   type EventExecutor,
 } from "@xmaster-center/kernel";
-import type { IngestionRepository } from "./repository.js";
+import type { IngestionDocument, IngestionRepository } from "./repository.js";
 import type { PifReviewClient } from "./review-client.js";
 
 type AuthenticatedRequest = Request & {
@@ -155,6 +158,210 @@ export function registerUploadRoute(app: Express, deps: UploadDependencies) {
     repository: deps.repository,
     storage: deps.storage,
   });
+  registerOccurrenceExportRoute(app, {
+    repository: deps.repository,
+    storage: deps.storage,
+  });
+}
+
+export function registerOccurrenceExportRoute(
+  app: Express,
+  deps: OccurrenceImageDependencies,
+) {
+  app.get("/api/ingestion/occurrences/export", (request, response) => {
+    void handleOccurrenceExport(
+      request as AuthenticatedRequest,
+      response,
+      deps,
+    );
+  });
+}
+
+export const occurrenceExportHeaders = [
+  "Firma",
+  "Telefon",
+  "E-Mail",
+  "Website",
+  "Ort/PLZ",
+  "Heft",
+  "Ausgabe",
+  "Seite",
+  "Jahr",
+  "Aktualität",
+  "Status",
+  "Zuversicht",
+  "Belege",
+  "Anzeigentext",
+  "Bilddatei",
+  "Fundstelle-ID",
+  "Dokument-ID",
+] as const;
+
+export type OccurrenceExportRow = {
+  values: Array<string | number>;
+  imageKey: string | null;
+  sourceImageKey: string | null;
+};
+
+function exportCompanyName(company: string) {
+  const cleaned = company.normalize("NFKC").trim()
+    .replace(/[^\p{L}\p{N}._-]+/gu, "_")
+    .replace(/^_+|_+$/g, "");
+  return cleaned.slice(0, 160) || "unbekannte-firma";
+}
+
+function exportYear(document: IngestionDocument) {
+  const classification = document.classification;
+  if (!classification?.periodStartYear && !classification?.periodEndYear) return "unbelegt";
+  if (classification.periodStartYear && classification.periodEndYear
+    && classification.periodStartYear !== classification.periodEndYear) {
+    return `${classification.periodStartYear}-${classification.periodEndYear}`;
+  }
+  return String(classification.periodStartYear ?? classification.periodEndYear);
+}
+
+export async function buildOccurrenceExportRows(
+  repository: IngestionRepository,
+  tenantId: string,
+  filters: { documentId?: number; status?: string } = {},
+): Promise<OccurrenceExportRow[]> {
+  const [occurrences, documents] = await Promise.all([
+    repository.listOccurrences(tenantId),
+    repository.listDocuments(tenantId),
+  ]);
+  const documentById = new Map(documents.map((document) => [document.id, document]));
+  return occurrences
+    .filter((occurrence) => filters.documentId === undefined || occurrence.documentId === filters.documentId)
+    .filter((occurrence) => !filters.status || occurrence.status === filters.status)
+    .flatMap((occurrence) => {
+      const document = documentById.get(occurrence.documentId);
+      if (!document) return [];
+      const classification = document.classification;
+      const imageKey = occurrence.imageKey
+        ? `bilder/${occurrence.id}-${exportCompanyName(occurrence.company)}.png`
+        : null;
+      return [{
+        imageKey,
+        sourceImageKey: occurrence.imageKey ?? null,
+        values: [
+          occurrence.company,
+          occurrence.contacts?.phone ?? "",
+          occurrence.contacts?.email ?? "",
+          occurrence.contacts?.website ?? "",
+          [occurrence.contacts?.postalCode, occurrence.contacts?.city]
+            .filter((value): value is string => Boolean(value))
+            .join(" "),
+          classification?.publicationName ?? "",
+          classification?.editionLabel ?? "",
+          occurrence.pageNumber ?? "",
+          exportYear(document),
+          document.actualityStatus,
+          occurrence.status,
+          occurrence.confidence ?? "",
+          (occurrence.evidence ?? []).join(", "),
+          occurrence.preview,
+          imageKey ?? "",
+          occurrence.id,
+          occurrence.documentId,
+        ],
+      }];
+    });
+}
+
+export async function createOccurrenceExportZip(
+  rows: OccurrenceExportRow[],
+  storage: Storage,
+) {
+  const imageEntries = await attachOccurrenceExportImages(rows, storage);
+  const workbook = XLSX.utils.book_new();
+  const sheet = XLSX.utils.aoa_to_sheet([
+    [...occurrenceExportHeaders],
+    ...rows.map((row) => row.values),
+  ]);
+  XLSX.utils.book_append_sheet(workbook, sheet, "Anzeigen");
+  const workbookBytes = XLSX.write(workbook, {
+    bookType: "xlsx",
+    type: "buffer",
+  }) as Buffer;
+  const stream = new PassThrough();
+  const chunks: Buffer[] = [];
+  const result = new Promise<Buffer>((resolve, reject) => {
+    stream.on("data", (chunk: Buffer) => chunks.push(chunk));
+    stream.on("end", () => resolve(Buffer.concat(chunks)));
+    stream.on("error", reject);
+  });
+  const archive = archiver("zip", { zlib: { level: 9 } });
+  archive.on("error", rejectArchive);
+  archive.pipe(stream);
+  archive.append(workbookBytes, { name: "anzeigen.xlsx" });
+  archive.append("", { name: "bilder/" });
+  for (const image of imageEntries) {
+    archive.append(Buffer.from(image.bytes), { name: image.name });
+  }
+  await archive.finalize();
+  return result;
+
+  function rejectArchive(error: Error) {
+    stream.destroy(error);
+  }
+}
+
+export async function attachOccurrenceExportImages(
+  rows: OccurrenceExportRow[],
+  storage: Storage,
+) {
+  const imageEntries: Array<{ name: string; bytes: Uint8Array }> = [];
+  for (const row of rows) {
+    if (!row.imageKey) continue;
+    const occurrenceImage = row.sourceImageKey
+      ? await storage.get(row.sourceImageKey)
+      : null;
+    if (!occurrenceImage) {
+      row.values[14] = "";
+      continue;
+    }
+    imageEntries.push({ name: row.imageKey, bytes: occurrenceImage });
+  }
+  return imageEntries;
+}
+
+async function handleOccurrenceExport(
+  request: AuthenticatedRequest,
+  response: Response,
+  deps: OccurrenceImageDependencies,
+) {
+  const auth = request.auth;
+  if (!auth) {
+    response.status(401).json({ code: "UNAUTHORIZED", message: "Anmeldung erforderlich" });
+    return;
+  }
+  if (!auth.permissions.has("ingestion.occurrence.read")) {
+    response.status(403).json({ code: "FORBIDDEN", message: "Berechtigung zum Lesen der Fundstellen erforderlich" });
+    return;
+  }
+  const rawDocumentId = request.query.documentId ?? request.query.document;
+  const rawStatus = request.query.status;
+  const documentId = rawDocumentId === undefined
+    ? undefined
+    : Number(rawDocumentId);
+  if (documentId !== undefined && (!Number.isInteger(documentId) || documentId <= 0)) {
+    response.status(400).json({ code: "BAD_REQUEST", message: "Ungültige Dokumentkennung" });
+    return;
+  }
+  const status = typeof rawStatus === "string" ? rawStatus : undefined;
+  try {
+    const rows = await buildOccurrenceExportRows(deps.repository, auth.tenantId, {
+      ...(documentId === undefined ? {} : { documentId }),
+      ...(status === undefined ? {} : { status }),
+    });
+    const archive = await createOccurrenceExportZip(rows, deps.storage);
+    response.setHeader("Content-Type", "application/zip");
+    response.setHeader("Content-Disposition", 'attachment; filename="anzeigen.zip"');
+    response.send(archive);
+  } catch (error) {
+    console.error("[ingestion] occurrence export failed", error);
+    response.status(500).json({ code: "INTERNAL_ERROR", message: "Export konnte nicht erstellt werden" });
+  }
 }
 
 export function registerOccurrenceImageRoute(

@@ -1,0 +1,1 @@
+ALTER TABLE `ingestion_occurrences` ADD `contacts` json;

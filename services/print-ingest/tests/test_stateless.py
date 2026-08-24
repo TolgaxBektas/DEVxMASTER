@@ -42,7 +42,7 @@ def test_process_returns_pages_without_document_rows(monkeypatch):
             "height": 0.8,
             "confidence": 0.8,
             "evidence": ["phone"],
-            "preview": "Muster GmbH Telefon 01234 567890 www.muster.de",
+            "preview": "Muster GmbH Telefon 01234 567890 info@muster.de www.muster.de 12345 Musterstadt",
         }],
     )
     monkeypatch.setattr(stateless, "render_ad_crop", lambda *_args: b"crop-png")
@@ -67,6 +67,13 @@ def test_process_returns_pages_without_document_rows(monkeypatch):
     )
     assert response.status_code == 200
     assert response.json()["pages"][0]["occurrences"][0]["company"] == "Muster GmbH"
+    assert response.json()["pages"][0]["occurrences"][0]["contacts"] == {
+        "phone": "01234 567890",
+        "email": "info@muster.de",
+        "website": "www.muster.de",
+        "postal_code": "12345",
+        "city": "Musterstadt",
+    }
     assert "tenants/1/processed/hash/page-0001.png" in storage.objects
 
 
@@ -134,7 +141,67 @@ def test_process_keeps_distinct_ad_keys_and_region_text(monkeypatch):
         {"x": 0.6, "y": 0.0, "width": 0.4, "height": 1.0, "confidence": 0.9},
     ]
     assert [item["evidence"] for item in occurrences] == [["geometry"], ["geometry"]]
+    assert [item["contacts"] for item in occurrences] == [
+        {
+            "phone": "01234 567890",
+            "email": None,
+            "website": None,
+            "postal_code": None,
+            "city": None,
+        },
+        {
+            "phone": None,
+            "email": None,
+            "website": "www.beta.example",
+            "postal_code": None,
+            "city": None,
+        },
+    ]
     assert all(set(item["bbox"]) == {"x", "y", "width", "height", "confidence"} for item in occurrences)
+
+
+def test_process_does_not_use_page_text_for_contact_fields(monkeypatch):
+    storage = FakeStorage()
+    monkeypatch.setattr(stateless, "storage", storage)
+    monkeypatch.setattr(
+        stateless,
+        "heuristic_ad_regions",
+        lambda *_args: [{
+            "x": 0.0,
+            "y": 0.0,
+            "width": 0.5,
+            "height": 1.0,
+            "confidence": 0.8,
+            "evidence": ["geometry"],
+            "preview": "Muster GmbH",
+        }],
+    )
+    monkeypatch.setattr(stateless, "render_ad_crop", lambda *_args: b"crop-png")
+    monkeypatch.setattr(
+        stateless,
+        "render_and_extract",
+        lambda _data: [{
+            "page_number": 1,
+            "text": "Redaktion Telefon 030 123456 außerhalb der Anzeige",
+            "image_bytes": b"png",
+            "classification": "MIXED_CONTENT",
+            "ad_probability": 0.48,
+        }],
+    )
+    response = TestClient(app).post(
+        "/api/v1/process",
+        headers={"x-service-token": settings.service_token},
+        files={"file": ("document.pdf", b"%PDF-1.7", "application/pdf")},
+        data={"output_prefix": "tenants/1/processed/hash"},
+    )
+    assert response.status_code == 200
+    assert response.json()["pages"][0]["occurrences"][0]["contacts"] == {
+        "phone": None,
+        "email": None,
+        "website": None,
+        "postal_code": None,
+        "city": None,
+    }
 
 
 def test_process_rejects_non_pdf(monkeypatch):
