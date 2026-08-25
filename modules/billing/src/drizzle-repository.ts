@@ -9,8 +9,15 @@ import {
   invoices,
   issuers,
   payments,
+  quoteItems,
+  quotes,
 } from "./schema.js";
-import type { BillingRepository, CreateInvoiceInput } from "./repository.js";
+import { quoteNumber } from "./formulas.js";
+import type {
+  BillingRepository,
+  CreateInvoiceInput,
+  CreateQuoteInput,
+} from "./repository.js";
 
 type BillingDb = MySql2Database<typeof billingSchema>;
 
@@ -37,6 +44,114 @@ export function createDrizzleBillingRepository(db: unknown): BillingRepository {
         .where(eq(issuers.id, Number(result[0]?.insertId)))
         .limit(1);
       return row[0] as never;
+    },
+    async listQuotes(tenantId) {
+      return database
+        .select()
+        .from(quotes)
+        .where(eq(quotes.tenantId, Number(tenantId)))
+        .orderBy(desc(quotes.createdAt)) as never;
+    },
+    async getQuote(tenantId, id) {
+      const rows = await database
+        .select()
+        .from(quotes)
+        .where(and(eq(quotes.id, id), eq(quotes.tenantId, Number(tenantId))))
+        .limit(1);
+      return (rows[0] ?? null) as never;
+    },
+    async getQuoteForUpdate(tenantId, id) {
+      const rows = await database
+        .select()
+        .from(quotes)
+        .where(and(eq(quotes.id, id), eq(quotes.tenantId, Number(tenantId))))
+        .limit(1)
+        .for("update");
+      return (rows[0] ?? null) as never;
+    },
+    async getQuoteItems(_tenantId, id) {
+      return database
+        .select()
+        .from(quoteItems)
+        .where(eq(quoteItems.quoteId, id))
+        .orderBy(quoteItems.position) as never;
+    },
+    async createQuote(tenantId, input: CreateQuoteInput) {
+      const issuer = (
+        await database
+          .select()
+          .from(issuers)
+          .where(and(
+            eq(issuers.id, input.issuerId),
+            eq(issuers.tenantId, Number(tenantId)),
+          ))
+          .limit(1)
+          .for("update")
+      )[0];
+      if (!issuer) throw new Error("Aussteller nicht gefunden");
+      const year = new Date().getFullYear();
+      const sequence = issuer.quoteNumberYear === year
+        ? issuer.nextQuoteNumber
+        : 1;
+      await database
+        .update(issuers)
+        .set({ nextQuoteNumber: sequence + 1, quoteNumberYear: year })
+        .where(eq(issuers.id, issuer.id));
+      const result = await database.insert(quotes).values({
+        tenantId: Number(tenantId),
+        issuerId: issuer.id,
+        customerId: input.customerId,
+        occurrenceId: input.occurrenceId,
+        adImageKey: input.adImageKey,
+        quoteNumber: quoteNumber(
+          issuer.quotePrefix ?? `AG-${issuer.invoicePrefix}`,
+          year,
+          sequence,
+        ),
+        status: "draft",
+        currency: input.currency,
+        vatTreatment: input.vatTreatment,
+        subtotal: input.subtotal,
+        vatRate: input.vatRate,
+        vatAmount: input.vatAmount,
+        total: input.total,
+        validUntil: input.validUntil,
+        recipientName: input.recipientName,
+        recipientAddress: input.recipientAddress,
+        recipientEmail: input.recipientEmail,
+        notes: input.notes,
+        metadata: input.metadata,
+      });
+      const id = Number(result[0]?.insertId);
+      await database.insert(quoteItems).values(input.items.map((item, index) => ({
+        quoteId: id,
+        position: index + 1,
+        description: item.description,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        amount: item.amount,
+        commissionRate: item.commissionRate,
+        customerId: item.customerId,
+      })));
+      return (await this.getQuote(tenantId, id)) as never;
+    },
+    async setQuoteStatus(tenantId, id, status) {
+      const quote = await this.getQuote(tenantId, id);
+      if (!quote) throw new Error("Angebot nicht gefunden");
+      await database.update(quotes).set({ status }).where(eq(quotes.id, id));
+      return (await this.getQuote(tenantId, id)) as never;
+    },
+    async setQuoteInvoiceId(tenantId, id, invoiceId) {
+      const quote = await this.getQuote(tenantId, id);
+      if (!quote) throw new Error("Angebot nicht gefunden");
+      if (quote.invoiceId == null) {
+        await database.update(quotes).set({ invoiceId }).where(and(
+          eq(quotes.id, id),
+          eq(quotes.tenantId, Number(tenantId)),
+          sql`${quotes.invoiceId} IS NULL`,
+        ));
+      }
+      return (await this.getQuote(tenantId, id)) as never;
     },
     async listInvoices(tenantId) {
       return database

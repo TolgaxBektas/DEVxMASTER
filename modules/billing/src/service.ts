@@ -10,7 +10,26 @@ import type {
   BillingRepository,
   CreateInvoiceInput,
   CreateIssuerInput,
+  CreateQuoteInput,
 } from "./repository.js";
+import type { Invoice, Quote } from "./types.js";
+
+const quoteLocks = new WeakMap<object, Map<number, Promise<unknown>>>();
+
+function withQuoteLock<T>(
+  repository: BillingRepository,
+  id: number,
+  action: () => Promise<T>,
+): Promise<T> {
+  const locks = quoteLocks.get(repository) ?? new Map<number, Promise<unknown>>();
+  quoteLocks.set(repository, locks);
+  const previous = locks.get(id) ?? Promise.resolve();
+  const current = previous.then(action, action);
+  locks.set(id, current);
+  return current.finally(() => {
+    if (locks.get(id) === current) locks.delete(id);
+  }) as Promise<T>;
+}
 
 export type BillingServiceDeps = {
   repository: BillingRepository;
@@ -31,16 +50,116 @@ export type BillingServiceDeps = {
     executor?: EventExecutor,
   ): Promise<unknown>;
   pdf: Pdf;
+  resolveAdSource?: (
+    tenantId: string,
+    occurrenceId: number,
+  ) => Promise<{ imageKey: string | null; company: string } | null>;
 };
+
+async function createInvoiceInTransaction(
+  deps: BillingServiceDeps,
+  db: unknown,
+  tenantId: string,
+  input: CreateInvoiceInput,
+  actor: Actor,
+): Promise<Invoice> {
+  const repository = deps.repositoryFor(db);
+  const issuer = (await repository.listIssuers(tenantId)).find(
+    (item) => item.id === input.issuerId,
+  );
+  if (!issuer) throw new Error("Aussteller nicht gefunden");
+  const items = input.items.map((item) => ({
+    ...item,
+    amount: positionAmount(item.quantity, item.unitPrice),
+  }));
+  const subtotal = items.reduce(
+    (sum, item) => addMoney(sum, item.amount),
+    "0.00",
+  );
+  const invoiceTotals = totals(subtotal, issuer.vatTreatment);
+  const invoice = await repository.createInvoice(tenantId, {
+    ...input,
+    items,
+    subtotal,
+    currency: issuer.currency,
+    vatTreatment: issuer.vatTreatment,
+    vatRate: invoiceTotals.rate,
+    vatAmount: invoiceTotals.amount,
+    total: invoiceTotals.total,
+  });
+  const entry = await appendAudit(deps.auditFor(db), {
+    tenantId,
+    action: "invoice.created",
+    entityType: "invoice",
+    entityId: invoice.id,
+    actorId: actor.actorId,
+    actorName: actor.actorName,
+    detailsJson: JSON.stringify({ invoiceNumber: invoice.invoiceNumber }),
+  });
+  await deps.publish({
+    name: "invoice.created",
+    tenantId,
+    aggregateType: "invoice",
+    aggregateId: String(invoice.id),
+    payload: { invoiceId: invoice.id },
+    idempotencyKey: `invoice.created:${entry.hash}`,
+  }, deps.eventExecutorFor(db));
+  return invoice;
+}
+
+async function transitionQuote(
+  deps: BillingServiceDeps,
+  tenantId: string,
+  id: number,
+  from: Quote["status"],
+  to: Quote["status"],
+  actor: Actor,
+) {
+  return deps.transaction(async (db) => {
+    const repository = deps.repositoryFor(db);
+    const quote = await repository.getQuote(tenantId, id);
+    if (!quote) throw new Error("Angebot nicht gefunden");
+    if (quote.status !== from) {
+      throw new Error(
+        from === "draft"
+          ? "Nur Entwürfe können versendet werden"
+          : "Nur versendete Angebote können abgelehnt werden",
+      );
+    }
+    const updated = await repository.setQuoteStatus(tenantId, id, to);
+    const action = to === "sent" ? "quote.sent" : "quote.declined";
+    const entry = await appendAudit(deps.auditFor(db), {
+      tenantId,
+      action,
+      entityType: "quote",
+      entityId: id,
+      actorId: actor.actorId,
+      actorName: actor.actorName,
+      detailsJson: JSON.stringify({ quoteNumber: updated.quoteNumber }),
+    });
+    await deps.publish({
+      name: action,
+      tenantId,
+      aggregateType: "quote",
+      aggregateId: String(id),
+      payload: { quoteId: id },
+      idempotencyKey: `${action}:${entry.hash}`,
+    }, deps.eventExecutorFor(db));
+    return updated;
+  });
+}
 
 export function createBillingService(deps: BillingServiceDeps) {
   return {
     listIssuers: (tenantId: string) => deps.repository.listIssuers(tenantId),
     listInvoices: (tenantId: string) => deps.repository.listInvoices(tenantId),
+    listQuotes: (tenantId: string) => deps.repository.listQuotes(tenantId),
     listDunningEntries: (tenantId: string) =>
       deps.repository.listDunningEntries(tenantId),
     getInvoice: (tenantId: string, id: number) =>
       deps.repository.getInvoice(tenantId, id),
+    getQuote: (tenantId: string, id: number) =>
+      deps.repository.getQuote(tenantId, id),
     async createIssuer(
       tenantId: string,
       input: CreateIssuerInput,
@@ -68,12 +187,45 @@ export function createBillingService(deps: BillingServiceDeps) {
       actor: Actor,
     ) {
       return deps.transaction(async (db) => {
+        return createInvoiceInTransaction(deps, db, tenantId, input, actor);
+      });
+    },
+    async createQuote(
+      tenantId: string,
+      input: {
+        issuerId: number;
+        customerId?: number | undefined;
+        occurrenceId?: number | undefined;
+        recipientName: string;
+        recipientAddress?: string | undefined;
+        recipientEmail?: string | undefined;
+        validUntil?: Date | undefined;
+        notes?: string | undefined;
+        metadata?: Record<string, unknown> | undefined;
+        items: Array<{
+          description: string;
+          quantity: string;
+          unitPrice: string;
+          commissionRate?: string | undefined;
+          customerId?: number | undefined;
+        }>;
+      },
+      actor: Actor,
+    ) {
+      return deps.transaction(async (db) => {
         const repository = deps.repositoryFor(db);
-        const audit = deps.auditFor(db);
         const issuer = (await repository.listIssuers(tenantId)).find(
           (item) => item.id === input.issuerId,
         );
         if (!issuer) throw new Error("Aussteller nicht gefunden");
+        let adImageKey: string | null = null;
+        let recipientName = input.recipientName;
+        if (input.occurrenceId !== undefined) {
+          const source = await deps.resolveAdSource?.(tenantId, input.occurrenceId);
+          if (!source) throw new Error("Fundstelle nicht gefunden");
+          adImageKey = source.imageKey;
+          recipientName = source.company;
+        }
         const items = input.items.map((item) => ({
           ...item,
           amount: positionAmount(item.quantity, item.unitPrice),
@@ -82,39 +234,120 @@ export function createBillingService(deps: BillingServiceDeps) {
           (sum, item) => addMoney(sum, item.amount),
           "0.00",
         );
-        const invoiceTotals = totals(subtotal, issuer.vatTreatment);
-        const adjustedInput = {
+        const quoteTotals = totals(subtotal, issuer.vatTreatment);
+        const quote = await repository.createQuote(tenantId, {
           ...input,
+          recipientName,
+          adImageKey,
           items,
-          subtotal,
           currency: issuer.currency,
           vatTreatment: issuer.vatTreatment,
-          vatRate: invoiceTotals.rate,
-          vatAmount: invoiceTotals.amount,
-          total: invoiceTotals.total,
-        };
-        const invoice = await repository.createInvoice(tenantId, adjustedInput);
-        const entry = await appendAudit(audit, {
+          subtotal,
+          vatRate: quoteTotals.rate,
+          vatAmount: quoteTotals.amount,
+          total: quoteTotals.total,
+        });
+        const entry = await appendAudit(deps.auditFor(db), {
           tenantId,
-          action: "invoice.created",
-          entityType: "invoice",
-          entityId: invoice.id,
+          action: "quote.created",
+          entityType: "quote",
+          entityId: quote.id,
           actorId: actor.actorId,
           actorName: actor.actorName,
-          detailsJson: JSON.stringify({ invoiceNumber: invoice.invoiceNumber }),
+          detailsJson: JSON.stringify({ quoteNumber: quote.quoteNumber }),
         });
-        await deps.publish(
-          {
-            name: "invoice.created",
-            tenantId,
-            aggregateType: "invoice",
-            aggregateId: String(invoice.id),
-            payload: { invoiceId: invoice.id },
-            idempotencyKey: `invoice.created:${entry.hash}`,
-          },
-          deps.eventExecutorFor(db),
+        await deps.publish({
+          name: "quote.created",
+          tenantId,
+          aggregateType: "quote",
+          aggregateId: String(quote.id),
+          payload: { quoteId: quote.id },
+          idempotencyKey: `quote.created:${entry.hash}`,
+        }, deps.eventExecutorFor(db));
+        return quote;
+      });
+    },
+    async sendQuote(tenantId: string, id: number, actor: Actor) {
+      return transitionQuote(deps, tenantId, id, "draft", "sent", actor);
+    },
+    async declineQuote(tenantId: string, id: number, actor: Actor) {
+      return transitionQuote(deps, tenantId, id, "sent", "declined", actor);
+    },
+    async acceptQuote(tenantId: string, id: number, actor: Actor) {
+      return withQuoteLock(deps.repository, id, () => deps.transaction(async (db) => {
+        const repository = deps.repositoryFor(db);
+        const audit = deps.auditFor(db);
+        const quote = await repository.getQuoteForUpdate(tenantId, id);
+        if (!quote) throw new Error("Angebot nicht gefunden");
+        if (quote.invoiceId != null) {
+          const invoice = await repository.getInvoice(tenantId, quote.invoiceId);
+          if (!invoice) throw new Error("Zugehörige Rechnung nicht gefunden");
+          return invoice;
+        }
+        if (quote.status !== "sent") {
+          throw new Error("Nur versendete Angebote können angenommen werden");
+        }
+        const issuer = (await repository.listIssuers(tenantId)).find(
+          (item) => item.id === quote.issuerId,
         );
+        if (!issuer) throw new Error("Aussteller nicht gefunden");
+        const items = await repository.getQuoteItems(tenantId, id);
+        const invoice = await createInvoiceInTransaction(deps, db, tenantId, {
+          issuerId: quote.issuerId,
+          customerId: quote.customerId ?? undefined,
+          recipientName: quote.recipientName,
+          recipientAddress: quote.recipientAddress ?? undefined,
+          recipientEmail: quote.recipientEmail ?? undefined,
+          currency: issuer.currency,
+          vatTreatment: issuer.vatTreatment,
+          subtotal: quote.subtotal,
+          vatRate: quote.vatRate,
+          vatAmount: quote.vatAmount,
+          total: quote.total,
+          dueDate: dueDate(new Date(), issuer.paymentTermDays),
+          items: items.map((item) => ({
+            description: item.description,
+            quantity: item.quantity,
+            unitPrice: item.unitPrice,
+            amount: item.amount,
+            commissionRate: item.commissionRate ?? undefined,
+            customerId: item.customerId ?? undefined,
+          })),
+        }, actor);
+        await repository.setQuoteInvoiceId(tenantId, id, invoice.id);
+        const accepted = await repository.setQuoteStatus(tenantId, id, "accepted");
+        const entry = await appendAudit(audit, {
+          tenantId,
+          action: "quote.accepted",
+          entityType: "quote",
+          entityId: id,
+          actorId: actor.actorId,
+          actorName: actor.actorName,
+          detailsJson: JSON.stringify({ invoiceId: invoice.id, quoteNumber: accepted.quoteNumber }),
+        });
+        await deps.publish({
+          name: "quote.accepted",
+          tenantId,
+          aggregateType: "quote",
+          aggregateId: String(id),
+          payload: { quoteId: id, invoiceId: invoice.id },
+          idempotencyKey: `quote.accepted:${entry.hash}`,
+        }, deps.eventExecutorFor(db));
         return invoice;
+      }));
+    },
+    async quotePdf(tenantId: string, id: number) {
+      const quote = await deps.repository.getQuote(tenantId, id);
+      if (!quote) throw new Error("Angebot nicht gefunden");
+      const issuer = (await deps.repository.listIssuers(tenantId)).find(
+        (item) => item.id === quote.issuerId,
+      );
+      if (!issuer) throw new Error("Aussteller nicht gefunden");
+      const items = await deps.repository.getQuoteItems(tenantId, id);
+      return deps.pdf.quote({
+        issuer,
+        quote,
+        items,
       });
     },
     async issueInvoice(tenantId: string, id: number, actor: Actor) {

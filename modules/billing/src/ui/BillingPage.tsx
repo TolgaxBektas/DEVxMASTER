@@ -31,6 +31,14 @@ type Dunning = {
   totalDue: string;
   subject: string;
 };
+type Quote = {
+  id: number;
+  quoteNumber: string;
+  recipientName: string;
+  total: string;
+  currency: string;
+  status: string;
+};
 
 export function BillingPage({ api }: ModulePageProps) {
   const path = window.location.pathname;
@@ -43,6 +51,10 @@ export function BillingPage({ api }: ModulePageProps) {
     api,
     "modules.billing.dunning.list",
   );
+  const quotes = useModuleQuery<Quote[]>(
+    api,
+    "modules.billing.quotes.list",
+  );
   const [issuerName, setIssuerName] = useState("");
   const [prefix, setPrefix] = useState("");
   const [recipient, setRecipient] = useState("");
@@ -50,10 +62,11 @@ export function BillingPage({ api }: ModulePageProps) {
   const [amount, setAmount] = useState("100.00");
   const [selectedIssuer, setSelectedIssuer] = useState("");
   const [selectedInvoice, setSelectedInvoice] = useState("");
+  const [selectedQuote, setSelectedQuote] = useState("");
   const [message, setMessage] = useState("");
-  if ([issuers, invoices, dunning].some((query) => query.isLoading))
+  if ([issuers, invoices, dunning, quotes].some((query) => query.isLoading))
     return <Skeleton />;
-  if ([issuers, invoices, dunning].some((query) => query.error)) {
+  if ([issuers, invoices, dunning, quotes].some((query) => query.error)) {
     return <EmptyState title="Faktura-Daten konnten nicht geladen werden" />;
   }
   const runMutation = async (
@@ -144,6 +157,32 @@ export function BillingPage({ api }: ModulePageProps) {
       "Mahnlauf konnte nicht ausgeführt werden",
       ["modules.billing.invoices.list", "modules.billing.dunning.list"],
     );
+  };
+  const quoteAction = async (
+    operation: "send" | "accept" | "decline",
+    success: string,
+  ) => {
+    await runMutation(
+      () => api.mutate(`modules.billing.quotes.${operation}`, { id: Number(selectedQuote) }),
+      success,
+      "Angebot konnte nicht geändert werden",
+      ["modules.billing.quotes.list"],
+    );
+  };
+  const downloadQuotePdf = async () => {
+    await runMutation(async () => {
+      const result = await api.query<{ filename: string; base64: string }>(
+        "modules.billing.quotes.pdf",
+        { id: Number(selectedQuote) },
+      );
+      const bytes = Uint8Array.from(atob(result.base64), (char) => char.charCodeAt(0));
+      const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = result.filename;
+      link.click();
+      URL.revokeObjectURL(url);
+    }, "PDF heruntergeladen", "PDF konnte nicht erstellt werden", []);
   };
   return (
     <div className="stack">
@@ -279,6 +318,47 @@ export function BillingPage({ api }: ModulePageProps) {
           />
         </Card>
       )}
+      {(path === "/billing" || path === "/billing/quotes") && (
+        <Card>
+          <h2>Angebote</h2>
+          <DataTable
+            rows={quotes.data ?? []}
+            columns={[
+              { key: "quoteNumber", label: "Nummer" },
+              { key: "recipientName", label: "Empfänger" },
+              { key: "total", label: "Summe" },
+              { key: "currency", label: "Währung" },
+              { key: "status", label: "Status" },
+            ]}
+          />
+          <select
+            className="ui-input"
+            value={selectedQuote}
+            onChange={(event) => setSelectedQuote(event.target.value)}
+          >
+            <option value="">Angebot wählen</option>
+            {quotes.data?.map((quote) => (
+              <option key={quote.id} value={quote.id}>
+                {quote.quoteNumber} · {quote.status}
+              </option>
+            ))}
+          </select>
+          <div className="row-actions">
+            <Button onClick={() => quoteAction("send", "Angebot versendet")}>
+              Versenden
+            </Button>
+            <Button onClick={() => quoteAction("accept", "Angebot angenommen")}>
+              Annehmen
+            </Button>
+            <Button onClick={() => quoteAction("decline", "Angebot abgelehnt")}>
+              Ablehnen
+            </Button>
+            <Button variant="secondary" onClick={downloadQuotePdf}>
+              PDF herunterladen
+            </Button>
+          </div>
+        </Card>
+      )}
     </div>
   );
 }
@@ -287,5 +367,6 @@ function title(path: string) {
   if (path.endsWith("/issuers")) return "Aussteller";
   if (path.endsWith("/invoices")) return "Rechnungen";
   if (path.endsWith("/dunning")) return "Mahnwesen";
+  if (path.endsWith("/quotes")) return "Angebote";
   return "Faktura";
 }

@@ -1,22 +1,32 @@
-import { invoiceNumber } from "./formulas.js";
+import { invoiceNumber, quoteNumber } from "./formulas.js";
 import type {
   DunningEntry,
   Invoice,
   InvoiceItem,
   Issuer,
   Payment,
+  Quote,
+  QuoteItem,
 } from "./types.js";
-import type { BillingRepository, CreateInvoiceInput } from "./repository.js";
+import type {
+  BillingRepository,
+  CreateInvoiceInput,
+  CreateQuoteInput,
+} from "./repository.js";
 
 export class MemoryBillingRepository implements BillingRepository {
   issuers: Issuer[] = [];
   invoices: Invoice[] = [];
   items: InvoiceItem[] = [];
+  quotes: Quote[] = [];
+  quoteItems: QuoteItem[] = [];
   payments: Payment[] = [];
   dunning: DunningEntry[] = [];
   private issuerId = 0;
   private invoiceId = 0;
+  private quoteId = 0;
   private itemId = 0;
+  private quoteItemId = 0;
   private paymentId = 0;
   private dunningId = 0;
   private creditSequence = 0;
@@ -35,6 +45,9 @@ export class MemoryBillingRepository implements BillingRepository {
       tenantId,
       nextNumber: 1,
       numberYear: null,
+      quotePrefix: input.quotePrefix ?? null,
+      nextQuoteNumber: 1,
+      quoteNumberYear: null,
       paymentTermDays: input.paymentTermDays ?? 14,
       address: input.address ?? null,
       email: input.email ?? null,
@@ -49,6 +62,94 @@ export class MemoryBillingRepository implements BillingRepository {
 
   async listInvoices(tenantId: string) {
     return this.invoices.filter((item) => item.tenantId === tenantId);
+  }
+
+  async listQuotes(tenantId: string) {
+    return this.quotes.filter((item) => item.tenantId === tenantId);
+  }
+
+  async getQuote(tenantId: string, id: number) {
+    return this.quotes.find(
+      (item) => item.tenantId === tenantId && item.id === id,
+    ) ?? null;
+  }
+
+  async getQuoteForUpdate(tenantId: string, id: number) {
+    return this.getQuote(tenantId, id);
+  }
+
+  async getQuoteItems(_tenantId: string, id: number) {
+    return this.quoteItems.filter((item) => item.quoteId === id);
+  }
+
+  async createQuote(tenantId: string, input: CreateQuoteInput) {
+    const issuer = this.issuers.find(
+      (item) => item.id === input.issuerId && item.tenantId === tenantId,
+    );
+    if (!issuer) throw new Error("Aussteller nicht gefunden");
+    const year = new Date().getFullYear();
+    if (issuer.quoteNumberYear !== year) {
+      issuer.quoteNumberYear = year;
+      issuer.nextQuoteNumber = 1;
+    }
+    const number = issuer.nextQuoteNumber++;
+    const quote: Quote = {
+      id: ++this.quoteId,
+      tenantId,
+      issuerId: issuer.id,
+      customerId: input.customerId ?? null,
+      occurrenceId: input.occurrenceId ?? null,
+      adImageKey: input.adImageKey ?? null,
+      quoteNumber: quoteNumber(
+        issuer.quotePrefix ?? `AG-${issuer.invoicePrefix}`,
+        year,
+        number,
+      ),
+      status: "draft",
+      currency: input.currency,
+      vatTreatment: input.vatTreatment,
+      subtotal: input.subtotal,
+      vatRate: input.vatRate,
+      vatAmount: input.vatAmount,
+      total: input.total,
+      validUntil: input.validUntil ?? null,
+      recipientName: input.recipientName,
+      recipientAddress: input.recipientAddress ?? null,
+      recipientEmail: input.recipientEmail ?? null,
+      invoiceId: null,
+      notes: input.notes ?? null,
+      metadata: input.metadata ?? null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.quotes.push(quote);
+    this.quoteItems.push(
+      ...input.items.map((item, index) => ({
+        ...item,
+        id: ++this.quoteItemId,
+        quoteId: quote.id,
+        position: index + 1,
+        commissionRate: item.commissionRate ?? null,
+        customerId: item.customerId ?? null,
+      })),
+    );
+    return quote;
+  }
+
+  async setQuoteStatus(tenantId: string, id: number, status: Quote["status"]) {
+    const quote = await this.getQuote(tenantId, id);
+    if (!quote) throw new Error("Angebot nicht gefunden");
+    quote.status = status;
+    quote.updatedAt = new Date();
+    return quote;
+  }
+
+  async setQuoteInvoiceId(tenantId: string, id: number, invoiceId: number) {
+    const quote = await this.getQuote(tenantId, id);
+    if (!quote) throw new Error("Angebot nicht gefunden");
+    if (quote.invoiceId == null) quote.invoiceId = invoiceId;
+    quote.updatedAt = new Date();
+    return quote;
   }
 
   async getInvoice(tenantId: string, id: number) {
