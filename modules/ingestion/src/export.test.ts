@@ -86,7 +86,7 @@ function seedRepository() {
       status: "detected",
       imageKey: "tenants/1/ad.png",
       confidence: 0.9,
-      evidence: ["geometry"],
+      evidence: ["geometry", "future-signal"],
       contacts: {
         phone: "01234 567890",
         email: "info@muster.example",
@@ -139,7 +139,7 @@ describe("Fundstellen-Export", () => {
     expect(rows[0]?.values).toEqual([
       "Muster GmbH", "01234 567890", "info@muster.example", "www.muster.example",
       "12345 Musterstadt", "Kommunalheft", "Ausgabe 4", 3, "2024", "current",
-      "detected", 0.9, "geometry", "Muster-Anzeige",
+      "detected", 0.9, "Materielle Fläche, Zusätzlicher Prüfbeleg", "Muster-Anzeige",
       "bilder/11-Muster_GmbH.png", 11, 1,
     ]);
     expect(rows[1]?.values[8]).toBe("2024");

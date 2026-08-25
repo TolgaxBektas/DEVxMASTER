@@ -23,7 +23,7 @@ WEBSITE_SIGNAL = re.compile(
 )
 POSTCODE_LOCATION_SIGNAL = re.compile(
     r"\b(?P<postal_code>\d{5})\s+"
-    r"(?P<city>[A-ZÄÖÜ][\wÄÖÜäöüß.-]*(?:\s+[A-ZÄÖÜ][\wÄÖÜäöüß.-]*){0,3})\b",
+    r"(?P<city>[A-ZÄÖÜ][\wÄÖÜäöüß.-]*(?:\s+[A-ZÄÖÜ][\wÄÖÜäöüß.-]*){0,2})\b",
 )
 LOCATION_STOPWORDS = {
     "tel",
@@ -36,6 +36,14 @@ LOCATION_STOPWORDS = {
     "öffnungszeiten",
     "internet",
     "web",
+    "t",
+    "f",
+    "m",
+    "ihr",
+    "ihre",
+    "unser",
+    "unsere",
+    "wir",
 }
 ADVERTISER_SIGNALS = re.compile(r'\b[\wÄÖÜäöüß&.-]+\s+(?:GmbH|AG|KG|e\.V\.)\b', re.I)
 EDITORIAL_SIGNALS = re.compile(
@@ -257,7 +265,18 @@ def extract_contacts(text):
         ),
         None,
     )
-    location_match = POSTCODE_LOCATION_SIGNAL.search(text)
+    phone_spans = [match.span() for match in PHONE_SIGNALS.finditer(text)]
+    location_match = next(
+        (
+            match
+            for match in POSTCODE_LOCATION_SIGNAL.finditer(text)
+            if not any(
+                match.start() < end and match.end() > start
+                for start, end in phone_spans
+            )
+        ),
+        None,
+    )
     postal_code = location_match.group("postal_code") if location_match else None
     city = None
     if location_match:

@@ -50,11 +50,21 @@ def test_extract_contacts_does_not_extract_email_domain_as_website():
 def test_extract_contacts_stops_city_at_contact_words():
     assert extract_contacts("94072 Bad Füssing Tel")["city"] == "Bad Füssing"
     assert extract_contacts("94032 Passau Foto")["city"] == "Passau"
+    assert extract_contacts("94116 Hutthurm T")["city"] == "Hutthurm"
+    assert extract_contacts("94104 Tittling Ihr Sanitätshaus")["city"] == "Tittling"
 
 
 def test_extract_contacts_keeps_multiword_city_names():
     assert extract_contacts("94072 Bad Füssing")["city"] == "Bad Füssing"
     assert extract_contacts("68159 Rhein-Neckar-Kreis")["city"] == "Rhein-Neckar-Kreis"
+    assert extract_contacts("94086 Bad Griesbach")["city"] == "Bad Griesbach"
+    assert extract_contacts("94568 Sankt Oswald")["city"] == "Sankt Oswald"
+
+
+def test_extract_contacts_ignores_postcode_inside_phone_but_keeps_address():
+    contacts = extract_contacts("Hauzenberg: 08586 - 97093\nAdresse: 94107 Untergriesbach")
+    assert contacts["postal_code"] == "94107"
+    assert contacts["city"] == "Untergriesbach"
 
 
 def test_extract_contacts_handles_variable_location_whitespace():

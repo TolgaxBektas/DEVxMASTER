@@ -9,6 +9,9 @@ import {
   useModuleQuery,
   type ModulePageProps,
 } from "@xmaster-center/ui";
+import { evidenceLabel } from "../evidence-labels.js";
+
+export { evidenceLabel } from "../evidence-labels.js";
 
 type Occurrence = {
   id: number;
@@ -22,20 +25,6 @@ type Occurrence = {
 
 type ImageState = "loading" | "loaded" | "missing";
 
-const evidenceLabels: Record<string, string> = {
-  geometry: "Materielle Fläche",
-  logo: "Logo/Signet",
-  contact: "Telefonkontakt",
-  "page-dominant": "Ganzseitige Fläche",
-  "publisher-marking": "Verlagsvermerk „Anzeige“",
-  "provenance-uncertain": "Herkunft unklar",
-  advertiser: "Werbetreibender",
-  typography: "Typografische Gestaltung",
-  whitespace: "Freiraum um die Anzeige",
-};
-export function evidenceLabel(value: string): string {
-  return evidenceLabels[value] ?? "Zusätzlicher Prüfbeleg";
-}
 export function occurrenceImageFallbackVisible(state: ImageState): boolean {
   return state === "missing";
 }
