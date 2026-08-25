@@ -77,6 +77,51 @@ def test_changed_pixels_outside_removed_blocks_fail_closed(tmp_path):
     assert verification.pixel_check["changed_pixels_outside"] > 0
 
 
+def test_page_bounds_assign_each_configured_marker_its_own_evidence(
+    tmp_path,
+):
+    source = tmp_path / "two-markers-source.pdf"
+    cleaned = tmp_path / "two-markers-cleaned.pdf"
+    source.write_bytes(_pdf([["Anzeige"]]))
+    with pikepdf.Pdf.open(source) as pdf:
+        pdf.pages[0].Contents = pdf.make_stream(
+            b"BT /F1 12 Tf 1 0 0 1 20 760 Tm "
+            b"(inixmedia) Tj ET "
+            b"BT /F1 12 Tf 1 0 0 1 20 620 Tm "
+            b"(secondmark) Tj ET"
+        )
+        modified = tmp_path / "two-markers-source-modified.pdf"
+        pdf.save(modified)
+    source = modified
+    box = Box(0, 0, 1020, 1320)
+
+    result = clean_pdf(
+        source,
+        cleaned,
+        {1: [box]},
+        ["inixmedia", "secondmark"],
+    )
+
+    assert len(result.removed_blocks) == 2
+    first, second = result.removed_blocks
+    assert first["bounds"]
+    assert second["bounds"]
+    assert first["bounds"][3] < second["bounds"][1]
+
+    for allowed_block in (first, second):
+        verification = verify_cleaned_ad(
+            source,
+            result.pdf_path,
+            1,
+            box,
+            ["inixmedia", "secondmark"],
+            120,
+            removed_blocks=[allowed_block],
+        )
+        assert verification.pixel_check["status"] == "failed"
+        assert verification.pixel_check["changed_pixels_outside"] > 0
+
+
 def test_split_marker_is_detected_and_removed_as_one_text_block(tmp_path):
     source = tmp_path / "split-source.pdf"
     cleaned = tmp_path / "split-cleaned.pdf"
