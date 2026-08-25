@@ -1,5 +1,13 @@
 import PDFDocument from "pdfkit";
 
+function formatDate(value: Date): string {
+  return new Intl.DateTimeFormat("de-DE", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(value);
+}
+
 export type QuotePdfInput = {
   issuer: {
     name: string;
@@ -73,8 +81,8 @@ export class PdfKitPdf implements Pdf {
     if (input.issuer.letterhead) document.text(input.issuer.letterhead);
     document.moveDown().fontSize(16).text(`Angebot ${input.quote.quoteNumber}`);
     document.fontSize(10)
-      .text(`Datum: ${(input.quote.createdAt ?? new Date()).toLocaleDateString("de-DE")}`)
-      .text(`Gültig bis: ${input.quote.validUntil?.toLocaleDateString("de-DE") ?? "ohne Befristung"}`);
+      .text(`Datum: ${formatDate(input.quote.createdAt ?? new Date())}`)
+      .text(`Gültig bis: ${input.quote.validUntil ? formatDate(input.quote.validUntil) : "ohne Befristung"}`);
     document.moveDown().fontSize(11).text("Empfänger");
     document.text(input.quote.recipientName);
     if (input.quote.recipientAddress) document.text(input.quote.recipientAddress);
@@ -105,7 +113,7 @@ export class PdfKitPdf implements Pdf {
           align: "right",
         })
         .font("Helvetica");
-      document.moveTo(50, y + 17).lineTo(562, y + 17).stroke();
+      document.moveTo(50, y + 17).lineTo(545, y + 17).stroke();
       document.y = y + 23;
     };
     renderTableHeader();
@@ -138,20 +146,29 @@ export class PdfKitPdf implements Pdf {
         });
       document.y = y + rowHeight;
     }
-    document.moveDown();
-    document.text(`Netto: ${input.quote.subtotal} ${input.quote.currency}`);
+    document.y += 6;
+    const blockText = (text: string) => {
+      document.text(text, 50, document.y, { width: 495 });
+    };
+    blockText(`Netto: ${input.quote.subtotal} ${input.quote.currency}`);
     if (input.quote.vatTreatment === "RC") {
-      document.text("Steuerschuldnerschaft des Leistungsempfängers (Reverse Charge)");
+      blockText("Steuerschuldnerschaft des Leistungsempfängers (Reverse Charge)");
     } else {
-      document.text(`USt (${input.quote.vatRate} %): ${input.quote.vatAmount} ${input.quote.currency}`);
+      blockText(`USt (${input.quote.vatRate} %): ${input.quote.vatAmount} ${input.quote.currency}`);
     }
-    document.font("Helvetica-Bold").text(`Gesamt: ${input.quote.total} ${input.quote.currency}`).font("Helvetica");
-    document.moveDown().text(`Zahlungsziel: ${input.issuer.paymentTermDays} Tage`);
-    if (input.issuer.bankName) document.text(`Bank: ${input.issuer.bankName}`);
-    if (input.issuer.iban) document.text(`IBAN: ${input.issuer.iban}`);
-    if (input.issuer.bic) document.text(`BIC: ${input.issuer.bic}`);
-    if (input.quote.notes) document.moveDown().text(input.quote.notes);
-    document.moveDown();
+    document.font("Helvetica-Bold");
+    blockText(`Gesamt: ${input.quote.total} ${input.quote.currency}`);
+    document.font("Helvetica");
+    document.y += 6;
+    blockText(`Zahlungsziel: ${input.issuer.paymentTermDays} Tage`);
+    if (input.issuer.bankName) blockText(`Bank: ${input.issuer.bankName}`);
+    if (input.issuer.iban) blockText(`IBAN: ${input.issuer.iban}`);
+    if (input.issuer.bic) blockText(`BIC: ${input.issuer.bic}`);
+    if (input.quote.notes) {
+      document.y += 6;
+      blockText(input.quote.notes);
+    }
+    document.y += 6;
     let image: Uint8Array | null = null;
     if (input.quote.adImageKey && (input.loadImage ?? this.loadImage)) {
       try {
@@ -164,14 +181,14 @@ export class PdfKitPdf implements Pdf {
       if (document.y + 205 > document.page.height - document.page.margins.bottom) {
         document.addPage();
       }
-      document.text("Restaurierte Anzeige:");
+      blockText("Restaurierte Anzeige:");
       document.image(Buffer.from(image), 50, document.y + 8, {
         fit: [495, 180],
         align: "center",
         valign: "center",
       });
     } else {
-      document.text("Anzeigenbild nicht verfügbar");
+      blockText("Anzeigenbild nicht verfügbar");
     }
     document.end();
     await done;
