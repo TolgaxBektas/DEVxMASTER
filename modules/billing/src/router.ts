@@ -1,6 +1,9 @@
-import { permissionProcedure, router } from "@xmaster-center/kernel";
+import { permissionProcedure, router, TRPCError } from "@xmaster-center/kernel";
 import { z } from "zod";
-import type { BillingService } from "./service.js";
+import {
+  BillingDomainError,
+  type BillingService,
+} from "./service.js";
 import { COMMISSION_RATES } from "./formulas.js";
 
 const actor = (ctx: {
@@ -9,6 +12,19 @@ const actor = (ctx: {
   actorId: ctx.auth.user.id,
   actorName: ctx.auth.user.displayName,
 });
+
+function quoteOperation<T>(operation: () => Promise<T>): Promise<T> {
+  return operation().catch((error: unknown) => {
+    if (error instanceof BillingDomainError) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: error.message,
+        cause: error,
+      });
+    }
+    throw error;
+  });
+}
 
 const issuerInput = z.object({
   name: z.string().min(1),
@@ -133,29 +149,29 @@ export function createBillingRouter(service: BillingService) {
       create: permissionProcedure("billing.quote.write")
         .input(quoteInput)
         .mutation(({ ctx, input }) =>
-          service.createQuote(ctx.auth.tenantId, input, actor(ctx)),
+          quoteOperation(() => service.createQuote(ctx.auth.tenantId, input, actor(ctx))),
         ),
       send: permissionProcedure("billing.quote.send")
         .input(z.object({ id: z.number().int().positive() }))
         .mutation(({ ctx, input }) =>
-          service.sendQuote(ctx.auth.tenantId, input.id, actor(ctx)),
+          quoteOperation(() => service.sendQuote(ctx.auth.tenantId, input.id, actor(ctx))),
         ),
       accept: permissionProcedure("billing.quote.accept")
         .input(z.object({ id: z.number().int().positive() }))
         .mutation(({ ctx, input }) =>
-          service.acceptQuote(ctx.auth.tenantId, input.id, actor(ctx)),
+          quoteOperation(() => service.acceptQuote(ctx.auth.tenantId, input.id, actor(ctx))),
         ),
       decline: permissionProcedure("billing.quote.accept")
         .input(z.object({ id: z.number().int().positive() }))
         .mutation(({ ctx, input }) =>
-          service.declineQuote(ctx.auth.tenantId, input.id, actor(ctx)),
+          quoteOperation(() => service.declineQuote(ctx.auth.tenantId, input.id, actor(ctx))),
         ),
       pdf: permissionProcedure("billing.quote.read")
         .input(z.object({ id: z.number().int().positive() }))
         .query(async ({ ctx, input }) => ({
           filename: `angebot-${input.id}.pdf`,
           base64: Buffer.from(
-            await service.quotePdf(ctx.auth.tenantId, input.id),
+            await quoteOperation(() => service.quotePdf(ctx.auth.tenantId, input.id)),
           ).toString("base64"),
         })),
     }),

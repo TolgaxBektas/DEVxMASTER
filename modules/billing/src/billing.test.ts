@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { AuthContext } from "@xmaster-center/contracts";
 import { MemoryAuditRepository, appendAudit } from "@xmaster-center/kernel";
 import { NoopPdf } from "@xmaster-center/integrations";
 import {
@@ -8,7 +9,12 @@ import {
   invoiceNumber,
 } from "./formulas.js";
 import { MemoryBillingRepository } from "./memory-repository.js";
-import { createBillingService } from "./service.js";
+import {
+  BillingDomainError,
+  createBillingService,
+  type BillingService,
+} from "./service.js";
+import { createBillingRouter } from "./router.js";
 import { annualInterest, multiplyMoney, percentMoney } from "./money.js";
 
 function service(
@@ -188,6 +194,40 @@ describe("billing service", () => {
       occurrenceCompany: "Firma",
     });
     expect(repository.quotes).toHaveLength(1);
+  });
+
+  it("liefert fachliche Quote-Fehler als Client-Fehler aus", async () => {
+    const auth: AuthContext = {
+      user: { id: "1", email: null, displayName: "Admin" },
+      tenantId: "1",
+      permissions: new Set(["billing.quote.write"]),
+      provider: "local",
+    };
+    const input = {
+      issuerId: 1,
+      recipientName: "Kunde",
+      items: [{ description: "Anzeige", quantity: "1.00", unitPrice: "10.00" }],
+    };
+    const domainService = {
+      createQuote: async () => {
+        throw new BillingDomainError("Fundstelle nicht gefunden");
+      },
+    } as unknown as BillingService;
+    const caller = createBillingRouter(domainService).createCaller({ auth });
+    await expect(caller.quotes.create(input)).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: "Fundstelle nicht gefunden",
+    });
+
+    const unexpectedService = {
+      createQuote: async () => {
+        throw new Error("Datenbank ausgefallen");
+      },
+    } as unknown as BillingService;
+    const unexpectedCaller = createBillingRouter(unexpectedService).createCaller({ auth });
+    await expect(unexpectedCaller.quotes.create(input)).rejects.toMatchObject({
+      code: "INTERNAL_SERVER_ERROR",
+    });
   });
 
   it("keeps quote tenant isolation", async () => {

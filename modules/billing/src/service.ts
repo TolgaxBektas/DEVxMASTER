@@ -14,6 +14,13 @@ import type {
 } from "./repository.js";
 import type { Invoice, Quote } from "./types.js";
 
+export class BillingDomainError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BillingDomainError";
+  }
+}
+
 export type BillingServiceDeps = {
   repository: BillingRepository;
   repositoryFor(db: unknown): BillingRepository;
@@ -50,7 +57,7 @@ async function createInvoiceInTransaction(
   const issuer = (await repository.listIssuers(tenantId)).find(
     (item) => item.id === input.issuerId,
   );
-  if (!issuer) throw new Error("Aussteller nicht gefunden");
+  if (!issuer) throw new BillingDomainError("Aussteller nicht gefunden");
   const items = input.items.map((item) => ({
     ...item,
     amount: positionAmount(item.quantity, item.unitPrice),
@@ -101,9 +108,9 @@ async function transitionQuote(
   return deps.transaction(async (db) => {
     const repository = deps.repositoryFor(db);
     const quote = await repository.getQuote(tenantId, id);
-    if (!quote) throw new Error("Angebot nicht gefunden");
+    if (!quote) throw new BillingDomainError("Angebot nicht gefunden");
     if (quote.status !== from) {
-      throw new Error(
+      throw new BillingDomainError(
         from === "draft"
           ? "Nur Entwürfe können versendet werden"
           : "Nur versendete Angebote können abgelehnt werden",
@@ -200,12 +207,12 @@ export function createBillingService(deps: BillingServiceDeps) {
         const issuer = (await repository.listIssuers(tenantId)).find(
           (item) => item.id === input.issuerId,
         );
-        if (!issuer) throw new Error("Aussteller nicht gefunden");
+        if (!issuer) throw new BillingDomainError("Aussteller nicht gefunden");
         let adImageKey: string | null = null;
         let metadata = input.metadata;
         if (input.occurrenceId !== undefined) {
           const source = await deps.resolveAdSource?.(tenantId, input.occurrenceId);
-          if (!source) throw new Error("Fundstelle nicht gefunden");
+          if (!source) throw new BillingDomainError("Fundstelle nicht gefunden");
           adImageKey = source.imageKey;
           metadata = {
             ...(input.metadata ?? {}),
@@ -264,19 +271,19 @@ export function createBillingService(deps: BillingServiceDeps) {
         const repository = deps.repositoryFor(db);
         const audit = deps.auditFor(db);
         const quote = await repository.getQuoteForUpdate(tenantId, id);
-        if (!quote) throw new Error("Angebot nicht gefunden");
+        if (!quote) throw new BillingDomainError("Angebot nicht gefunden");
         if (quote.invoiceId != null) {
           const invoice = await repository.getInvoice(tenantId, quote.invoiceId);
-          if (!invoice) throw new Error("Zugehörige Rechnung nicht gefunden");
+          if (!invoice) throw new BillingDomainError("Zugehörige Rechnung nicht gefunden");
           return invoice;
         }
         if (quote.status !== "sent") {
-          throw new Error("Nur versendete Angebote können angenommen werden");
+          throw new BillingDomainError("Nur versendete Angebote können angenommen werden");
         }
         const issuer = (await repository.listIssuers(tenantId)).find(
           (item) => item.id === quote.issuerId,
         );
-        if (!issuer) throw new Error("Aussteller nicht gefunden");
+        if (!issuer) throw new BillingDomainError("Aussteller nicht gefunden");
         const items = await repository.getQuoteItems(tenantId, id);
         const invoice = await createInvoiceInTransaction(deps, db, tenantId, {
           issuerId: quote.issuerId,
@@ -324,11 +331,11 @@ export function createBillingService(deps: BillingServiceDeps) {
     },
     async quotePdf(tenantId: string, id: number) {
       const quote = await deps.repository.getQuote(tenantId, id);
-      if (!quote) throw new Error("Angebot nicht gefunden");
+      if (!quote) throw new BillingDomainError("Angebot nicht gefunden");
       const issuer = (await deps.repository.listIssuers(tenantId)).find(
         (item) => item.id === quote.issuerId,
       );
-      if (!issuer) throw new Error("Aussteller nicht gefunden");
+      if (!issuer) throw new BillingDomainError("Aussteller nicht gefunden");
       const items = await deps.repository.getQuoteItems(tenantId, id);
       return deps.pdf.quote({
         issuer,

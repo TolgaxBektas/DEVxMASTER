@@ -55,7 +55,7 @@ export class PdfKitPdf implements Pdf {
   ) {}
 
   async text(title: string, body: string): Promise<Uint8Array> {
-    const document = new PDFDocument({ margin: 50 });
+    const document = new PDFDocument({ size: "A4", margin: 50 });
     const chunks: Buffer[] = [];
     document.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
     const done = new Promise<void>((resolve, reject) => {
@@ -69,7 +69,7 @@ export class PdfKitPdf implements Pdf {
   }
 
   async quote(input: QuotePdfInput): Promise<Uint8Array> {
-    const document = new PDFDocument({ margin: 50 });
+    const document = new PDFDocument({ size: "A4", margin: 50 });
     const chunks: Buffer[] = [];
     document.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
     const done = new Promise<void>((resolve, reject) => {
@@ -93,7 +93,7 @@ export class PdfKitPdf implements Pdf {
       description: { x: 90, width: 245 },
       quantity: { x: 340, width: 55 },
       unitPrice: { x: 400, width: 75 },
-      amount: { x: 480, width: 82 },
+      amount: { x: 480, width: 65 },
     };
     const renderTableHeader = () => {
       const y = document.y;
