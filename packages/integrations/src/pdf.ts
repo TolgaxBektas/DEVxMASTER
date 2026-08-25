@@ -13,6 +13,7 @@ export type QuotePdfInput = {
   quote: {
     quoteNumber: string;
     currency: string;
+    vatTreatment: "RC" | "VAT19" | "VAT0";
     subtotal: string;
     vatRate: string;
     vatAmount: string;
@@ -79,16 +80,71 @@ export class PdfKitPdf implements Pdf {
     if (input.quote.recipientAddress) document.text(input.quote.recipientAddress);
     if (input.quote.recipientEmail) document.text(input.quote.recipientEmail);
     document.moveDown().fontSize(10);
-    document.text("Pos.   Beschreibung                              Menge   Einzelpreis   Betrag");
-    document.moveTo(50, document.y).lineTo(545, document.y).stroke();
+    const columns = {
+      position: { x: 50, width: 35 },
+      description: { x: 90, width: 245 },
+      quantity: { x: 340, width: 55 },
+      unitPrice: { x: 400, width: 75 },
+      amount: { x: 480, width: 82 },
+    };
+    const renderTableHeader = () => {
+      const y = document.y;
+      document.font("Helvetica-Bold")
+        .text("Pos.", columns.position.x, y, columns.position)
+        .text("Beschreibung", columns.description.x, y, columns.description)
+        .text("Menge", columns.quantity.x, y, {
+          ...columns.quantity,
+          align: "right",
+        })
+        .text("Einzelpreis", columns.unitPrice.x, y, {
+          ...columns.unitPrice,
+          align: "right",
+        })
+        .text("Betrag", columns.amount.x, y, {
+          ...columns.amount,
+          align: "right",
+        })
+        .font("Helvetica");
+      document.moveTo(50, y + 17).lineTo(562, y + 17).stroke();
+      document.y = y + 23;
+    };
+    renderTableHeader();
     for (const item of input.items) {
-      document.text(
-        `${item.position}.    ${item.description}   ${item.quantity}   ${item.unitPrice} ${input.quote.currency}   ${item.amount} ${input.quote.currency}`,
-      );
+      const descriptionHeight = document.heightOfString(item.description, {
+        width: columns.description.width,
+      });
+      const rowHeight = Math.max(18, descriptionHeight) + 4;
+      if (document.y + rowHeight > document.page.height - document.page.margins.bottom) {
+        document.addPage();
+        renderTableHeader();
+      }
+      const y = document.y;
+      document.text(String(item.position), columns.position.x, y, columns.position)
+        .text(item.description, columns.description.x, y, {
+          ...columns.description,
+          height: rowHeight,
+        })
+        .text(item.quantity, columns.quantity.x, y, {
+          ...columns.quantity,
+          align: "right",
+        })
+        .text(`${item.unitPrice} ${input.quote.currency}`, columns.unitPrice.x, y, {
+          ...columns.unitPrice,
+          align: "right",
+        })
+        .text(`${item.amount} ${input.quote.currency}`, columns.amount.x, y, {
+          ...columns.amount,
+          align: "right",
+        });
+      document.y = y + rowHeight;
     }
     document.moveDown();
     document.text(`Netto: ${input.quote.subtotal} ${input.quote.currency}`);
-    document.text(`USt (${input.quote.vatRate} %): ${input.quote.vatAmount} ${input.quote.currency}`);
+    if (input.quote.vatTreatment === "RC") {
+      document.text("Steuerschuldnerschaft des Leistungsempfängers (Reverse Charge)");
+    } else {
+      document.text(`USt (${input.quote.vatRate} %): ${input.quote.vatAmount} ${input.quote.currency}`);
+    }
     document.font("Helvetica-Bold").text(`Gesamt: ${input.quote.total} ${input.quote.currency}`).font("Helvetica");
     document.moveDown().text(`Zahlungsziel: ${input.issuer.paymentTermDays} Tage`);
     if (input.issuer.bankName) document.text(`Bank: ${input.issuer.bankName}`);
@@ -105,6 +161,9 @@ export class PdfKitPdf implements Pdf {
       }
     }
     if (image) {
+      if (document.y + 205 > document.page.height - document.page.margins.bottom) {
+        document.addPage();
+      }
       document.text("Restaurierte Anzeige:");
       document.image(Buffer.from(image), 50, document.y + 8, {
         fit: [495, 180],
@@ -126,9 +185,14 @@ export class NoopPdf implements Pdf {
   }
 
   async quote(input: QuotePdfInput) {
-    const image = input.quote.adImageKey && input.loadImage
-      ? await input.loadImage(input.quote.adImageKey)
-      : null;
+    let image: Uint8Array | null = null;
+    if (input.quote.adImageKey && input.loadImage) {
+      try {
+        image = await input.loadImage(input.quote.adImageKey);
+      } catch {
+        image = null;
+      }
+    }
     return new TextEncoder().encode([
       "PDF",
       `Angebot ${input.quote.quoteNumber}`,
@@ -136,7 +200,9 @@ export class NoopPdf implements Pdf {
       input.quote.recipientName,
       ...input.items.map((item) => `${item.position}. ${item.description} ${item.amount}`),
       `Netto: ${input.quote.subtotal} ${input.quote.currency}`,
-      `USt: ${input.quote.vatAmount} ${input.quote.currency}`,
+      input.quote.vatTreatment === "RC"
+        ? "Steuerschuldnerschaft des Leistungsempfängers (Reverse Charge)"
+        : `USt: ${input.quote.vatAmount} ${input.quote.currency}`,
       `Gesamt: ${input.quote.total} ${input.quote.currency}`,
       image ? "Restaurierte Anzeige vorhanden" : "Anzeigenbild nicht verfügbar",
     ].join("\n"));

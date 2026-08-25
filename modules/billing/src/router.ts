@@ -145,7 +145,7 @@ export function createBillingRouter(service: BillingService) {
         .mutation(({ ctx, input }) =>
           service.acceptQuote(ctx.auth.tenantId, input.id, actor(ctx)),
         ),
-      decline: permissionProcedure("billing.quote.send")
+      decline: permissionProcedure("billing.quote.accept")
         .input(z.object({ id: z.number().int().positive() }))
         .mutation(({ ctx, input }) =>
           service.declineQuote(ctx.auth.tenantId, input.id, actor(ctx)),

@@ -63,6 +63,16 @@ export function BillingPage({ api }: ModulePageProps) {
   const [selectedIssuer, setSelectedIssuer] = useState("");
   const [selectedInvoice, setSelectedInvoice] = useState("");
   const [selectedQuote, setSelectedQuote] = useState("");
+  const [quoteIssuer, setQuoteIssuer] = useState("");
+  const [quoteOccurrenceId, setQuoteOccurrenceId] = useState("");
+  const [quoteRecipient, setQuoteRecipient] = useState("");
+  const [quoteAddress, setQuoteAddress] = useState("");
+  const [quoteEmail, setQuoteEmail] = useState("");
+  const [quoteValidUntil, setQuoteValidUntil] = useState("");
+  const [quoteDescription, setQuoteDescription] = useState("");
+  const [quoteQuantity, setQuoteQuantity] = useState("1.00");
+  const [quoteUnitPrice, setQuoteUnitPrice] = useState("100.00");
+  const [quoteNotes, setQuoteNotes] = useState("");
   const [message, setMessage] = useState("");
   if ([issuers, invoices, dunning, quotes].some((query) => query.isLoading))
     return <Skeleton />;
@@ -109,6 +119,30 @@ export function BillingPage({ api }: ModulePageProps) {
       "Rechnung angelegt",
       "Rechnung konnte nicht angelegt werden",
       ["modules.billing.invoices.list"],
+    );
+  };
+  const createQuote = async (event: FormEvent) => {
+    event.preventDefault();
+    const occurrenceId = quoteOccurrenceId.trim();
+    const validUntil = quoteValidUntil.trim();
+    await runMutation(
+      () => api.mutate("modules.billing.quotes.create", {
+        issuerId: Number(quoteIssuer),
+        ...(occurrenceId ? { occurrenceId: Number(occurrenceId) } : {}),
+        recipientName: quoteRecipient,
+        ...(quoteAddress ? { recipientAddress: quoteAddress } : {}),
+        ...(quoteEmail ? { recipientEmail: quoteEmail } : {}),
+        ...(validUntil ? { validUntil } : {}),
+        ...(quoteNotes ? { notes: quoteNotes } : {}),
+        items: [{
+          description: quoteDescription,
+          quantity: quoteQuantity,
+          unitPrice: quoteUnitPrice,
+        }],
+      }),
+      "Angebot angelegt",
+      "Angebot konnte nicht angelegt werden",
+      ["modules.billing.quotes.list"],
     );
   };
   const issue = async () => {
@@ -320,6 +354,83 @@ export function BillingPage({ api }: ModulePageProps) {
       )}
       {(path === "/billing" || path === "/billing/quotes") && (
         <Card>
+          <h2>Angebot anlegen</h2>
+          <form className="form-grid" onSubmit={createQuote}>
+            <select
+              className="ui-input"
+              required
+              value={quoteIssuer}
+              onChange={(event) => setQuoteIssuer(event.target.value)}
+            >
+              <option value="">Aussteller wählen</option>
+              {issuers.data?.map((issuer) => (
+                <option key={issuer.id} value={issuer.id}>
+                  {issuer.name}
+                </option>
+              ))}
+            </select>
+            <Input
+              type="number"
+              min="1"
+              placeholder="Fundstelle-ID (optional)"
+              value={quoteOccurrenceId}
+              onChange={(event) => setQuoteOccurrenceId(event.target.value)}
+            />
+            <Input
+              required
+              placeholder="Empfänger"
+              value={quoteRecipient}
+              onChange={(event) => setQuoteRecipient(event.target.value)}
+            />
+            <Input
+              placeholder="Adresse"
+              value={quoteAddress}
+              onChange={(event) => setQuoteAddress(event.target.value)}
+            />
+            <Input
+              type="email"
+              placeholder="E-Mail"
+              value={quoteEmail}
+              onChange={(event) => setQuoteEmail(event.target.value)}
+            />
+            <Input
+              type="date"
+              aria-label="Gültig bis"
+              value={quoteValidUntil}
+              onChange={(event) => setQuoteValidUntil(event.target.value)}
+            />
+            <Input
+              required
+              placeholder="Beschreibung"
+              value={quoteDescription}
+              onChange={(event) => setQuoteDescription(event.target.value)}
+            />
+            <Input
+              required
+              type="number"
+              min="0.01"
+              step="0.01"
+              placeholder="Menge"
+              value={quoteQuantity}
+              onChange={(event) => setQuoteQuantity(event.target.value)}
+            />
+            <Input
+              required
+              type="number"
+              min="0"
+              step="0.01"
+              placeholder="Einzelpreis"
+              value={quoteUnitPrice}
+              onChange={(event) => setQuoteUnitPrice(event.target.value)}
+            />
+            <textarea
+              className="ui-input"
+              placeholder="Anmerkung"
+              value={quoteNotes}
+              onChange={(event) => setQuoteNotes(event.target.value)}
+            />
+            <Button type="submit">Angebot anlegen</Button>
+          </form>
           <h2>Angebote</h2>
           <DataTable
             rows={quotes.data ?? []}

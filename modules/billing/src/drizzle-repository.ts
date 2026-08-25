@@ -69,12 +69,17 @@ export function createDrizzleBillingRepository(db: unknown): BillingRepository {
         .for("update");
       return (rows[0] ?? null) as never;
     },
-    async getQuoteItems(_tenantId, id) {
-      return database
-        .select()
+    async getQuoteItems(tenantId, id) {
+      const rows = await database
+        .select({ item: quoteItems })
         .from(quoteItems)
-        .where(eq(quoteItems.quoteId, id))
-        .orderBy(quoteItems.position) as never;
+        .innerJoin(quotes, eq(quotes.id, quoteItems.quoteId))
+        .where(and(
+          eq(quoteItems.quoteId, id),
+          eq(quotes.tenantId, Number(tenantId)),
+        ))
+        .orderBy(quoteItems.position);
+      return rows.map(({ item }) => item) as never;
     },
     async createQuote(tenantId, input: CreateQuoteInput) {
       const issuer = (

@@ -75,8 +75,11 @@ const billing = createBillingModule({
         occurrenceId,
       );
       return { imageKey: occurrence.imageKey ?? null, company: occurrence.company };
-    } catch {
-      return null;
+    } catch (error) {
+      if (error instanceof Error && error.message === "Fundstelle nicht gefunden") {
+        return null;
+      }
+      throw error;
     }
   },
 });

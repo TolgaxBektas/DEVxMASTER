@@ -20,12 +20,17 @@ function service(
     occurrenceId: number,
   ) => Promise<{ imageKey: string | null; company: string } | null>,
 ) {
+  let transactionQueue: Promise<void> = Promise.resolve();
   return createBillingService({
     repository,
     repositoryFor: () => repository,
     audit,
     auditFor: () => audit,
-    transaction: async (callback) => callback(repository),
+    transaction: <T>(callback: (db: unknown) => Promise<T>) => {
+      const current = transactionQueue.then(() => callback(repository));
+      transactionQueue = current.then(() => undefined, () => undefined);
+      return current;
+    },
     eventExecutorFor: () => ({
       append: async (event: {
         id: string;
@@ -171,7 +176,18 @@ describe("billing service", () => {
       .rejects.toThrow("Fundstelle nicht gefunden");
     await expect(billing.createQuote("2", { ...input, issuerId: foreignIssuer.id }, { actorId: "2", actorName: "Other" }))
       .rejects.toThrow("Fundstelle nicht gefunden");
-    expect(repository.quotes).toHaveLength(0);
+    const resolved = await billing.createQuote("1", {
+      ...input,
+      recipientName: "Musterkunde GmbH, z. Hd. Frau Beispiel",
+      metadata: { campaign: "Frühjahr" },
+    }, { actorId: "1", actorName: "Admin" });
+    expect(resolved.recipientName).toBe("Musterkunde GmbH, z. Hd. Frau Beispiel");
+    expect(resolved.adImageKey).toBe("ad.png");
+    expect(resolved.metadata).toEqual({
+      campaign: "Frühjahr",
+      occurrenceCompany: "Firma",
+    });
+    expect(repository.quotes).toHaveLength(1);
   });
 
   it("keeps quote tenant isolation", async () => {
@@ -186,6 +202,8 @@ describe("billing service", () => {
       items: [{ description: "Anzeige", quantity: "1.00", unitPrice: "10.00" }],
     }, { actorId: "1", actorName: "Admin" });
     expect(await billing.getQuote("2", quote.id)).toBeNull();
+    expect(await repository.getQuoteItems("1", quote.id)).toHaveLength(1);
+    expect(await repository.getQuoteItems("2", quote.id)).toHaveLength(0);
     await expect(billing.acceptQuote("2", quote.id, { actorId: "2", actorName: "Other" }))
       .rejects.toThrow("Angebot nicht gefunden");
   });

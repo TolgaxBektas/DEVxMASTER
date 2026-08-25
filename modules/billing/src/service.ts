@@ -14,23 +14,6 @@ import type {
 } from "./repository.js";
 import type { Invoice, Quote } from "./types.js";
 
-const quoteLocks = new WeakMap<object, Map<number, Promise<unknown>>>();
-
-function withQuoteLock<T>(
-  repository: BillingRepository,
-  id: number,
-  action: () => Promise<T>,
-): Promise<T> {
-  const locks = quoteLocks.get(repository) ?? new Map<number, Promise<unknown>>();
-  quoteLocks.set(repository, locks);
-  const previous = locks.get(id) ?? Promise.resolve();
-  const current = previous.then(action, action);
-  locks.set(id, current);
-  return current.finally(() => {
-    if (locks.get(id) === current) locks.delete(id);
-  }) as Promise<T>;
-}
-
 export type BillingServiceDeps = {
   repository: BillingRepository;
   repositoryFor(db: unknown): BillingRepository;
@@ -219,12 +202,15 @@ export function createBillingService(deps: BillingServiceDeps) {
         );
         if (!issuer) throw new Error("Aussteller nicht gefunden");
         let adImageKey: string | null = null;
-        let recipientName = input.recipientName;
+        let metadata = input.metadata;
         if (input.occurrenceId !== undefined) {
           const source = await deps.resolveAdSource?.(tenantId, input.occurrenceId);
           if (!source) throw new Error("Fundstelle nicht gefunden");
           adImageKey = source.imageKey;
-          recipientName = source.company;
+          metadata = {
+            ...(input.metadata ?? {}),
+            occurrenceCompany: source.company,
+          };
         }
         const items = input.items.map((item) => ({
           ...item,
@@ -237,7 +223,7 @@ export function createBillingService(deps: BillingServiceDeps) {
         const quoteTotals = totals(subtotal, issuer.vatTreatment);
         const quote = await repository.createQuote(tenantId, {
           ...input,
-          recipientName,
+          metadata,
           adImageKey,
           items,
           currency: issuer.currency,
@@ -274,7 +260,7 @@ export function createBillingService(deps: BillingServiceDeps) {
       return transitionQuote(deps, tenantId, id, "sent", "declined", actor);
     },
     async acceptQuote(tenantId: string, id: number, actor: Actor) {
-      return withQuoteLock(deps.repository, id, () => deps.transaction(async (db) => {
+      return deps.transaction(async (db) => {
         const repository = deps.repositoryFor(db);
         const audit = deps.auditFor(db);
         const quote = await repository.getQuoteForUpdate(tenantId, id);
@@ -334,7 +320,7 @@ export function createBillingService(deps: BillingServiceDeps) {
           idempotencyKey: `quote.accepted:${entry.hash}`,
         }, deps.eventExecutorFor(db));
         return invoice;
-      }));
+      });
     },
     async quotePdf(tenantId: string, id: number) {
       const quote = await deps.repository.getQuote(tenantId, id);

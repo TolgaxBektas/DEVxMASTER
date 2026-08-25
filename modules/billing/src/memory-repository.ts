@@ -78,8 +78,11 @@ export class MemoryBillingRepository implements BillingRepository {
     return this.getQuote(tenantId, id);
   }
 
-  async getQuoteItems(_tenantId: string, id: number) {
-    return this.quoteItems.filter((item) => item.quoteId === id);
+  async getQuoteItems(tenantId: string, id: number) {
+    const quote = await this.getQuote(tenantId, id);
+    return quote
+      ? this.quoteItems.filter((item) => item.quoteId === id)
+      : [];
   }
 
   async createQuote(tenantId: string, input: CreateQuoteInput) {
