@@ -41,6 +41,22 @@ def test_extract_contacts_rejects_abbreviations_as_websites():
     }
 
 
+def test_extract_contacts_does_not_extract_email_domain_as_website():
+    contacts = extract_contacts("info.bfg@ssg.brk.de")
+    assert contacts["email"] == "info.bfg@ssg.brk.de"
+    assert contacts["website"] is None
+
+
+def test_extract_contacts_stops_city_at_contact_words():
+    assert extract_contacts("94072 Bad Füssing Tel")["city"] == "Bad Füssing"
+    assert extract_contacts("94032 Passau Foto")["city"] == "Passau"
+
+
+def test_extract_contacts_keeps_multiword_city_names():
+    assert extract_contacts("94072 Bad Füssing")["city"] == "Bad Füssing"
+    assert extract_contacts("68159 Rhein-Neckar-Kreis")["city"] == "Rhein-Neckar-Kreis"
+
+
 def test_extract_contacts_handles_variable_location_whitespace():
     contacts = extract_contacts("12345\nMusterstadt")
     assert contacts["postal_code"] == "12345"

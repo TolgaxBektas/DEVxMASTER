@@ -15,9 +15,9 @@ PHONE_SIGNALS = re.compile(
 )
 EMAIL_SIGNAL = re.compile(r"\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b", re.I)
 WEBSITE_SIGNAL = re.compile(
-    r"(?<![@\w])(?:"
+    r"(?<![@\w.])(?:"
     r"(?:https?://|www\.)[a-z0-9-]+(?:\.[a-z0-9-]+)+"
-    r"|[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:de|com|net|org|eu|info|at|ch)"
+    r"|[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:de|com|net|org|eu|info|at|ch)\b"
     r")(?:/[^\s<>,;)]*)?",
     re.I,
 )
@@ -25,6 +25,18 @@ POSTCODE_LOCATION_SIGNAL = re.compile(
     r"\b(?P<postal_code>\d{5})\s+"
     r"(?P<city>[A-ZÄÖÜ][\wÄÖÜäöüß.-]*(?:\s+[A-ZÄÖÜ][\wÄÖÜäöüß.-]*){0,3})\b",
 )
+LOCATION_STOPWORDS = {
+    "tel",
+    "telefon",
+    "fon",
+    "fax",
+    "foto",
+    "e-mail",
+    "mail",
+    "öffnungszeiten",
+    "internet",
+    "web",
+}
 ADVERTISER_SIGNALS = re.compile(r'\b[\wÄÖÜäöüß&.-]+\s+(?:GmbH|AG|KG|e\.V\.)\b', re.I)
 EDITORIAL_SIGNALS = re.compile(
     r'\b(?:impressum|herausgeber|verantwortlich|redaktion|bekanntmachung|anlage|amtliche\s+mitteilung)\b',
@@ -231,11 +243,31 @@ def extract_contacts(text):
     phone = phone_match.group(0).strip() if phone_match else None
     if phone:
         phone = re.sub(r"^(?:tel(?:efon)?|fon|ruf)\b\s*[:.]?\s*", "", phone, flags=re.I)
-    email_match = EMAIL_SIGNAL.search(text)
-    website_match = WEBSITE_SIGNAL.search(text)
+    email_matches = list(EMAIL_SIGNAL.finditer(text))
+    email_match = email_matches[0] if email_matches else None
+    email_spans = [match.span() for match in email_matches]
+    website_match = next(
+        (
+            match
+            for match in WEBSITE_SIGNAL.finditer(text)
+            if not any(
+                match.start() < end and match.end() > start
+                for start, end in email_spans
+            )
+        ),
+        None,
+    )
     location_match = POSTCODE_LOCATION_SIGNAL.search(text)
     postal_code = location_match.group("postal_code") if location_match else None
-    city = location_match.group("city") if location_match else None
+    city = None
+    if location_match:
+        city_words = []
+        for word in location_match.group("city").split():
+            normalized_word = word.strip(".,:;·|()[]{}").casefold()
+            if normalized_word in LOCATION_STOPWORDS:
+                break
+            city_words.append(word)
+        city = " ".join(city_words) or None
     return {
         "phone": phone,
         "email": email_match.group(0) if email_match else None,

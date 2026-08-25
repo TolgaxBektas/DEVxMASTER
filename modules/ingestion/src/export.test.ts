@@ -1,3 +1,5 @@
+import { unzipSync } from "fflate";
+import ExcelJS from "exceljs";
 import { describe, expect, it } from "vitest";
 import { NoopStorage } from "@xmaster-center/integrations";
 import { MemoryIngestionRepository } from "./memory-repository.js";
@@ -178,5 +180,24 @@ describe("Fundstellen-Export", () => {
     const archive = await createOccurrenceExportZip(rows, new NoopStorage());
     expect(archive.includes(Buffer.from("anzeigen.xlsx"))).toBe(true);
     expect(archive.includes(Buffer.from("bilder/"))).toBe(false);
+  });
+
+  it("erzeugt ein lesbares XLSX im fertigen ZIP", async () => {
+    const rows = await buildOccurrenceExportRows(seedRepository(), "1", { status: "detected" });
+    const archive = await createOccurrenceExportZip(rows, new NoopStorage());
+    const files = unzipSync(archive);
+    const workbookBytes = files["anzeigen.xlsx"];
+    if (!workbookBytes) throw new Error("anzeigen.xlsx fehlt im Export-ZIP");
+    const workbook = new ExcelJS.Workbook();
+    const xlsxData = workbookBytes as unknown as Parameters<typeof workbook.xlsx.load>[0];
+    await workbook.xlsx.load(xlsxData);
+    const sheet = workbook.getWorksheet("Anzeigen");
+    expect(sheet).toBeDefined();
+    expect(sheet?.getRow(1).values).toEqual([
+      undefined,
+      ...occurrenceExportHeaders,
+    ]);
+    expect(sheet?.getRow(2).getCell(1).value).toBe("Muster GmbH");
+    expect(sheet?.getRow(2).getCell(occurrenceExportHeaders.indexOf("Fundstelle-ID") + 1).value).toBe(11);
   });
 });

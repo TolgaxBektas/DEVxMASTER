@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryAuditRepository } from "@xmaster-center/kernel";
-import { NoopStorage } from "@xmaster-center/integrations";
+import { NoopStorage, PdfKitPdf } from "@xmaster-center/integrations";
 import { MemoryIngestionRepository } from "./memory-repository.js";
 import { persistDocumentBytes } from "./rest.js";
 import { scanWatchFolder } from "./module.js";
@@ -39,6 +39,10 @@ async function setup() {
   return { folder, repository, enqueue, observations, persist };
 }
 
+async function validPdf() {
+  return Buffer.from(await new PdfKitPdf().text("Test", "Inhalt"));
+}
+
 async function scan(state: Awaited<ReturnType<typeof setup>>) {
   await scanWatchFolder({
     folderPath: state.folder,
@@ -57,10 +61,11 @@ describe("Ingestion-Überwachungsordner", () => {
   it("wartet auf zwei stabile Größenbeobachtungen und verarbeitet danach", async () => {
     const state = await setup();
     const source = join(state.folder, "anzeige.pdf");
+    const bytes = await validPdf();
     await writeFile(source, "%PDF-1.7\npart");
     await scan(state);
     expect(state.repository.documents).toHaveLength(0);
-    await writeFile(source, "%PDF-1.7\nvollständig");
+    await writeFile(source, bytes);
     await scan(state);
     expect(state.repository.documents).toHaveLength(0);
     await scan(state);
@@ -70,17 +75,17 @@ describe("Ingestion-Überwachungsordner", () => {
       tenantId: "1",
       payload: { documentId: 1 },
     });
-    expect(await readFile(join(state.folder, "erfolgreich", "anzeige.pdf"), "utf8"))
-      .toBe("%PDF-1.7\nvollständig");
+    expect(await readFile(join(state.folder, "erfolgreich", "anzeige.pdf"))).toEqual(bytes);
   });
 
   it("trennt Deduplizierung und fehlerhafte Dateien", async () => {
     const state = await setup();
     const first = join(state.folder, "erste.pdf");
-    await writeFile(first, "%PDF-1.7\nidentisch");
+    const bytes = await validPdf();
+    await writeFile(first, bytes);
     await scan(state);
     await scan(state);
-    await writeFile(join(state.folder, "zweite.pdf"), "%PDF-1.7\nidentisch");
+    await writeFile(join(state.folder, "zweite.pdf"), bytes);
     await scan(state);
     await scan(state);
     expect(state.repository.documents).toHaveLength(1);
@@ -90,6 +95,18 @@ describe("Ingestion-Überwachungsordner", () => {
     await scan(state);
     await scan(state);
     expect((await readdir(join(state.folder, "fehlerhaft")))).toContain("fehler.pdf");
+  });
+
+  it("verschiebt eine abgeschnittene PDF ohne Persistierung in den Fehlerordner", async () => {
+    const state = await setup();
+    const source = join(state.folder, "abgebrochen.pdf");
+    const bytes = await validPdf();
+    await writeFile(source, bytes.subarray(0, Math.floor(bytes.length / 2)));
+    await scan(state);
+    await scan(state);
+    expect(state.repository.documents).toHaveLength(0);
+    expect(state.enqueue).not.toHaveBeenCalled();
+    expect(await readdir(join(state.folder, "fehlerhaft"))).toContain("abgebrochen.pdf");
   });
 
   it("ist bei nicht konfiguriertem Ordner deaktiviert", async () => {
