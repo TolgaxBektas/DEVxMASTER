@@ -31,6 +31,14 @@ type Dunning = {
   totalDue: string;
   subject: string;
 };
+type Quote = {
+  id: number;
+  quoteNumber: string;
+  recipientName: string;
+  total: string;
+  currency: string;
+  status: string;
+};
 
 export function BillingPage({ api }: ModulePageProps) {
   const path = window.location.pathname;
@@ -43,6 +51,10 @@ export function BillingPage({ api }: ModulePageProps) {
     api,
     "modules.billing.dunning.list",
   );
+  const quotes = useModuleQuery<Quote[]>(
+    api,
+    "modules.billing.quotes.list",
+  );
   const [issuerName, setIssuerName] = useState("");
   const [prefix, setPrefix] = useState("");
   const [recipient, setRecipient] = useState("");
@@ -50,10 +62,21 @@ export function BillingPage({ api }: ModulePageProps) {
   const [amount, setAmount] = useState("100.00");
   const [selectedIssuer, setSelectedIssuer] = useState("");
   const [selectedInvoice, setSelectedInvoice] = useState("");
+  const [selectedQuote, setSelectedQuote] = useState("");
+  const [quoteIssuer, setQuoteIssuer] = useState("");
+  const [quoteOccurrenceId, setQuoteOccurrenceId] = useState("");
+  const [quoteRecipient, setQuoteRecipient] = useState("");
+  const [quoteAddress, setQuoteAddress] = useState("");
+  const [quoteEmail, setQuoteEmail] = useState("");
+  const [quoteValidUntil, setQuoteValidUntil] = useState("");
+  const [quoteDescription, setQuoteDescription] = useState("");
+  const [quoteQuantity, setQuoteQuantity] = useState("1.00");
+  const [quoteUnitPrice, setQuoteUnitPrice] = useState("100.00");
+  const [quoteNotes, setQuoteNotes] = useState("");
   const [message, setMessage] = useState("");
-  if ([issuers, invoices, dunning].some((query) => query.isLoading))
+  if ([issuers, invoices, dunning, quotes].some((query) => query.isLoading))
     return <Skeleton />;
-  if ([issuers, invoices, dunning].some((query) => query.error)) {
+  if ([issuers, invoices, dunning, quotes].some((query) => query.error)) {
     return <EmptyState title="Faktura-Daten konnten nicht geladen werden" />;
   }
   const runMutation = async (
@@ -96,6 +119,30 @@ export function BillingPage({ api }: ModulePageProps) {
       "Rechnung angelegt",
       "Rechnung konnte nicht angelegt werden",
       ["modules.billing.invoices.list"],
+    );
+  };
+  const createQuote = async (event: FormEvent) => {
+    event.preventDefault();
+    const occurrenceId = quoteOccurrenceId.trim();
+    const validUntil = quoteValidUntil.trim();
+    await runMutation(
+      () => api.mutate("modules.billing.quotes.create", {
+        issuerId: Number(quoteIssuer),
+        ...(occurrenceId ? { occurrenceId: Number(occurrenceId) } : {}),
+        recipientName: quoteRecipient,
+        ...(quoteAddress ? { recipientAddress: quoteAddress } : {}),
+        ...(quoteEmail ? { recipientEmail: quoteEmail } : {}),
+        ...(validUntil ? { validUntil } : {}),
+        ...(quoteNotes ? { notes: quoteNotes } : {}),
+        items: [{
+          description: quoteDescription,
+          quantity: quoteQuantity,
+          unitPrice: quoteUnitPrice,
+        }],
+      }),
+      "Angebot angelegt",
+      "Angebot konnte nicht angelegt werden",
+      ["modules.billing.quotes.list"],
     );
   };
   const issue = async () => {
@@ -144,6 +191,32 @@ export function BillingPage({ api }: ModulePageProps) {
       "Mahnlauf konnte nicht ausgeführt werden",
       ["modules.billing.invoices.list", "modules.billing.dunning.list"],
     );
+  };
+  const quoteAction = async (
+    operation: "send" | "accept" | "decline",
+    success: string,
+  ) => {
+    await runMutation(
+      () => api.mutate(`modules.billing.quotes.${operation}`, { id: Number(selectedQuote) }),
+      success,
+      "Angebot konnte nicht geändert werden",
+      ["modules.billing.quotes.list"],
+    );
+  };
+  const downloadQuotePdf = async () => {
+    await runMutation(async () => {
+      const result = await api.query<{ filename: string; base64: string }>(
+        "modules.billing.quotes.pdf",
+        { id: Number(selectedQuote) },
+      );
+      const bytes = Uint8Array.from(atob(result.base64), (char) => char.charCodeAt(0));
+      const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = result.filename;
+      link.click();
+      URL.revokeObjectURL(url);
+    }, "PDF heruntergeladen", "PDF konnte nicht erstellt werden", []);
   };
   return (
     <div className="stack">
@@ -279,6 +352,124 @@ export function BillingPage({ api }: ModulePageProps) {
           />
         </Card>
       )}
+      {(path === "/billing" || path === "/billing/quotes") && (
+        <Card>
+          <h2>Angebot anlegen</h2>
+          <form className="form-grid" onSubmit={createQuote}>
+            <select
+              className="ui-input"
+              required
+              value={quoteIssuer}
+              onChange={(event) => setQuoteIssuer(event.target.value)}
+            >
+              <option value="">Aussteller wählen</option>
+              {issuers.data?.map((issuer) => (
+                <option key={issuer.id} value={issuer.id}>
+                  {issuer.name}
+                </option>
+              ))}
+            </select>
+            <Input
+              type="number"
+              min="1"
+              placeholder="Fundstelle-ID (optional)"
+              value={quoteOccurrenceId}
+              onChange={(event) => setQuoteOccurrenceId(event.target.value)}
+            />
+            <Input
+              required
+              placeholder="Empfänger"
+              value={quoteRecipient}
+              onChange={(event) => setQuoteRecipient(event.target.value)}
+            />
+            <Input
+              placeholder="Adresse"
+              value={quoteAddress}
+              onChange={(event) => setQuoteAddress(event.target.value)}
+            />
+            <Input
+              type="email"
+              placeholder="E-Mail"
+              value={quoteEmail}
+              onChange={(event) => setQuoteEmail(event.target.value)}
+            />
+            <Input
+              type="date"
+              aria-label="Gültig bis"
+              value={quoteValidUntil}
+              onChange={(event) => setQuoteValidUntil(event.target.value)}
+            />
+            <Input
+              required
+              placeholder="Beschreibung"
+              value={quoteDescription}
+              onChange={(event) => setQuoteDescription(event.target.value)}
+            />
+            <Input
+              required
+              type="number"
+              min="0.01"
+              step="0.01"
+              placeholder="Menge"
+              value={quoteQuantity}
+              onChange={(event) => setQuoteQuantity(event.target.value)}
+            />
+            <Input
+              required
+              type="number"
+              min="0"
+              step="0.01"
+              placeholder="Einzelpreis"
+              value={quoteUnitPrice}
+              onChange={(event) => setQuoteUnitPrice(event.target.value)}
+            />
+            <textarea
+              className="ui-input"
+              placeholder="Anmerkung"
+              value={quoteNotes}
+              onChange={(event) => setQuoteNotes(event.target.value)}
+            />
+            <Button type="submit">Angebot anlegen</Button>
+          </form>
+          <h2>Angebote</h2>
+          <DataTable
+            rows={quotes.data ?? []}
+            columns={[
+              { key: "quoteNumber", label: "Nummer" },
+              { key: "recipientName", label: "Empfänger" },
+              { key: "total", label: "Summe" },
+              { key: "currency", label: "Währung" },
+              { key: "status", label: "Status" },
+            ]}
+          />
+          <select
+            className="ui-input"
+            value={selectedQuote}
+            onChange={(event) => setSelectedQuote(event.target.value)}
+          >
+            <option value="">Angebot wählen</option>
+            {quotes.data?.map((quote) => (
+              <option key={quote.id} value={quote.id}>
+                {quote.quoteNumber} · {quote.status}
+              </option>
+            ))}
+          </select>
+          <div className="row-actions">
+            <Button onClick={() => quoteAction("send", "Angebot versendet")}>
+              Versenden
+            </Button>
+            <Button onClick={() => quoteAction("accept", "Angebot angenommen")}>
+              Annehmen
+            </Button>
+            <Button onClick={() => quoteAction("decline", "Angebot abgelehnt")}>
+              Ablehnen
+            </Button>
+            <Button variant="secondary" onClick={downloadQuotePdf}>
+              PDF herunterladen
+            </Button>
+          </div>
+        </Card>
+      )}
     </div>
   );
 }
@@ -287,5 +478,6 @@ function title(path: string) {
   if (path.endsWith("/issuers")) return "Aussteller";
   if (path.endsWith("/invoices")) return "Rechnungen";
   if (path.endsWith("/dunning")) return "Mahnwesen";
+  if (path.endsWith("/quotes")) return "Angebote";
   return "Faktura";
 }

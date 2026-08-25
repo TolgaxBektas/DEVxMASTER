@@ -11,6 +11,7 @@ import { createDrizzleBillingRepository } from "./drizzle-repository.js";
 import { createBillingService } from "./service.js";
 import { billingPages, BillingPage } from "./ui/index.js";
 import { billingSchema } from "./schema.js";
+import type { Storage } from "@xmaster-center/integrations";
 
 export { billingPages } from "./ui/index.js";
 
@@ -29,6 +30,11 @@ export function createBillingModule(deps: {
     executor?: EventExecutor,
   ): Promise<unknown>;
   transaction<T>(callback: (db: unknown) => Promise<T>): Promise<T>;
+  resolveAdSource?(
+    tenantId: string,
+    occurrenceId: number,
+  ): Promise<{ imageKey: string | null; company: string } | null>;
+  storage?: Storage;
 }): ModuleDefinition {
   const service = createBillingService({
     repository: createDrizzleBillingRepository(deps.db),
@@ -38,7 +44,8 @@ export function createBillingModule(deps: {
     transaction: deps.transaction,
     eventExecutorFor: (db) => createDrizzleEventRepository(db),
     publish: deps.publish,
-    pdf: new PdfKitPdf(),
+    pdf: new PdfKitPdf(deps.storage ? (key) => deps.storage!.get(key) : undefined),
+    resolveAdSource: deps.resolveAdSource ?? (async () => null),
   });
   return defineModule({
     id: "billing",
@@ -70,6 +77,13 @@ export function createBillingModule(deps: {
         order: 30,
       },
       {
+        id: "billing.quotes",
+        label: "Angebote",
+        href: "/billing/quotes",
+        permission: "billing.quote.read",
+        order: 35,
+      },
+      {
         id: "billing.dunning",
         label: "Mahnwesen",
         href: "/billing/dunning",
@@ -94,6 +108,10 @@ export function createBillingModule(deps: {
       { permission: "billing.dunning.read", title: "Mahnungen lesen" },
       { permission: "billing.dunning.run", title: "Mahnlauf ausführen" },
       { permission: "billing.creditnote.write", title: "Gutschriften anlegen" },
+      { permission: "billing.quote.read", title: "Angebote lesen" },
+      { permission: "billing.quote.write", title: "Angebote anlegen" },
+      { permission: "billing.quote.send", title: "Angebote versenden" },
+      { permission: "billing.quote.accept", title: "Angebote annehmen" },
     ],
     jobs: [
       {
@@ -118,6 +136,10 @@ export function createBillingModule(deps: {
       { name: "invoice.overdue", direction: "published" },
       { name: "dunning.issued", direction: "published" },
       { name: "creditnote.created", direction: "published" },
+      { name: "quote.created", direction: "published" },
+      { name: "quote.sent", direction: "published" },
+      { name: "quote.accepted", direction: "published" },
+      { name: "quote.declined", direction: "published" },
     ],
     health: () => ({ id: "billing", status: "healthy" }),
   });

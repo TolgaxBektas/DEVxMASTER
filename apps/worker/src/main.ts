@@ -67,6 +67,21 @@ const billing = createBillingModule({
   audit,
   publish: (input, executor) => eventBus.publish(input, executor),
   transaction: (callback) => db.transaction(callback),
+  storage,
+  resolveAdSource: async (tenantId, occurrenceId) => {
+    try {
+      const occurrence = await createDrizzleIngestionRepository(db).getOccurrence(
+        tenantId,
+        occurrenceId,
+      );
+      return { imageKey: occurrence.imageKey ?? null, company: occurrence.company };
+    } catch (error) {
+      if (error instanceof Error && error.message === "Fundstelle nicht gefunden") {
+        return null;
+      }
+      throw error;
+    }
+  },
 });
 const ingestion = createIngestionModule({
   db,

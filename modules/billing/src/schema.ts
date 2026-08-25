@@ -26,6 +26,9 @@ export const issuers = mysqlTable(
     invoicePrefix: varchar("invoice_prefix", { length: 20 }).notNull(),
     nextNumber: int("next_number").default(1).notNull(),
     numberYear: int("number_year"),
+    quotePrefix: varchar("quote_prefix", { length: 20 }),
+    nextQuoteNumber: int("next_quote_number").default(1).notNull(),
+    quoteNumberYear: int("quote_number_year"),
     paymentTermDays: int("payment_term_days").default(14).notNull(),
     bankName: varchar("bank_name", { length: 255 }),
     iban: varchar("iban", { length: 50 }),
@@ -117,6 +120,71 @@ export const invoiceItems = mysqlTable(
   },
   (table) => ({
     invoiceIdx: index("billing_items_invoice_idx").on(table.invoiceId),
+  }),
+);
+
+export const quotes = mysqlTable(
+  "billing_quotes",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    tenantId: int("tenant_id").notNull(),
+    issuerId: int("issuer_id").notNull(),
+    customerId: int("customer_id"),
+    occurrenceId: int("occurrence_id"),
+    adImageKey: varchar("ad_image_key", { length: 1024 }),
+    quoteNumber: varchar("quote_number", { length: 64 }).notNull(),
+    status: mysqlEnum("status", ["draft", "sent", "accepted", "declined"])
+      .default("draft")
+      .notNull(),
+    currency: mysqlEnum("currency", currency).notNull(),
+    vatTreatment: mysqlEnum("vat_treatment", vatTreatment).notNull(),
+    subtotal: decimal("subtotal", { precision: 14, scale: 2 })
+      .default("0.00")
+      .notNull(),
+    vatRate: decimal("vat_rate", { precision: 5, scale: 2 })
+      .default("0.00")
+      .notNull(),
+    vatAmount: decimal("vat_amount", { precision: 14, scale: 2 })
+      .default("0.00")
+      .notNull(),
+    total: decimal("total", { precision: 14, scale: 2 })
+      .default("0.00")
+      .notNull(),
+    validUntil: timestamp("valid_until"),
+    recipientName: varchar("recipient_name", { length: 255 }).notNull(),
+    recipientAddress: text("recipient_address"),
+    recipientEmail: varchar("recipient_email", { length: 320 }),
+    invoiceId: int("invoice_id"),
+    notes: text("notes"),
+    metadata: json("metadata"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => ({
+    tenantIdx: index("billing_quotes_tenant_idx").on(table.tenantId),
+    numberUnique: uniqueIndex("billing_quote_number_uq").on(
+      table.tenantId,
+      table.quoteNumber,
+    ),
+  }),
+);
+
+export const quoteItems = mysqlTable(
+  "billing_quote_items",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    quoteId: int("quote_id").notNull(),
+    position: int("position").notNull(),
+    description: varchar("description", { length: 500 }).notNull(),
+    quantity: decimal("quantity", { precision: 12, scale: 2 }).notNull(),
+    unitPrice: decimal("unit_price", { precision: 14, scale: 2 }).notNull(),
+    amount: decimal("amount", { precision: 14, scale: 2 }).notNull(),
+    commissionRate: decimal("commission_rate", { precision: 5, scale: 2 }),
+    customerId: int("customer_id"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    quoteIdx: index("billing_items_quote_idx").on(table.quoteId),
   }),
 );
 
@@ -212,6 +280,8 @@ export const billingSchema = {
   issuers,
   invoices,
   invoiceItems,
+  quotes,
+  quoteItems,
   payments,
   dunningLevels,
   dunningLog,
