@@ -98,6 +98,13 @@ export type IngestionOccurrence = {
   confidence?: number | null;
   bbox?: Record<string, number> | null;
   evidence?: string[] | null;
+  contacts?: {
+    phone: string | null;
+    email: string | null;
+    website: string | null;
+    postalCode: string | null;
+    city: string | null;
+  } | null;
 };
 export type OccurrenceReviewResult = {
   occurrence: IngestionOccurrence;
@@ -169,6 +176,13 @@ export type IngestionRepository = {
         evidence?: string[];
         company: string;
         preview: string;
+        contacts?: {
+          phone: string | null;
+          email: string | null;
+          website: string | null;
+          postalCode: string | null;
+          city: string | null;
+        } | null;
       }>;
     }>,
   ): Promise<IngestionOccurrence[]>;

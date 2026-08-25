@@ -4,7 +4,13 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 
 from app.core.config import settings
-from app.services.processor import extract_pdf_metadata, heuristic_ad_regions, render_ad_crop, render_and_extract
+from app.services.processor import (
+    extract_contacts,
+    extract_pdf_metadata,
+    heuristic_ad_regions,
+    render_ad_crop,
+    render_and_extract,
+)
 from app.services.storage import storage
 from app.services.downloader import download_pdf, DownloadError
 from app.api.routes import require_service_token
@@ -72,6 +78,7 @@ async def process_upload(
                     "evidence": region.get("evidence", []),
                     "company": _company_from_text(ad_text),
                     "preview": ad_text[:1000],
+                    "contacts": extract_contacts(ad_text),
                 }
             )
         result.append(

@@ -22,6 +22,18 @@ function readBbox(value: unknown): Record<string, number> | null {
   return Object.fromEntries(keys.map((key) => [key, record[key] as number])) as Record<string, number>;
 }
 
+function readContacts(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  return {
+    phone: typeof record.phone === "string" ? record.phone : null,
+    email: typeof record.email === "string" ? record.email : null,
+    website: typeof record.website === "string" ? record.website : null,
+    postalCode: typeof record.postalCode === "string" ? record.postalCode : null,
+    city: typeof record.city === "string" ? record.city : null,
+  };
+}
+
 export function createDrizzleIngestionRepository(db: unknown): IngestionRepository {
   const database = db as IngestionDb;
   const toDocument = <T extends Omit<IngestionDocument, "tenantId" | "classification" | "actualityStatus" | "actualitySource" | "actualityDecidedAt" | "actualityDecidedBy"> & { tenantId: number }>(
@@ -306,6 +318,7 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
         ...(pageNumber == null ? {} : { pageNumber }),
         bbox: readBbox(occurrence.bbox),
         evidence: Array.isArray(occurrence.evidence) ? occurrence.evidence as string[] : [],
+        contacts: readContacts(occurrence.contacts),
       }));
     },
     async getOccurrence(tenantId, occurrenceId) {
@@ -318,6 +331,7 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
         ...row,
         bbox: readBbox(row.bbox),
         evidence: Array.isArray(row.evidence) ? row.evidence as string[] : [],
+        contacts: readContacts(row.contacts),
       } as never;
     },
     async reviewOccurrence(tenantId, occurrenceId, status) {
@@ -437,6 +451,7 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
             imageKey: occurrence.imageKey,
             confidence: occurrence.confidence,
             evidence: occurrence.evidence ?? [],
+            contacts: occurrence.contacts ?? null,
           });
           created.push({
             id: Number(occurrenceRow[0]?.insertId),
@@ -454,6 +469,7 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
             imageKey: occurrence.imageKey,
             confidence: occurrence.confidence,
             evidence: occurrence.evidence ?? [],
+            contacts: occurrence.contacts ?? null,
           });
         }
       }

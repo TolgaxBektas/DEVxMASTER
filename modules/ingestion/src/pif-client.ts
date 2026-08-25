@@ -54,6 +54,13 @@ export function createPifProcessor(input: {
           evidence?: string[];
           company: string;
           preview: string;
+          contacts?: {
+            phone?: string | null;
+            email?: string | null;
+            website?: string | null;
+            postal_code?: string | null;
+            city?: string | null;
+          };
         }>;
         title_candidates?: Array<{ text: string; size: number }>;
       }>;
@@ -72,6 +79,13 @@ export function createPifProcessor(input: {
         evidence: occurrence.evidence ?? [],
         company: occurrence.company,
         preview: occurrence.preview,
+        contacts: {
+          phone: occurrence.contacts?.phone ?? null,
+          email: occurrence.contacts?.email ?? null,
+          website: occurrence.contacts?.website ?? null,
+          postalCode: occurrence.contacts?.postal_code ?? null,
+          city: occurrence.contacts?.city ?? null,
+        },
       })),
     }));
     Object.defineProperty(pages, "pdfMetadata", {
