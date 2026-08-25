@@ -3,7 +3,7 @@ import Busboy from "busboy";
 import { createHash } from "node:crypto";
 import { PassThrough } from "node:stream";
 import archiver from "archiver";
-import * as ExcelJS from "exceljs";
+import ExcelJS from "exceljs";
 import type { Storage } from "@xmaster-center/integrations";
 import {
   appendAudit,
@@ -15,6 +15,7 @@ import {
 } from "@xmaster-center/kernel";
 import type { IngestionDocument, IngestionRepository } from "./repository.js";
 import type { PifReviewClient } from "./review-client.js";
+import { evidenceLabel } from "./evidence-labels.js";
 
 type AuthenticatedRequest = Request & {
   auth?: { tenantId: string; userId: string; displayName: string; permissions: ReadonlySet<string> } | null;
@@ -258,7 +259,7 @@ export async function buildOccurrenceExportRows(
           document.actualityStatus,
           occurrence.status,
           occurrence.confidence ?? "",
-          (occurrence.evidence ?? []).join(", "),
+          (occurrence.evidence ?? []).map(evidenceLabel).join(", "),
           occurrence.preview,
           imageKey ?? "",
           occurrence.id,

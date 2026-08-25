@@ -21,6 +21,7 @@ import { documentActualityStatus } from "./actuality.js";
 import { publishCurrentActualityTransition } from "./actuality-replay.js";
 import { ingestionPages, IngestionPage, OccurrencesPage, ReviewPage } from "./ui/index.js";
 import type { PifReviewClient } from "./review-client.js";
+import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 
 export type AdBoundingBox = {
   x: number;
@@ -105,6 +106,21 @@ type WatchFolderScanDependencies = {
   }) => Promise<unknown>;
 };
 
+async function validateReadablePdf(bytes: Buffer) {
+  const loadingTask = getDocument({ data: new Uint8Array(bytes) });
+  try {
+    const document = await loadingTask.promise;
+    if (document.numPages < 1) {
+      throw new Error("PDF enthält keine Seite");
+    }
+    await document.getPage(1);
+  } catch (error) {
+    throw new Error("PDF ist nicht lesbar", { cause: error });
+  } finally {
+    await loadingTask.destroy().catch(() => undefined);
+  }
+}
+
 async function moveWatchFile(
   sourcePath: string,
   folderPath: string,
@@ -155,6 +171,7 @@ export async function scanWatchFolder(deps: WatchFolderScanDependencies) {
       if (!bytes.subarray(0, 5).equals(Buffer.from("%PDF-"))) {
         throw new Error("Keine gültige PDF-Datei");
       }
+      await validateReadablePdf(bytes);
       const result = await deps.persist({
         tenantId: deps.tenantId,
         userId: null,

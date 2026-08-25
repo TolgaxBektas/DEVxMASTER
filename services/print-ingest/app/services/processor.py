@@ -15,16 +15,36 @@ PHONE_SIGNALS = re.compile(
 )
 EMAIL_SIGNAL = re.compile(r"\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b", re.I)
 WEBSITE_SIGNAL = re.compile(
-    r"(?<![@\w])(?:"
+    r"(?<![@\w.])(?:"
     r"(?:https?://|www\.)[a-z0-9-]+(?:\.[a-z0-9-]+)+"
-    r"|[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:de|com|net|org|eu|info|at|ch)"
+    r"|[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:de|com|net|org|eu|info|at|ch)\b"
     r")(?:/[^\s<>,;)]*)?",
     re.I,
 )
 POSTCODE_LOCATION_SIGNAL = re.compile(
     r"\b(?P<postal_code>\d{5})\s+"
-    r"(?P<city>[A-ZÄÖÜ][\wÄÖÜäöüß.-]*(?:\s+[A-ZÄÖÜ][\wÄÖÜäöüß.-]*){0,3})\b",
+    r"(?P<city>[A-ZÄÖÜ][\wÄÖÜäöüß.-]*(?:\s+[A-ZÄÖÜ][\wÄÖÜäöüß.-]*){0,2})\b",
 )
+LOCATION_STOPWORDS = {
+    "tel",
+    "telefon",
+    "fon",
+    "fax",
+    "foto",
+    "e-mail",
+    "mail",
+    "öffnungszeiten",
+    "internet",
+    "web",
+    "t",
+    "f",
+    "m",
+    "ihr",
+    "ihre",
+    "unser",
+    "unsere",
+    "wir",
+}
 ADVERTISER_SIGNALS = re.compile(r'\b[\wÄÖÜäöüß&.-]+\s+(?:GmbH|AG|KG|e\.V\.)\b', re.I)
 EDITORIAL_SIGNALS = re.compile(
     r'\b(?:impressum|herausgeber|verantwortlich|redaktion|bekanntmachung|anlage|amtliche\s+mitteilung)\b',
@@ -226,16 +246,60 @@ def _has_phone(text):
     return bool(PHONE_SIGNALS.search(text))
 
 
+def _extract_location_candidate(match):
+    city_words = []
+    last_word_end = None
+    for word_match in re.finditer(r"\S+", match.group("city")):
+        word = word_match.group(0)
+        normalized_word = word.strip(".,:;·|()[]{}").casefold()
+        if normalized_word in LOCATION_STOPWORDS:
+            break
+        city_words.append(word)
+        last_word_end = word_match.end()
+    if not city_words or last_word_end is None:
+        return None
+    return {
+        "postal_code": match.group("postal_code"),
+        "city": " ".join(city_words),
+        "span": (
+            match.start("postal_code"),
+            match.start("city") + last_word_end,
+        ),
+    }
+
+
 def extract_contacts(text):
     phone_match = PHONE_SIGNALS.search(text)
     phone = phone_match.group(0).strip() if phone_match else None
     if phone:
         phone = re.sub(r"^(?:tel(?:efon)?|fon|ruf)\b\s*[:.]?\s*", "", phone, flags=re.I)
-    email_match = EMAIL_SIGNAL.search(text)
-    website_match = WEBSITE_SIGNAL.search(text)
-    location_match = POSTCODE_LOCATION_SIGNAL.search(text)
-    postal_code = location_match.group("postal_code") if location_match else None
-    city = location_match.group("city") if location_match else None
+    email_matches = list(EMAIL_SIGNAL.finditer(text))
+    email_match = email_matches[0] if email_matches else None
+    email_spans = [match.span() for match in email_matches]
+    website_match = next(
+        (
+            match
+            for match in WEBSITE_SIGNAL.finditer(text)
+            if not any(
+                match.start() < end and match.end() > start
+                for start, end in email_spans
+            )
+        ),
+        None,
+    )
+    phone_spans = [match.span() for match in PHONE_SIGNALS.finditer(text)]
+    location_match = None
+    for raw_location_match in POSTCODE_LOCATION_SIGNAL.finditer(text):
+        candidate = _extract_location_candidate(raw_location_match)
+        if candidate is None:
+            continue
+        start, end = candidate["span"]
+        if any(start < phone_end and end > phone_start for phone_start, phone_end in phone_spans):
+            continue
+        location_match = candidate
+        break
+    postal_code = location_match["postal_code"] if location_match else None
+    city = location_match["city"] if location_match else None
     return {
         "phone": phone,
         "email": email_match.group(0) if email_match else None,
