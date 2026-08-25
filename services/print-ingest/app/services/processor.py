@@ -246,6 +246,28 @@ def _has_phone(text):
     return bool(PHONE_SIGNALS.search(text))
 
 
+def _extract_location_candidate(match):
+    city_words = []
+    last_word_end = None
+    for word_match in re.finditer(r"\S+", match.group("city")):
+        word = word_match.group(0)
+        normalized_word = word.strip(".,:;·|()[]{}").casefold()
+        if normalized_word in LOCATION_STOPWORDS:
+            break
+        city_words.append(word)
+        last_word_end = word_match.end()
+    if not city_words or last_word_end is None:
+        return None
+    return {
+        "postal_code": match.group("postal_code"),
+        "city": " ".join(city_words),
+        "span": (
+            match.start("postal_code"),
+            match.start("city") + last_word_end,
+        ),
+    }
+
+
 def extract_contacts(text):
     phone_match = PHONE_SIGNALS.search(text)
     phone = phone_match.group(0).strip() if phone_match else None
@@ -266,27 +288,18 @@ def extract_contacts(text):
         None,
     )
     phone_spans = [match.span() for match in PHONE_SIGNALS.finditer(text)]
-    location_match = next(
-        (
-            match
-            for match in POSTCODE_LOCATION_SIGNAL.finditer(text)
-            if not any(
-                match.start() < end and match.end() > start
-                for start, end in phone_spans
-            )
-        ),
-        None,
-    )
-    postal_code = location_match.group("postal_code") if location_match else None
-    city = None
-    if location_match:
-        city_words = []
-        for word in location_match.group("city").split():
-            normalized_word = word.strip(".,:;·|()[]{}").casefold()
-            if normalized_word in LOCATION_STOPWORDS:
-                break
-            city_words.append(word)
-        city = " ".join(city_words) or None
+    location_match = None
+    for raw_location_match in POSTCODE_LOCATION_SIGNAL.finditer(text):
+        candidate = _extract_location_candidate(raw_location_match)
+        if candidate is None:
+            continue
+        start, end = candidate["span"]
+        if any(start < phone_end and end > phone_start for phone_start, phone_end in phone_spans):
+            continue
+        location_match = candidate
+        break
+    postal_code = location_match["postal_code"] if location_match else None
+    city = location_match["city"] if location_match else None
     return {
         "phone": phone,
         "email": email_match.group(0) if email_match else None,

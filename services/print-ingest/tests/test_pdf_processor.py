@@ -67,6 +67,20 @@ def test_extract_contacts_ignores_postcode_inside_phone_but_keeps_address():
     assert contacts["city"] == "Untergriesbach"
 
 
+def test_extract_contacts_trims_location_before_phone_overlap_check():
+    cases = [
+        ("… 94072 Bad Füssing Tel. 08531 972-0 …", "94072", "Bad Füssing"),
+        ("… 94032 Passau Tel. 0851 851 93 33 0 …", "94032", "Passau"),
+        ("… 94086 Bad Griesbach Tel. 08532/96180", "94086", "Bad Griesbach"),
+        ("… 94116 Hutthurm T 08505 917-0 …", "94116", "Hutthurm"),
+        ("Hauzenberg: 08586 - 97093 Untergriesbach", None, None),
+    ]
+    for text, postal_code, city in cases:
+        contacts = extract_contacts(text)
+        assert contacts["postal_code"] == postal_code
+        assert contacts["city"] == city
+
+
 def test_extract_contacts_handles_variable_location_whitespace():
     contacts = extract_contacts("12345\nMusterstadt")
     assert contacts["postal_code"] == "12345"
