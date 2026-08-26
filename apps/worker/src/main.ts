@@ -67,6 +67,21 @@ const billing = createBillingModule({
   audit,
   publish: (input, executor) => eventBus.publish(input, executor),
   transaction: (callback) => db.transaction(callback),
+  storage,
+  resolveAdSource: async (tenantId, occurrenceId) => {
+    try {
+      const occurrence = await createDrizzleIngestionRepository(db).getOccurrence(
+        tenantId,
+        occurrenceId,
+      );
+      return { imageKey: occurrence.imageKey ?? null, company: occurrence.company };
+    } catch (error) {
+      if (error instanceof Error && error.message === "Fundstelle nicht gefunden") {
+        return null;
+      }
+      throw error;
+    }
+  },
 });
 const ingestion = createIngestionModule({
   db,
@@ -102,6 +117,9 @@ const ingestion = createIngestionModule({
     return { bytes, filename };
   },
   publish: (input) => eventBus.publish(input),
+  ...(env.INGESTION_WATCH_FOLDER?.trim()
+    ? { watchFolderPath: env.INGESTION_WATCH_FOLDER }
+    : {}),
 });
 const assistant = createAssistantModule({
   briefing: async () => ({
@@ -154,8 +172,8 @@ const dispatchLoop = async () => {
   }
 };
 console.log("[worker] starting job loop and event dispatcher");
-scheduler.start(
-  [...registry.jobs.values()]
+const schedules = [
+  ...[...registry.jobs.values()]
     .filter((job) => job.schedule === "daily")
     .map((job) => ({
       name: job.name,
@@ -164,7 +182,19 @@ scheduler.start(
       // Scheduled runs currently cover only the first tenant.
       payload: {},
     })),
-);
+  ...(env.INGESTION_WATCH_FOLDER?.trim()
+    ? [...registry.jobs.values()]
+      .filter((job) => job.schedule === "frequent")
+      .map((job) => ({
+        name: job.name,
+        intervalMs: env.INGESTION_WATCH_INTERVAL_SECONDS * 1_000,
+        tenantId: "1",
+        // Scheduled runs currently cover only the first tenant.
+        payload: {},
+      }))
+    : []),
+];
+scheduler.start(schedules);
 void worker.run({
   workerId: `worker-${process.pid}`,
   signal: abort.signal,

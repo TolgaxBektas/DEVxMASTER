@@ -7,6 +7,8 @@ import {
   type ModuleDefinition,
 } from "@xmaster-center/kernel";
 import type { Storage } from "@xmaster-center/integrations";
+import { mkdir, readFile, readdir, rename, stat } from "node:fs/promises";
+import { join, parse } from "node:path";
 import { ingestionSchema } from "./schema.js";
 import { createIngestionRouter } from "./router.js";
 import { MemoryIngestionRepository } from "./memory-repository.js";
@@ -19,6 +21,7 @@ import { documentActualityStatus } from "./actuality.js";
 import { publishCurrentActualityTransition } from "./actuality-replay.js";
 import { ingestionPages, IngestionPage, OccurrencesPage, ReviewPage } from "./ui/index.js";
 import type { PifReviewClient } from "./review-client.js";
+import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 
 export type AdBoundingBox = {
   x: number;
@@ -42,7 +45,15 @@ export type ProcessedPage = {
     evidence: string[];
     company: string;
     preview: string;
+    contacts?: OccurrenceContacts;
   }>;
+};
+export type OccurrenceContacts = {
+  phone: string | null;
+  email: string | null;
+  website: string | null;
+  postalCode: string | null;
+  city: string | null;
 };
 
 type JobContext = { job: { tenantId: string | null } };
@@ -69,6 +80,130 @@ function jobTenantId(context: unknown) {
 function jobDocumentId(payload: unknown) {
   const documentId = (payload as { documentId?: unknown }).documentId;
   return typeof documentId === "number" ? documentId : null;
+}
+
+type WatchFolderPersistInput = {
+  tenantId: string;
+  userId: string | null;
+  displayName: string;
+  bytes: Buffer;
+  filename: string;
+  origin: string;
+};
+
+type WatchFolderScanDependencies = {
+  folderPath: string;
+  tenantId: string;
+  observations: Map<string, { size: number; observations: number }>;
+  persist: (input: WatchFolderPersistInput) => Promise<{
+    document: { id: number };
+    deduplicated: boolean;
+  }>;
+  enqueue: (input: {
+    name: string;
+    tenantId: string;
+    payload: unknown;
+  }) => Promise<unknown>;
+};
+
+async function validateReadablePdf(bytes: Buffer) {
+  const loadingTask = getDocument({ data: new Uint8Array(bytes) });
+  try {
+    const document = await loadingTask.promise;
+    if (document.numPages < 1) {
+      throw new Error("PDF enthält keine Seite");
+    }
+    await document.getPage(1);
+  } catch (error) {
+    throw new Error("PDF ist nicht lesbar", { cause: error });
+  } finally {
+    await loadingTask.destroy().catch(() => undefined);
+  }
+}
+
+async function moveWatchFile(
+  sourcePath: string,
+  folderPath: string,
+  bucket: "erfolgreich" | "bereits-vorhanden" | "fehlerhaft",
+  filename: string,
+) {
+  const destinationFolder = join(folderPath, bucket);
+  await mkdir(destinationFolder, { recursive: true });
+  const parsed = parse(filename);
+  let destination = join(destinationFolder, filename);
+  try {
+    await stat(destination);
+    destination = join(
+      destinationFolder,
+      `${parsed.name}-${Date.now()}${parsed.ext}`,
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  await rename(sourcePath, destination);
+}
+
+export async function scanWatchFolder(deps: WatchFolderScanDependencies) {
+  const folderPath = deps.folderPath.trim();
+  if (!folderPath) return;
+  let entries;
+  try {
+    await mkdir(folderPath, { recursive: true });
+    entries = await readdir(folderPath, { withFileTypes: true });
+  } catch (error) {
+    console.error("[ingestion] Überwachungsordner konnte nicht gelesen werden", error);
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.isFile() || !/\.pdf$/i.test(entry.name)) continue;
+    const sourcePath = join(folderPath, entry.name);
+    try {
+      const fileStats = await stat(sourcePath);
+      const previous = deps.observations.get(sourcePath);
+      if (!previous || previous.size !== fileStats.size) {
+        deps.observations.set(sourcePath, { size: fileStats.size, observations: 1 });
+        continue;
+      }
+      if (previous.observations < 2) previous.observations += 1;
+      if (previous.observations < 2) continue;
+
+      const bytes = await readFile(sourcePath);
+      if (!bytes.subarray(0, 5).equals(Buffer.from("%PDF-"))) {
+        throw new Error("Keine gültige PDF-Datei");
+      }
+      await validateReadablePdf(bytes);
+      const result = await deps.persist({
+        tenantId: deps.tenantId,
+        userId: null,
+        displayName: "Ingestion-Worker",
+        bytes,
+        filename: entry.name,
+        origin: "folder",
+      });
+      if (!result.deduplicated) {
+        await deps.enqueue({
+          name: "ingestion.processing.run",
+          tenantId: deps.tenantId,
+          payload: { documentId: result.document.id },
+        });
+      }
+      await moveWatchFile(
+        sourcePath,
+        folderPath,
+        result.deduplicated ? "bereits-vorhanden" : "erfolgreich",
+        entry.name,
+      );
+      deps.observations.delete(sourcePath);
+    } catch (error) {
+      console.error(`[ingestion] Datei aus Überwachungsordner fehlgeschlagen: ${entry.name}`, error);
+      try {
+        await moveWatchFile(sourcePath, folderPath, "fehlerhaft", entry.name);
+      } catch (moveError) {
+        console.error(`[ingestion] Fehlerdatei konnte nicht verschoben werden: ${entry.name}`, moveError);
+      }
+      deps.observations.delete(sourcePath);
+    }
+  }
 }
 
 export function createIngestionModule(deps: {
@@ -104,10 +239,12 @@ export function createIngestionModule(deps: {
   }>>;
   reviewClient?: PifReviewClient;
   reviewTenantId?: string;
+  watchFolderPath?: string;
 }): ModuleDefinition {
   const repository = deps.repository ?? (deps.db
     ? createDrizzleIngestionRepository(deps.db)
     : new MemoryIngestionRepository());
+  const watchObservations = new Map<string, { size: number; observations: number }>();
   return defineModule({
     id: "ingestion",
     title: "Dokumente",
@@ -239,6 +376,34 @@ export function createIngestionModule(deps: {
             });
             throw error;
           }
+        },
+      },
+      {
+        name: "ingestion.watchfolder.scan",
+        schedule: "frequent",
+        handle: async (_payload, context) => {
+          const tenantId = jobTenantId(context);
+          if (!deps.watchFolderPath?.trim()) return;
+          await scanWatchFolder({
+            folderPath: deps.watchFolderPath,
+            tenantId,
+            observations: watchObservations,
+            persist: (input) => persistDocumentBytes({
+              db: deps.db,
+              repository,
+              ...(deps.repositoryForTransaction
+                ? { repositoryFor: deps.repositoryForTransaction }
+                : {}),
+              storage: deps.storage!,
+              audit: deps.audit!,
+              auditFor: (db) => createDrizzleAuditRepository(db),
+              transaction: deps.transaction!,
+              publish: deps.publish,
+              enqueue: deps.enqueue!,
+              maxUploadBytes: 250 * 1024 * 1024,
+            }, input),
+            enqueue: (input) => deps.enqueue!(input),
+          });
         },
       },
       {

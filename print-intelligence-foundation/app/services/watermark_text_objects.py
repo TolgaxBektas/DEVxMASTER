@@ -402,13 +402,17 @@ def _clean_page(
 
 def _measured_page_bounds(text, evidence, used):
     compact = re.sub(r"\s+", "", text).casefold()
-    marker_counts = {}
+    required_counts = {}
     for item in evidence:
         marker = re.sub(r"\s+", "", item.get("marker", "")).casefold()
-        if marker:
-            marker_counts[marker] = compact.count(marker)
+        count = compact.count(marker) if marker else 0
+        if count:
+            required_counts[marker] = count
+    if not required_counts:
+        return None
+
     matches = []
-    for marker, count in marker_counts.items():
+    for marker, count in required_counts.items():
         taken = 0
         for index, item in enumerate(evidence):
             if index in used:

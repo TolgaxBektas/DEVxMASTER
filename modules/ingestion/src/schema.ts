@@ -88,6 +88,7 @@ export const occurrences = mysqlTable("ingestion_occurrences", {
   imageKey: varchar("image_key", { length: 1024 }),
   confidence: float("confidence"),
   evidence: json("evidence"),
+  contacts: json("contacts"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 export const ingestionSchema = { sources, documents, classifications, pages, occurrences };

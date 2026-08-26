@@ -9,6 +9,9 @@ export type Issuer = {
   invoicePrefix: string;
   nextNumber: number;
   numberYear: number | null;
+  quotePrefix: string | null;
+  nextQuoteNumber: number;
+  quoteNumberYear: number | null;
   paymentTermDays: number;
   bankName: string | null;
   iban: string | null;
@@ -34,6 +37,46 @@ export type InvoiceItem = {
   unitPrice: string;
   amount: string;
   commissionRate: string | null;
+};
+
+export type QuoteStatus = "draft" | "sent" | "accepted" | "declined";
+
+export type QuoteItem = {
+  id: number;
+  quoteId: number;
+  position: number;
+  description: string;
+  quantity: string;
+  unitPrice: string;
+  amount: string;
+  commissionRate: string | null;
+  customerId?: number | null;
+};
+
+export type Quote = {
+  id: number;
+  tenantId: string;
+  issuerId: number;
+  customerId: number | null;
+  occurrenceId: number | null;
+  adImageKey: string | null;
+  quoteNumber: string;
+  status: QuoteStatus;
+  currency: Currency;
+  vatTreatment: "RC" | "VAT19" | "VAT0";
+  subtotal: string;
+  vatRate: string;
+  vatAmount: string;
+  total: string;
+  validUntil: Date | null;
+  recipientName: string;
+  recipientAddress: string | null;
+  recipientEmail: string | null;
+  invoiceId: number | null;
+  notes: string | null;
+  metadata: Record<string, unknown> | null;
+  createdAt?: Date;
+  updatedAt?: Date;
 };
 
 export type Invoice = {

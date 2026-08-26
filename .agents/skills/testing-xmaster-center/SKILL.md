@@ -322,3 +322,59 @@ same tenant must answer „Bereits vorhanden“ and create no extra row/occurren
   (`python3 -c "import json;d=json.load(open('starnberg.json'));print(d['pages'][0]['text'][:400])"`).
   Example seen: place `Gilching` at 90 % taken from a single building-permit notice in a
   Landkreis-Starnberg Amtsblatt.
+
+## Excel-Paket der Fundstellen (`/ingestion/occurrences` → „Als Excel-Paket herunterladen“)
+- Route `GET /api/ingestion/occurrences/export` (permission `ingestion.occurrence.read`) returns a ZIP with
+  `anzeigen.xlsx` plus `bilder/`. Evaluate it programmatically instead of by eye: `pip install openpyxl`,
+  then unzip and read sheet `Anzeigen` — check the 17 headers in order, one row per occurrence, and that
+  every non-empty `Bilddatei` cell has a matching archive entry and no image is orphaned.
+- Also open the sheet once visually with `localc anzeigen.xlsx` (LibreOffice) as evidence that Excel can
+  read it; the earlier regression was a runtime HTTP 500, which only a real download exposes.
+- Distinguish crop from page by reading the PNG IHDR (`python3 -c "import struct,sys;d=open(p,'rb').read(33);print(struct.unpack('>II',d[16:24]))"`):
+  ad crops are e.g. 2658×2308 / 2174×615, rendered pages 1595×1489.
+- An unfiltered full export can exceed 300 MB — delete it afterwards. Chrome asks for a filename on the
+  second download in a session, so expect the save dialog. A page reload resets the status filter to
+  „Alle Fundstellen“, and the filter is passed through to the export, so re-select it before downloading.
+- Missing storage object: delete it with
+  `AWS_ACCESS_KEY_ID=minioadmin AWS_SECRET_ACCESS_KEY=minioadmin aws --endpoint-url http://127.0.0.1:9000 s3 rm s3://xmaster-center/<key>`
+  — the export must still succeed with an EMPTY `Bilddatei` cell (never a dangling path). Restore with `s3 cp`.
+- Contact columns (`Telefon`, `E-Mail`, `Website`, `PLZ/Ort`) are derived in
+  `services/print-ingest/app/services/processor.py` from the AD text only. Cheap machine check over the whole
+  export: every contact value must literally occur in the `Anzeigentext` cell of the SAME row. Known trap
+  classes worth re-probing: e-mail domains leaking into `Website`, telephone-line remnants in the city
+  (`94116 Hutthurm T`), and five-digit phone fragments read as a postcode (`08586 - 97093`).
+- After changing print-ingest, rebuild/restart that service AND reprocess the affected document — existing
+  `ingestion_occurrences.contacts` rows keep the old values and a re-export alone proves nothing.
+
+## Überwachungsordner (`INGESTION_WATCH_FOLDER`)
+- Worker job `ingestion.watchfolder.scan` (schedule `frequent`) moves files to `erfolgreich/`,
+  `bereits-vorhanden/` or `fehlerhaft/`. A file must survive two scans with a stable size, so wait out at
+  least two intervals before judging.
+- The sharp fixture is a HALF-COPIED PDF (`head -c` of a real file): it has the `%PDF-` header and a stable
+  size, and must land in `fehlerhaft/` with `PDF ist nicht lesbar` in the worker log and NO document row —
+  a stray empty document with 0 pages/0 occurrences is the regression. Always fixture a valid PDF in the
+  same round to prove one failure does not stop the others.
+
+## Angebote (Quotes, `/billing/quotes`) — testing notes
+- After migrating a fresh DB you MUST re-run `scripts/seed.ts`: the quote permissions
+  (`billing.quote.read|write|send|accept`) come from the seed's hard-coded list, so a migrate-only
+  database leaves `/billing/quotes` erroring with a permission failure.
+- Start the MinIO container (`docker start xmaster-center-minio`) before testing the quote PDF —
+  without storage the restored ad cannot be loaded and every PDF falls back to
+  `Anzeigenbild nicht verfügbar`, which looks like a code defect.
+- Pick fixtures from `select id, image_key from ingestion_occurrences` — one row WITH and one
+  WITHOUT `image_key` covers both PDF paths (embedded image vs. the German fallback line).
+- PDF assertions with `poppler-utils`: `pdfimages -list` (exactly one raster image, aspect ratio must
+  match the source PNG), `pdftotext -layout` (line texts), `pdftotext -bbox` plus `pdftoppm -r 150`
+  and a pixel measurement of the rendered page to check column edges against the table rule —
+  a column can overflow the rule while nothing is visibly clipped. PDFKit defaults to US Letter
+  (612×792), so always assert the page box is A4 (595.28×841.89) too.
+- Idempotency of `acceptQuote` is enforced in the DB (`SELECT ... FOR UPDATE` plus
+  `billing_quotes.invoice_id`), so test it for real: double-click `Annehmen` and click it again
+  afterwards, then count `billing_invoices` — exactly one new draft, and compare its items to the
+  quote's items.
+- Domain errors from billing quote routes arrive as tRPC `BAD_REQUEST` with the German message
+  (`Fundstelle nicht gefunden`, `Nur versendete Angebote können angenommen werden`); if the UI shows
+  `Interner Serverfehler` instead, the error mapping in `modules/billing/src/router.ts` regressed.
+- Known display gap: after accepting a quote the invoice list is only refreshed after `F5`
+  (the client invalidates `quotes.list` only) — not a data defect.

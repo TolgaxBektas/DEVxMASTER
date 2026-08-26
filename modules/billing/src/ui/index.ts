@@ -9,5 +9,6 @@ export const billingPages = [
     "/billing/invoices",
     "billing.invoice.read",
   ],
+  ["billing.quotes", "Angebote", "/billing/quotes", "billing.quote.read"],
   ["billing.dunning", "Mahnwesen", "/billing/dunning", "billing.dunning.read"],
 ] as const;

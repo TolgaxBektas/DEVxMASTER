@@ -242,6 +242,13 @@ export class MemoryIngestionRepository implements IngestionRepository {
       evidence: string[];
       company: string;
       preview: string;
+      contacts?: {
+        phone: string | null;
+        email: string | null;
+        website: string | null;
+        postalCode: string | null;
+        city: string | null;
+      } | null;
     }>;
   }>) {
     const document = await this.getDocument(tenantId, documentId);
@@ -268,6 +275,7 @@ export class MemoryIngestionRepository implements IngestionRepository {
       imageKey: item.imageKey,
       confidence: item.confidence,
       evidence: item.evidence ?? [],
+      contacts: item.contacts ?? null,
     };
     }));
     this.occurrences.push(...created);

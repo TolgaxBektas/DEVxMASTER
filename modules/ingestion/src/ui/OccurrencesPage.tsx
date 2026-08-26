@@ -9,6 +9,9 @@ import {
   useModuleQuery,
   type ModulePageProps,
 } from "@xmaster-center/ui";
+import { evidenceLabel } from "../evidence-labels.js";
+
+export { evidenceLabel } from "../evidence-labels.js";
 
 type Occurrence = {
   id: number;
@@ -22,22 +25,31 @@ type Occurrence = {
 
 type ImageState = "loading" | "loaded" | "missing";
 
-const evidenceLabels: Record<string, string> = {
-  geometry: "Materielle Fläche",
-  logo: "Logo/Signet",
-  contact: "Telefonkontakt",
-  "page-dominant": "Ganzseitige Fläche",
-  "publisher-marking": "Verlagsvermerk „Anzeige“",
-  "provenance-uncertain": "Herkunft unklar",
-  advertiser: "Werbetreibender",
-  typography: "Typografische Gestaltung",
-  whitespace: "Freiraum um die Anzeige",
-};
-export function evidenceLabel(value: string): string {
-  return evidenceLabels[value] ?? "Zusätzlicher Prüfbeleg";
-}
 export function occurrenceImageFallbackVisible(state: ImageState): boolean {
   return state === "missing";
+}
+export function occurrenceExportPath(status: string): string {
+  const query = status ? `?status=${encodeURIComponent(status)}` : "";
+  return `/api/ingestion/occurrences/export${query}`;
+}
+export async function downloadOccurrenceExport(
+  status: string,
+  environment: {
+    fetcher?: typeof fetch;
+    documentRef?: Pick<Document, "createElement">;
+    urlRef?: Pick<typeof URL, "createObjectURL" | "revokeObjectURL">;
+  } = {},
+) {
+  const response = await (environment.fetcher ?? fetch)(occurrenceExportPath(status));
+  if (!response.ok) throw new Error("Excel-Paket konnte nicht heruntergeladen werden.");
+  const blob = await response.blob();
+  const urlRef = environment.urlRef ?? URL;
+  const link = (environment.documentRef ?? document).createElement("a");
+  const objectUrl = urlRef.createObjectURL(blob);
+  link.href = objectUrl;
+  link.download = "anzeigen.zip";
+  link.click();
+  urlRef.revokeObjectURL(objectUrl);
 }
 const statusLabels: Record<string, string> = {
   detected: "Offen",
@@ -73,6 +85,15 @@ export function OccurrencesPage({ api }: ModulePageProps) {
       setMessage(error instanceof Error ? error.message : "Entscheidung konnte nicht gespeichert werden.");
     }
   };
+  const downloadExport = async () => {
+    setMessage("");
+    try {
+      await downloadOccurrenceExport(status);
+      setMessage("Excel-Paket heruntergeladen.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Excel-Paket konnte nicht heruntergeladen werden.");
+    }
+  };
   return (
     <div className="stack">
       <div className="page-heading">
@@ -91,6 +112,9 @@ export function OccurrencesPage({ api }: ModulePageProps) {
             <option value="rejected">Abgelehnt</option>
           </Select>
         </label>
+        <Button variant="secondary" onClick={() => void downloadExport()}>
+          Als Excel-Paket herunterladen
+        </Button>
       </Card>
       {message && <p className="form-message" role="status">{message}</p>}
       {!rows.length && <EmptyState title="Keine Fundstellen für diesen Status." />}

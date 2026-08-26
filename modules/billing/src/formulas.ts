@@ -54,6 +54,14 @@ export function invoiceNumber(
   return `${prefix}-${year}-${String(sequence).padStart(4, "0")}`;
 }
 
+export function quoteNumber(
+  prefix: string,
+  year: number,
+  sequence: number,
+): string {
+  return invoiceNumber(prefix, year, sequence);
+}
+
 export function dunningCharges(
   outstanding: string,
   daysOverdue: number,
