@@ -46,6 +46,14 @@ def test_age_veto_and_current_brochure_bonus():
     ) > score_candidate("https://files.example/download/Seniorenwegweiser-2026.pdf", area_name="Beispiel")
 
 
+def test_age_veto_uses_latest_year_from_wordpress_upload_path():
+    url = (
+        "https://www.landkreis-beispiel.de/wp-content/uploads/2019/06/"
+        "Seniorenwegweiser_2026.pdf"
+    )
+    assert candidate_rejection_reason(url) is None
+
+
 @pytest.mark.parametrize("url", [
     "https://ksr-breisgau-hochschwarzwald.de/wp-content/uploads/2024/06/ksr-breisgau-hochschwarzwald_seniorenwegweiser.pdf",
     "https://www.ulm.de/-/media/ulm/so/downloads/seniorinnen/internationaler-seniorenwegweiser-deutsch.pdf?rev=a963ec41630b46c0b088f620603b706b",

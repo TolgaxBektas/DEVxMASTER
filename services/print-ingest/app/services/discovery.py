@@ -76,7 +76,7 @@ def candidate_rejection_reason(
             return f"Ausschlusssignal: {signal}"
     years = [int(year) for year in re.findall(r"(?<!\d)20\d{2}(?!\d)", text)]
     cutoff = date.today().year - 3
-    if any(year < cutoff for year in years):
+    if years and max(years) < cutoff:
         return f"Jahreszahl älter als {cutoff}"
     score = score_candidate(url, anchor_text, area_name)
     if score < MIN_CANDIDATE_SCORE:
