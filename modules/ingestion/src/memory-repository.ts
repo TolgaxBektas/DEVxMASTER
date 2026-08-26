@@ -3,6 +3,8 @@ import type {
   IngestionOccurrence,
   IngestionRepository,
   IngestionSource,
+  IngestionArea,
+  IngestionSourceVisit,
   OccurrenceReviewResult,
 } from "./repository.js";
 import type { DerivedClassification, DocumentClassification } from "./classification.js";
@@ -22,14 +24,20 @@ export class MemoryIngestionRepository implements IngestionRepository {
   private sourceId = 0;
   private documentId = 0;
   private occurrenceId = 0;
+  areas: IngestionArea[] = [];
+  sourceVisits: IngestionSourceVisit[] = [];
+  private areaId = 0;
+  private visitId = 0;
 
   async listSources(tenantId: string) {
     return this.sources.filter((source) => source.tenantId === tenantId).map((source) => ({
       ...source,
+      lastCheckedAt: this.sourceVisits.filter((visit) => visit.tenantId === tenantId && visit.sourceId === source.id)
+        .sort((a, b) => b.checkedAt.getTime() - a.checkedAt.getTime())[0]?.checkedAt ?? null,
       actualityHint: sourceActualityHint(source.metadata),
     }));
   }
-  async createSource(tenantId: string, input: { url: string; score: number; metadata: Record<string, unknown> }) {
+  async createSource(tenantId: string, input: { url: string; score: number; metadata: Record<string, unknown>; areaId?: number | null; revisitIntervalDays?: number; nextCheckAt?: Date | null }) {
     const existing = this.sources.find((source) => source.tenantId === tenantId && source.url === input.url);
     if (existing) return existing;
     const source = {
@@ -43,6 +51,11 @@ export class MemoryIngestionRepository implements IngestionRepository {
       approvedAt: null,
       lastFetchedAt: null,
       lastError: null,
+      areaId: input.areaId ?? null,
+      revisitIntervalDays: input.revisitIntervalDays ?? 90,
+      nextCheckAt: input.nextCheckAt ?? null,
+      productive: false,
+      fingerprint: null,
     };
     this.sources.push(source);
     return source;
@@ -55,10 +68,36 @@ export class MemoryIngestionRepository implements IngestionRepository {
   async updateSource(tenantId: string, sourceId: number, input: {
     status?: string; approvedBy?: string | null; approvedAt?: Date | null;
     lastFetchedAt?: Date | null; lastError?: string | null;
+    areaId?: number | null; revisitIntervalDays?: number; nextCheckAt?: Date | null;
+    productive?: boolean; fingerprint?: string | null;
   }) {
     const source = await this.getSource(tenantId, sourceId);
     Object.assign(source, input);
     return source;
+  }
+  async listAreas(tenantId: string) {
+    return this.areas.filter((area) => area.tenantId === tenantId).sort((a, b) => a.orderIndex - b.orderIndex);
+  }
+  async upsertArea(tenantId: string, input: Omit<IngestionArea, "id" | "tenantId" | "createdAt">) {
+    const existing = this.areas.find((a) => a.tenantId === tenantId && a.ags === input.ags);
+    if (existing) { Object.assign(existing, input); return existing; }
+    const area = { ...input, id: ++this.areaId, tenantId, createdAt: new Date() };
+    this.areas.push(area);
+    return area;
+  }
+  async updateArea(tenantId: string, areaId: number, input: Partial<Pick<IngestionArea, "status" | "lastRunAt" | "startedAt" | "nextDueAt" | "lastError" | "foundSources">>) {
+    const area = this.areas.find((a) => a.tenantId === tenantId && a.id === areaId);
+    if (!area) throw new Error("Gebiet nicht gefunden");
+    Object.assign(area, input);
+    return area;
+  }
+  async createSourceVisit(tenantId: string, input: Omit<IngestionSourceVisit, "id" | "tenantId">) {
+    const visit = { ...input, id: ++this.visitId, tenantId };
+    this.sourceVisits.push(visit);
+    return visit;
+  }
+  async listSourceVisits(tenantId: string, sourceId: number) {
+    return this.sourceVisits.filter((v) => v.tenantId === tenantId && v.sourceId === sourceId);
   }
   async listDocuments(tenantId: string, filters: DocumentListFilters = {}) {
     return this.documents.filter((document) => {

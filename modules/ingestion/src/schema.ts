@@ -1,4 +1,4 @@
-import { float, int, json, mysqlTable, text, timestamp, uniqueIndex, varchar } from "drizzle-orm/mysql-core";
+import { boolean, float, index, int, json, mysqlTable, text, timestamp, uniqueIndex, varchar } from "drizzle-orm/mysql-core";
 
 export const sources = mysqlTable("ingestion_sources", {
   id: int("id").autoincrement().primaryKey(),
@@ -11,6 +11,11 @@ export const sources = mysqlTable("ingestion_sources", {
   approvedAt: timestamp("approved_at"),
   lastFetchedAt: timestamp("last_fetched_at"),
   lastError: text("last_error"),
+  areaId: int("area_id"),
+  revisitIntervalDays: int("revisit_interval_days").default(90).notNull(),
+  nextCheckAt: timestamp("next_check_at"),
+  productive: boolean("productive").default(false).notNull(),
+  fingerprint: varchar("fingerprint", { length: 255 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   tenantUrl: uniqueIndex("ingestion_sources_tenant_url_uq").on(table.tenantId, table.url),
@@ -41,6 +46,38 @@ export const pages = mysqlTable("ingestion_pages", {
   adProbability: float("ad_probability"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
+export const areas = mysqlTable("ingestion_areas", {
+  id: int("id").autoincrement().primaryKey(),
+  tenantId: int("tenant_id").notNull(),
+  level: varchar("level", { length: 16 }).notNull(),
+  ags: varchar("ags", { length: 5 }).notNull(),
+  name: varchar("name", { length: 255 }).notNull(),
+  stateName: varchar("state_name", { length: 255 }).notNull(),
+  kind: varchar("kind", { length: 64 }).default("Kreis").notNull(),
+  orderIndex: int("order_index").notNull(),
+  status: varchar("status", { length: 16 }).default("pending").notNull(),
+  lastRunAt: timestamp("last_run_at"),
+  startedAt: timestamp("started_at"),
+  nextDueAt: timestamp("next_due_at"),
+  lastError: text("last_error"),
+  foundSources: int("found_sources").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  tenantAgs: uniqueIndex("ingestion_areas_tenant_ags_uq").on(table.tenantId, table.ags),
+  tenant: index("ingestion_areas_tenant_idx").on(table.tenantId),
+}));
+export const sourceVisits = mysqlTable("ingestion_source_visits", {
+  id: int("id").autoincrement().primaryKey(),
+  tenantId: int("tenant_id").notNull(),
+  sourceId: int("source_id").notNull(),
+  checkedAt: timestamp("checked_at").defaultNow().notNull(),
+  httpStatus: int("http_status"),
+  newPdfCount: int("new_pdf_count").default(0).notNull(),
+  changed: boolean("changed").default(false).notNull(),
+  note: text("note"),
+}, (table) => ({
+  tenantSource: index("ingestion_source_visits_tenant_source_idx").on(table.tenantId, table.sourceId),
+}));
 export const classifications = mysqlTable("ingestion_document_classifications", {
   id: int("id").autoincrement().primaryKey(),
   tenantId: int("tenant_id").notNull(),
@@ -91,4 +128,4 @@ export const occurrences = mysqlTable("ingestion_occurrences", {
   contacts: json("contacts"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
-export const ingestionSchema = { sources, documents, classifications, pages, occurrences };
+export const ingestionSchema = { sources, areas, sourceVisits, documents, classifications, pages, occurrences };

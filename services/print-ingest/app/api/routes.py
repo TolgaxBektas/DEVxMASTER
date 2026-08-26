@@ -7,8 +7,9 @@ from sqlalchemy import select
 import hashlib
 from app.db.session import SessionLocal
 from app.models.entities import Source, Document, Page, AdOccurrence
-from app.schemas.api import DiscoverRequest, DownloadRequest, ProcessRequest, AutoDiscoverRequest
+from app.schemas.api import DiscoverRequest, DownloadRequest, ProcessRequest, AutoDiscoverRequest, RevisitRequest
 from app.services.discovery import discover_pdf_links
+from app.services.policy import DiscoveryBudget, check_url_policy, close_checked_response, read_limited_response, request_checked
 from app.services.downloader import download_pdf, DownloadError
 from app.services.storage import storage
 from app.services.pipeline import process_document
@@ -52,6 +53,48 @@ def autodiscover(req: AutoDiscoverRequest, db: Session=Depends(get_db), _token: 
 def proposals(req: AutoDiscoverRequest, _token: None=Depends(require_service_token)):
     items = discover_proposals([str(x) for x in req.seed_pages], req.search_terms, req.max_results)
     return {'proposals': items}
+
+@router.post('/sources/revisit')
+def revisit(req: RevisitRequest, _token: None=Depends(require_service_token)):
+    url = str(req.url)
+    policy = check_url_policy(url)
+    if policy['status'] != 'APPROVED':
+        raise HTTPException(400, 'Quelle ist für die Prüfung nicht zugelassen')
+    budget = DiscoveryBudget(max_requests=10, max_depth=1)
+    try:
+        if url.lower().split('?', 1)[0].endswith('.pdf'):
+            response = request_checked(url, policy=policy, budget=budget, stream=True,
+                                       timeout=settings.request_timeout_seconds, allow_redirects=False)
+            try:
+                response.raise_for_status()
+                signature = response.headers.get('ETag') or response.headers.get('Last-Modified')
+                if not signature:
+                    signature = hashlib.sha256(read_limited_response(
+                        response, settings.max_download_mb * 1024 * 1024,
+                    )).hexdigest()
+                return {
+                    'http_status': response.status_code,
+                    'new_pdf_urls': [],
+                    'new_pdf_count': 0,
+                    'changed': req.fingerprint is not None and signature != req.fingerprint,
+                    'fingerprint': signature,
+                    'note': 'PDF-Signatur geprüft',
+                }
+            finally:
+                close_checked_response(response)
+        links = discover_pdf_links(url, budget=budget)
+        signature = hashlib.sha256('|'.join(item['url'] for item in links).encode()).hexdigest()
+        changed = req.fingerprint is not None and signature != req.fingerprint
+        return {
+            'http_status': 200,
+            'new_pdf_urls': [item['url'] for item in links] if changed or req.fingerprint is None else [],
+            'new_pdf_count': len(links) if changed or req.fingerprint is None else 0,
+            'changed': changed,
+            'fingerprint': signature,
+            'note': 'PDF-Links der Übersichtsseite geprüft',
+        }
+    except Exception as exc:
+        raise HTTPException(400, 'Quellenprüfung fehlgeschlagen') from exc
 
 @router.get('/sources')
 def list_sources(db: Session=Depends(get_db), _token: None=Depends(require_service_token)):

@@ -15,6 +15,111 @@ const context = (tenantId: string | null, payload: unknown) => ({
 });
 
 describe("Ingestion-Bestand", () => {
+  it("arbeitet fällige Gebiete in Reihenfolge und isoliert Fehler", async () => {
+    const repository = new MemoryIngestionRepository();
+    await repository.upsertArea("1", {
+      level: "district", ags: "01001", name: "Alpha", stateName: "Land", orderIndex: 1,
+      kind: "Landkreis", status: "pending", lastRunAt: null, startedAt: null, nextDueAt: null, lastError: null, foundSources: 0,
+    });
+    await repository.upsertArea("1", {
+      level: "district", ags: "01002", name: "Beta", stateName: "Land", orderIndex: 2,
+      kind: "Landkreis", status: "pending", lastRunAt: null, startedAt: null, nextDueAt: null, lastError: null, foundSources: 0,
+    });
+    const calls: string[] = [];
+    const module = createIngestionModule({
+      repository, publish: async () => undefined, enqueue: async () => undefined,
+      discoverProposals: async ({ searchTerms }) => {
+        const firstTerm = searchTerms[0] ?? "";
+        const name = firstTerm.split(" ").at(-1) ?? "";
+        calls.push(name);
+        if (name === "Beta") throw new Error("Providerfehler");
+        return [{ url: "https://example.invalid/alpha.pdf", score: 80, metadata: {} }];
+      },
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.discovery.run");
+    if (!job) throw new Error("Gebietssuchjob fehlt");
+    await job.handle({ limit: 2 }, context("1", {}));
+    expect(calls).toEqual(["Alpha", "Beta"]);
+    expect((await repository.listAreas("1")).map((area) => area.status)).toEqual(["done", "pending"]);
+    expect((await repository.listSources("1"))[0]).toMatchObject({ revisitIntervalDays: 90, areaId: 1 });
+  });
+
+  it("greift verwaiste Gebietsläufe nach 24 Stunden wieder auf und bewahrt fremde Gebietszuordnung", async () => {
+    const repository = new MemoryIngestionRepository();
+    const stale = await repository.upsertArea("1", {
+      level: "district", ags: "01001", name: "Stale", stateName: "Land", kind: "Landkreis", orderIndex: 1,
+      status: "running", lastRunAt: null, startedAt: new Date(Date.now() - 25 * 86_400_000),
+      nextDueAt: null, lastError: null, foundSources: 0,
+    });
+    const otherArea = await repository.upsertArea("1", {
+      level: "district", ags: "01002", name: "Other", stateName: "Land", kind: "Landkreis", orderIndex: 2,
+      status: "pending", lastRunAt: null, startedAt: null, nextDueAt: null, lastError: null, foundSources: 0,
+    });
+    const existing = await repository.createSource("1", {
+      url: "https://example.invalid/existing.pdf", score: 50, metadata: {}, areaId: otherArea.id,
+    });
+    const module = createIngestionModule({
+      repository, publish: async () => undefined, enqueue: async () => undefined,
+      discoverProposals: async () => [{ url: existing.url, score: 80, metadata: {} }],
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.discovery.run");
+    if (!job) throw new Error("Gebietssuchjob fehlt");
+    await job.handle({ limit: 1 }, context("1", {}));
+    expect((await repository.listAreas("1")).find((area) => area.id === stale.id)?.status).toBe("done");
+    expect((await repository.getSource("1", existing.id)).areaId).toBe(otherArea.id);
+  });
+
+  it("protokolliert Quellenprüfungen und plant produktive Quellen früher erneut", async () => {
+    const repository = new MemoryIngestionRepository();
+    const source = await repository.createSource("1", {
+      url: "https://www.example.invalid:8443/index.html", score: 50, metadata: {},
+    });
+    await repository.updateSource("1", source.id, {
+      status: "approved", nextCheckAt: new Date(0),
+    });
+    const enqueued: unknown[] = [];
+    const module = createIngestionModule({
+      repository, publish: async () => undefined,
+      enqueue: async (item) => { enqueued.push(item); },
+      revisitSource: async () => ({
+        httpStatus: 200, newPdfUrls: ["http://example.invalid:9443/new.pdf"],
+        newPdfCount: 1, changed: true, fingerprint: "new",
+      }),
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.source.revisit");
+    if (!job) throw new Error("Wiedervorlagejob fehlt");
+    await job.handle({}, context("1", {}));
+    expect(repository.sourceVisits).toHaveLength(1);
+    expect(repository.sourceVisits[0]).toMatchObject({ newPdfCount: 1, changed: true });
+    expect((await repository.getSource("1", source.id)).productive).toBe(true);
+    expect((await repository.getSource("1", source.id)).nextCheckAt!.getTime()).toBeGreaterThan(Date.now() + 29 * 86_400_000);
+    expect(enqueued).toHaveLength(1);
+    expect((await repository.getSource("1", 2)).status).toBe("approved");
+  });
+
+  it("legt neue PDFs fremder Hosts nur als Vorschlag an", async () => {
+    const repository = new MemoryIngestionRepository();
+    const source = await repository.createSource("1", {
+      url: "https://www.example.invalid/index.html", score: 50, metadata: {},
+    });
+    await repository.updateSource("1", source.id, { status: "approved", nextCheckAt: new Date(0) });
+    const enqueued: unknown[] = [];
+    const module = createIngestionModule({
+      repository, publish: async () => undefined,
+      enqueue: async (item) => { enqueued.push(item); },
+      revisitSource: async () => ({
+        httpStatus: 200, newPdfUrls: ["https://other.invalid/new.pdf"],
+        newPdfCount: 99, changed: true, fingerprint: "new",
+      }),
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.source.revisit");
+    if (!job) throw new Error("Wiedervorlagejob fehlt");
+    await job.handle({}, context("1", {}));
+    const candidate = (await repository.listSources("1")).find((item) => item.url.includes("other.invalid"));
+    expect(candidate?.status).toBe("proposed");
+    expect(enqueued).toHaveLength(0);
+    expect(repository.sourceVisits[0]).toMatchObject({ newPdfCount: 1 });
+  });
   it("bewertet Aktualität relativ und lässt das Jahr unbelegt offen", () => {
     expect(documentActualityStatus({ periodStartYear: 2022, periodEndYear: 2022 }, 2025, 3)).toBe("current");
     expect(documentActualityStatus({ periodStartYear: 2021, periodEndYear: 2021 }, 2025, 3)).toBe("outdated");

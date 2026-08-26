@@ -6,3 +6,4 @@ export { createDrizzleIngestionRepository } from "./drizzle-repository.js";
 export type { ProcessedPage } from "./module.js";
 export { ingestionSchema } from "./schema.js";
 export { ingestionPages, IngestionPage } from "./ui/index.js";
+export { areaSearchTerms, PUBLICATION_TERMS } from "./search-terms.js";

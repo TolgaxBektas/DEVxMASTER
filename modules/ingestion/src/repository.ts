@@ -20,7 +20,40 @@ export type IngestionSource = {
   approvedAt: Date | null;
   lastFetchedAt: Date | null;
   lastError: string | null;
+  areaId: number | null;
+  revisitIntervalDays: number;
+  nextCheckAt: Date | null;
+  productive: boolean;
+  fingerprint: string | null;
+  lastCheckedAt?: Date | null;
   actualityHint?: ActualityStatus | null;
+};
+export type IngestionArea = {
+  id: number;
+  tenantId: string;
+  level: "state" | "district";
+  ags: string;
+  name: string;
+  stateName: string;
+  kind: string;
+  orderIndex: number;
+  status: "pending" | "running" | "done";
+  lastRunAt: Date | null;
+  startedAt: Date | null;
+  nextDueAt: Date | null;
+  lastError: string | null;
+  foundSources: number;
+  createdAt: Date;
+};
+export type IngestionSourceVisit = {
+  id: number;
+  tenantId: string;
+  sourceId: number;
+  checkedAt: Date;
+  httpStatus: number | null;
+  newPdfCount: number;
+  changed: boolean;
+  note: string | null;
 };
 
 function normalizeOccurrenceText(value: string): string {
@@ -112,7 +145,10 @@ export type OccurrenceReviewResult = {
 };
 export type IngestionRepository = {
   listSources(tenantId: string): Promise<IngestionSource[]>;
-  createSource(tenantId: string, input: { url: string; score: number; metadata: Record<string, unknown> }): Promise<IngestionSource>;
+  createSource(tenantId: string, input: {
+    url: string; score: number; metadata: Record<string, unknown>;
+    areaId?: number | null; revisitIntervalDays?: number; nextCheckAt?: Date | null;
+  }): Promise<IngestionSource>;
   getSource(tenantId: string, sourceId: number): Promise<IngestionSource>;
   updateSource(tenantId: string, sourceId: number, input: {
     status?: string;
@@ -120,7 +156,17 @@ export type IngestionRepository = {
     approvedAt?: Date | null;
     lastFetchedAt?: Date | null;
     lastError?: string | null;
+    areaId?: number | null;
+    revisitIntervalDays?: number;
+    nextCheckAt?: Date | null;
+    productive?: boolean;
+    fingerprint?: string | null;
   }): Promise<IngestionSource>;
+  listAreas(tenantId: string): Promise<IngestionArea[]>;
+  upsertArea(tenantId: string, input: Omit<IngestionArea, "id" | "tenantId" | "createdAt">): Promise<IngestionArea>;
+  updateArea(tenantId: string, areaId: number, input: Partial<Pick<IngestionArea, "status" | "lastRunAt" | "startedAt" | "nextDueAt" | "lastError" | "foundSources">>): Promise<IngestionArea>;
+  createSourceVisit(tenantId: string, input: Omit<IngestionSourceVisit, "id" | "tenantId">): Promise<IngestionSourceVisit>;
+  listSourceVisits(tenantId: string, sourceId: number): Promise<IngestionSourceVisit[]>;
   listDocuments(tenantId: string, filters?: DocumentListFilters): Promise<IngestionDocument[]>;
   upsertDerivedClassification(
     tenantId: string,
