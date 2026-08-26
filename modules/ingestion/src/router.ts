@@ -95,6 +95,7 @@ export function createIngestionRouter(
             status: "approved",
             approvedBy: ctx.auth.user.id,
             approvedAt: new Date(),
+            nextCheckAt: new Date(Date.now() + 90 * 86_400_000),
             lastError: null,
           });
           await publish({
@@ -138,6 +139,28 @@ export function createIngestionRouter(
             name: "ingestion.source.fetch",
             tenantId: ctx.auth.tenantId,
             payload: { sourceId: input.id },
+          });
+      }),
+    }),
+    areas: router({
+      capabilities: protectedProcedure.query(({ ctx }) => ({
+        read: ctx.auth.permissions.has("ingestion.area.read"),
+        run: ctx.auth.permissions.has("ingestion.area.run"),
+      })),
+      list: permissionProcedure("ingestion.area.read").query(({ ctx }) =>
+        repository.listAreas(ctx.auth.tenantId),
+      ),
+      run: permissionProcedure("ingestion.area.run")
+        .input(z.object({ limit: z.number().int().positive().max(100).default(3) }))
+        .mutation(async ({ ctx, input }) => {
+          if (!enqueue) throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "Gebietssuche ist nicht konfiguriert.",
+          });
+          return enqueue({
+            name: "ingestion.discovery.run",
+            tenantId: ctx.auth.tenantId,
+            payload: { limit: input.limit },
           });
         }),
     }),

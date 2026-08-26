@@ -4,6 +4,9 @@ import {
 } from "../packages/kernel/src/index.ts";
 import { dunningLevels, issuers } from "../modules/billing/src/schema.ts";
 import { and, eq } from "drizzle-orm";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { areas } from "../modules/ingestion/src/schema.ts";
 
 const env = parseEnv();
 const factory = createDbFactory(env);
@@ -27,6 +30,7 @@ const permissions = [
   "billing.invoice.write", "billing.invoice.issue", "billing.payment.write",
   "billing.dunning.read", "billing.dunning.run", "billing.creditnote.write",
   "billing.quote.read", "billing.quote.write", "billing.quote.send", "billing.quote.accept",
+  "ingestion.area.read", "ingestion.area.run",
   "ingestion.source.read", "ingestion.document.read", "ingestion.document.write",
   "ingestion.document.upload", "ingestion.document.classify",
   "ingestion.occurrence.read", "ingestion.occurrence.review",
@@ -83,6 +87,15 @@ if (!identity) {
     userId, provider: "local", externalId: "admin",
     secretHash: hashSecret(env.ADMIN_PIN, env.JWT_SECRET), createdAt: now,
   });
+}
+const areaData = JSON.parse(await readFile(resolve("modules/ingestion/src/data/areas.de.json"), "utf8")) as Array<{
+  level: "state" | "district"; ags: string; name: string; stateName: string; orderIndex: number;
+}>;
+for (const area of areaData) {
+  const existingArea = (await db.select().from(areas).where(and(
+    eq(areas.tenantId, tenantId), eq(areas.ags, area.ags),
+  )).limit(1))[0];
+  if (!existingArea) await db.insert(areas).values({ tenantId, ...area, status: "pending", foundSources: 0 });
 }
 await factory.close();
 console.log(JSON.stringify({ seeded: true, tenantId, userId, login: "admin", pinFromEnv: "ADMIN_PIN" }));

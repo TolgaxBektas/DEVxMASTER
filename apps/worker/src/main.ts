@@ -103,6 +103,19 @@ const ingestion = createIngestionModule({
     });
     return processor(input);
   },
+  discoverProposals: async ({ seedPages, searchTerms, maxResults }) => {
+    if (!env.PIF_SERVICE_TOKEN) throw new Error("PIF-Service-Token fehlt");
+    const response = await fetch(`${env.PIF_BASE_URL}/api/v1/discovery/proposals`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-service-token": env.PIF_SERVICE_TOKEN },
+      body: JSON.stringify({ seed_pages: seedPages, search_terms: searchTerms, max_results: maxResults }),
+    });
+    if (!response.ok) throw new Error(`Quellensuche fehlgeschlagen (${response.status})`);
+    const body = await response.json() as { proposals?: Array<Record<string, unknown>> };
+    return (body.proposals ?? []).map((item) => ({
+      url: String(item.url), score: Number(item.score ?? 0), metadata: item,
+    }));
+  },
   fetchSource: async ({ url }) => {
     if (!env.PIF_SERVICE_TOKEN) throw new Error("PIF-Service-Token fehlt");
     const response = await fetch(`${env.PIF_BASE_URL}/api/v1/fetch`, {
@@ -115,6 +128,19 @@ const ingestion = createIngestionModule({
     const disposition = response.headers.get("content-disposition") ?? "";
     const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? "source.pdf";
     return { bytes, filename };
+  },
+  revisitSource: async ({ url, fingerprint }) => {
+    if (!env.PIF_SERVICE_TOKEN) throw new Error("PIF-Service-Token fehlt");
+    const response = await fetch(`${env.PIF_BASE_URL}/api/v1/sources/revisit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-service-token": env.PIF_SERVICE_TOKEN },
+      body: JSON.stringify({ url, fingerprint }),
+    });
+    if (!response.ok) throw new Error(`Quellenprüfung fehlgeschlagen (${response.status})`);
+    return await response.json() as {
+      httpStatus?: number | null; newPdfUrls?: string[]; newPdfCount?: number;
+      changed?: boolean; fingerprint?: string | null; note?: string | null;
+    };
   },
   publish: (input) => eventBus.publish(input),
   ...(env.INGESTION_WATCH_FOLDER?.trim()

@@ -16,6 +16,8 @@ type Source = {
   metadata?: Record<string, unknown> | null;
   lastFetchedAt?: string | null;
   lastError?: string | null;
+  lastCheckedAt?: string | null;
+  nextCheckAt?: string | null;
   actualityHint?: "current" | "outdated" | "unverified" | null;
 };
 type Capabilities = { search: boolean; approve: boolean; fetch: boolean };
@@ -145,6 +147,8 @@ export function SourcesPage({ api }: ModulePageProps) {
                   {String(metadata.reason ?? "Keine Begründung hinterlegt")}
                 </span>
                 <span>Zuletzt abgerufen: {formatDate(source.lastFetchedAt)}</span>
+                <span>Letzte Prüfung: {formatDate(source.lastCheckedAt)}</span>
+                <span>Nächste Prüfung: {formatDate(source.nextCheckAt)}</span>
                 {source.lastError && <span>Letzter Fehler: {source.lastError}</span>}
               </div>
               <div className="proposal-actions">

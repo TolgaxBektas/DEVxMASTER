@@ -19,9 +19,10 @@ import { persistDocumentBytes } from "./rest.js";
 import { deriveDocumentClassification } from "./classification.js";
 import { documentActualityStatus } from "./actuality.js";
 import { publishCurrentActualityTransition } from "./actuality-replay.js";
-import { ingestionPages, IngestionPage, OccurrencesPage, ReviewPage } from "./ui/index.js";
+import { ingestionPages, IngestionPage, OccurrencesPage, ReviewPage, AreasPage } from "./ui/index.js";
 import type { PifReviewClient } from "./review-client.js";
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
+import { areaSearchTerms } from "./search-terms.js";
 
 export type AdBoundingBox = {
   x: number;
@@ -237,6 +238,14 @@ export function createIngestionModule(deps: {
   discoverProposals?: (input: { seedPages: string[]; searchTerms: string[]; maxResults: number }) => Promise<Array<{
     url: string; score: number; metadata: Record<string, unknown>;
   }>>;
+  revisitSource?: (input: { url: string; fingerprint?: string | null }) => Promise<{
+    httpStatus?: number | null;
+    newPdfUrls?: string[];
+    newPdfCount?: number;
+    changed?: boolean;
+    fingerprint?: string | null;
+    note?: string | null;
+  }>;
   reviewClient?: PifReviewClient;
   reviewTenantId?: string;
   watchFolderPath?: string;
@@ -288,6 +297,7 @@ export function createIngestionModule(deps: {
       : {}),
     nav: [
       { id: "ingestion.sources", label: "Quellen", href: "/ingestion/sources", permission: "ingestion.source.read", order: 5 },
+      { id: "ingestion.areas", label: "Gebiete", href: "/ingestion/areas", permission: "ingestion.area.read", order: 6 },
       { id: "ingestion.documents", label: "Dokumente", href: "/ingestion", permission: "ingestion.document.read", order: 10 },
       { id: "ingestion.occurrences", label: "Fundstellen", href: "/ingestion/occurrences", permission: "ingestion.occurrence.read", order: 20 },
     ],
@@ -298,6 +308,8 @@ export function createIngestionModule(deps: {
       permission,
       component: path === "/ingestion/occurrences"
         ? OccurrencesPage
+        : path === "/ingestion/areas"
+          ? AreasPage
         : path === "/ingestion/review"
           ? ReviewPage
           : IngestionPage,
@@ -307,6 +319,8 @@ export function createIngestionModule(deps: {
       { permission: "ingestion.source.search", title: "Quellen suchen" },
       { permission: "ingestion.source.approve", title: "Quellen freigeben" },
       { permission: "ingestion.source.fetch", title: "Quellen abrufen" },
+      { permission: "ingestion.area.read", title: "Gebiete lesen" },
+      { permission: "ingestion.area.run", title: "Gebietsläufe starten" },
       { permission: "ingestion.document.read", title: "Dokumente lesen" },
       { permission: "ingestion.document.write", title: "Dokumente aufnehmen" },
       { permission: "ingestion.document.upload", title: "Dokumente hochladen" },
@@ -322,11 +336,124 @@ export function createIngestionModule(deps: {
         schedule: "daily",
         handle: async (payload, context) => {
           const tenantId = jobTenantId(context);
+          const now = new Date();
+          const configuredLimit = (payload as { limit?: unknown }).limit;
+          const limit = typeof configuredLimit === "number" && configuredLimit > 0 ? Math.floor(configuredLimit) : 3;
+          const areas = (await repository.listAreas(tenantId))
+            .filter((area) => area.status === "pending" || (area.nextDueAt !== null && area.nextDueAt <= now))
+            .sort((a, b) => a.orderIndex - b.orderIndex)
+            .slice(0, limit);
+          for (const area of areas) {
+            await repository.updateArea(tenantId, area.id, { status: "running", lastError: null });
+            try {
+              if (!deps.discoverProposals) throw new Error("Quellensuche ist nicht konfiguriert");
+              const proposals = await deps.discoverProposals({
+                seedPages: [],
+                searchTerms: areaSearchTerms(area.name, area.level),
+                maxResults: 25,
+              });
+              let foundSources = 0;
+              for (const proposal of proposals) {
+                const source = await repository.createSource(tenantId, {
+                  ...proposal,
+                  areaId: area.id,
+                  revisitIntervalDays: 90,
+                  nextCheckAt: new Date(now.getTime() + 90 * 86_400_000),
+                });
+                if (source.areaId === area.id) foundSources += 1;
+                else await repository.updateSource(tenantId, source.id, { areaId: area.id });
+              }
+              await repository.updateArea(tenantId, area.id, {
+                status: "done",
+                lastRunAt: now,
+                nextDueAt: new Date(now.getTime() + 180 * 86_400_000),
+                foundSources,
+              });
+            } catch (error) {
+              await repository.updateArea(tenantId, area.id, {
+                status: "pending",
+                lastError: error instanceof Error ? error.message : "Gebietslauf fehlgeschlagen",
+              });
+            }
+          }
           if (deps.enqueue) await deps.enqueue({
             name: "ingestion.processing.run",
             tenantId,
             payload: {},
           });
+        },
+      },
+      {
+        name: "ingestion.source.revisit",
+        schedule: "daily",
+        handle: async (payload, context) => {
+          const tenantId = jobTenantId(context);
+          if (!deps.revisitSource) throw new Error("Quellenprüfung ist nicht konfiguriert");
+          const configuredLimit = (payload as { limit?: unknown }).limit;
+          const limit = typeof configuredLimit === "number" && configuredLimit > 0 ? Math.floor(configuredLimit) : 25;
+          const now = new Date();
+          const sources = (await repository.listSources(tenantId))
+            .filter((source) => source.status === "approved" && source.nextCheckAt !== null && source.nextCheckAt <= now)
+            .slice(0, limit);
+          for (const source of sources) {
+            try {
+              const result = await deps.revisitSource({ url: source.url, fingerprint: source.fingerprint });
+              const urls = result.newPdfUrls ?? [];
+              for (const url of urls) {
+                const candidate = await repository.createSource(tenantId, {
+                  url,
+                  score: 100,
+                  metadata: { discoveredFrom: source.url, discovery: "revisit" },
+                  areaId: source.areaId,
+                  revisitIntervalDays: 90,
+                  nextCheckAt: new Date(now.getTime() + 90 * 86_400_000),
+                });
+                if (candidate.status === "approved" && deps.enqueue) {
+                  await deps.enqueue({ name: "ingestion.source.fetch", tenantId, payload: { sourceId: candidate.id } });
+                }
+              }
+              if (result.changed && urls.length === 0 && deps.enqueue) {
+                await deps.enqueue({
+                  name: "ingestion.source.fetch",
+                  tenantId,
+                  payload: { sourceId: source.id },
+                });
+              }
+              const newCount = result.newPdfCount ?? urls.length;
+              const productive = source.productive || newCount > 0 || result.changed === true;
+              await repository.createSourceVisit(tenantId, {
+                sourceId: source.id,
+                checkedAt: now,
+                httpStatus: result.httpStatus ?? null,
+                newPdfCount: newCount,
+                changed: result.changed ?? newCount > 0,
+                note: result.note ?? null,
+              });
+              await repository.updateSource(tenantId, source.id, {
+                productive,
+                fingerprint: result.fingerprint ?? source.fingerprint,
+                nextCheckAt: new Date(now.getTime() + (productive ? 30 : 90) * 86_400_000),
+                lastError: null,
+              });
+              await deps.publish({
+                name: "ingestion.source.revisited",
+                tenantId,
+                aggregateType: "source",
+                aggregateId: String(source.id),
+                payload: { sourceId: source.id, newPdfCount: newCount, changed: result.changed ?? false },
+                idempotencyKey: `ingestion.source.revisited:${tenantId}:${source.id}:${now.toISOString()}`,
+              });
+            } catch (error) {
+              await repository.createSourceVisit(tenantId, {
+                sourceId: source.id, checkedAt: now, httpStatus: null, newPdfCount: 0,
+                changed: false, note: error instanceof Error ? error.message : "Quellenprüfung fehlgeschlagen",
+              });
+              await repository.updateSource(tenantId, source.id, {
+                nextCheckAt: new Date(now.getTime() + 90 * 86_400_000),
+                lastError: error instanceof Error ? error.message : "Quellenprüfung fehlgeschlagen",
+              });
+            }
+          }
         },
       },
       {
@@ -531,6 +658,7 @@ export function createIngestionModule(deps: {
     events: [
       { name: "document.ingested", direction: "published" },
       { name: "advertisement.detected", direction: "published" },
+      { name: "ingestion.source.revisited", direction: "published" },
     ],
     health: () => ({ id: "ingestion", status: "healthy" }),
   });

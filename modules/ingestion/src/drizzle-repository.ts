@@ -1,6 +1,6 @@
 import type { MySql2Database } from "drizzle-orm/mysql2";
-import { and, desc, eq, gte, lte, ne } from "drizzle-orm";
-import { classifications, documents, occurrences, pages, sources, ingestionSchema } from "./schema.js";
+import { and, asc, desc, eq, gte, lte, ne } from "drizzle-orm";
+import { areas, classifications, documents, occurrences, pages, sourceVisits, sources, ingestionSchema } from "./schema.js";
 import type { DerivedClassification, DocumentClassification } from "./classification.js";
 import { documentActualityStatus, sourceActualityHint, type ActualityStatus } from "./actuality.js";
 import {
@@ -87,7 +87,7 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
       const result = await database.select().from(sources)
         .where(eq(sources.tenantId, Number(tenantId)))
         .orderBy(desc(sources.createdAt));
-      return result.map((source) => ({
+      return Promise.all(result.map(async (source) => ({
         ...source,
         tenantId: String(source.tenantId),
         metadata: source.metadata && typeof source.metadata === "object"
@@ -98,7 +98,10 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
             ? source.metadata as Record<string, unknown>
             : null,
         ),
-      }));
+        lastCheckedAt: ((await database.select({ checkedAt: sourceVisits.checkedAt }).from(sourceVisits).where(and(
+          eq(sourceVisits.tenantId, Number(tenantId)), eq(sourceVisits.sourceId, source.id),
+        )).orderBy(desc(sourceVisits.checkedAt)).limit(1))[0]?.checkedAt ?? null),
+      })));
     },
     async createSource(tenantId, input) {
       const existing = await database.select().from(sources).where(and(
@@ -112,6 +115,9 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
         status: "proposed",
         score: input.score,
         metadata: input.metadata,
+        areaId: input.areaId ?? null,
+        revisitIntervalDays: input.revisitIntervalDays ?? 90,
+        nextCheckAt: input.nextCheckAt ?? null,
       });
       const created = (await database.select().from(sources)
         .where(eq(sources.id, Number(result[0]?.insertId))).limit(1))[0];
@@ -132,6 +138,50 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
         eq(sources.tenantId, Number(tenantId)),
       ));
       return this.getSource(tenantId, sourceId);
+    },
+    async listAreas(tenantId) {
+      const result = await database.select().from(areas)
+        .where(eq(areas.tenantId, Number(tenantId)))
+        .orderBy(asc(areas.orderIndex));
+      return result.map((area) => ({ ...area, tenantId: String(area.tenantId) })) as never;
+    },
+    async upsertArea(tenantId, input) {
+      const existing = (await database.select().from(areas).where(and(
+        eq(areas.tenantId, Number(tenantId)), eq(areas.ags, input.ags),
+      )).limit(1))[0];
+      if (existing) {
+        await database.update(areas).set(input).where(and(
+          eq(areas.id, existing.id), eq(areas.tenantId, Number(tenantId)),
+        ));
+        const updated = (await database.select().from(areas).where(eq(areas.id, existing.id)).limit(1))[0];
+        return { ...updated, tenantId: String(updated!.tenantId) } as never;
+      }
+      const result = await database.insert(areas).values({ tenantId: Number(tenantId), ...input });
+      const row = (await database.select().from(areas).where(eq(areas.id, Number(result[0]?.insertId))).limit(1))[0];
+      if (!row) throw new Error("Gebiet konnte nicht angelegt werden");
+      return { ...row, tenantId: String(row.tenantId) } as never;
+    },
+    async updateArea(tenantId, areaId, input) {
+      await database.update(areas).set(input).where(and(
+        eq(areas.id, areaId), eq(areas.tenantId, Number(tenantId)),
+      ));
+      const row = (await database.select().from(areas).where(and(
+        eq(areas.id, areaId), eq(areas.tenantId, Number(tenantId)),
+      )).limit(1))[0];
+      if (!row) throw new Error("Gebiet nicht gefunden");
+      return { ...row, tenantId: String(row.tenantId) } as never;
+    },
+    async createSourceVisit(tenantId, input) {
+      const result = await database.insert(sourceVisits).values({ tenantId: Number(tenantId), ...input });
+      const row = (await database.select().from(sourceVisits).where(eq(sourceVisits.id, Number(result[0]?.insertId))).limit(1))[0];
+      if (!row) throw new Error("Quellenprüfung konnte nicht gespeichert werden");
+      return { ...row, tenantId: String(row.tenantId) } as never;
+    },
+    async listSourceVisits(tenantId, sourceId) {
+      const rows = await database.select().from(sourceVisits).where(and(
+        eq(sourceVisits.tenantId, Number(tenantId)), eq(sourceVisits.sourceId, sourceId),
+      )).orderBy(desc(sourceVisits.checkedAt));
+      return rows.map((row) => ({ ...row, tenantId: String(row.tenantId) })) as never;
     },
     async listDocuments(tenantId, filters: DocumentListFilters = {}) {
       const classificationFilters = [

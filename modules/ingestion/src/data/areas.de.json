@@ -1,0 +1,3314 @@
+[
+  {
+    "level": "state",
+    "ags": "08",
+    "name": "Baden-Württemberg",
+    "stateName": "Baden-Württemberg",
+    "orderIndex": 0
+  },
+  {
+    "level": "state",
+    "ags": "09",
+    "name": "Bayern",
+    "stateName": "Bayern",
+    "orderIndex": 1
+  },
+  {
+    "level": "state",
+    "ags": "11",
+    "name": "Berlin",
+    "stateName": "Berlin",
+    "orderIndex": 2
+  },
+  {
+    "level": "state",
+    "ags": "12",
+    "name": "Brandenburg",
+    "stateName": "Brandenburg",
+    "orderIndex": 3
+  },
+  {
+    "level": "state",
+    "ags": "04",
+    "name": "Bremen",
+    "stateName": "Bremen",
+    "orderIndex": 4
+  },
+  {
+    "level": "state",
+    "ags": "02",
+    "name": "Hamburg",
+    "stateName": "Hamburg",
+    "orderIndex": 5
+  },
+  {
+    "level": "state",
+    "ags": "06",
+    "name": "Hessen",
+    "stateName": "Hessen",
+    "orderIndex": 6
+  },
+  {
+    "level": "state",
+    "ags": "13",
+    "name": "Mecklenburg-Vorpommern",
+    "stateName": "Mecklenburg-Vorpommern",
+    "orderIndex": 7
+  },
+  {
+    "level": "state",
+    "ags": "03",
+    "name": "Niedersachsen",
+    "stateName": "Niedersachsen",
+    "orderIndex": 8
+  },
+  {
+    "level": "state",
+    "ags": "05",
+    "name": "Nordrhein-Westfalen",
+    "stateName": "Nordrhein-Westfalen",
+    "orderIndex": 9
+  },
+  {
+    "level": "state",
+    "ags": "07",
+    "name": "Rheinland-Pfalz",
+    "stateName": "Rheinland-Pfalz",
+    "orderIndex": 10
+  },
+  {
+    "level": "state",
+    "ags": "10",
+    "name": "Saarland",
+    "stateName": "Saarland",
+    "orderIndex": 11
+  },
+  {
+    "level": "state",
+    "ags": "14",
+    "name": "Sachsen",
+    "stateName": "Sachsen",
+    "orderIndex": 12
+  },
+  {
+    "level": "state",
+    "ags": "15",
+    "name": "Sachsen-Anhalt",
+    "stateName": "Sachsen-Anhalt",
+    "orderIndex": 13
+  },
+  {
+    "level": "state",
+    "ags": "01",
+    "name": "Schleswig-Holstein",
+    "stateName": "Schleswig-Holstein",
+    "orderIndex": 14
+  },
+  {
+    "level": "state",
+    "ags": "16",
+    "name": "Thüringen",
+    "stateName": "Thüringen",
+    "orderIndex": 15
+  },
+  {
+    "level": "district",
+    "ags": "08425",
+    "name": "Alb-Donau-Kreis",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 16
+  },
+  {
+    "level": "district",
+    "ags": "08211",
+    "name": "Baden-Baden, Stadtkreis",
+    "stateName": "Baden-Württemberg",
+    "kind": "Stadtkreis",
+    "orderIndex": 17
+  },
+  {
+    "level": "district",
+    "ags": "08426",
+    "name": "Biberach",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 18
+  },
+  {
+    "level": "district",
+    "ags": "08435",
+    "name": "Bodenseekreis",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 19
+  },
+  {
+    "level": "district",
+    "ags": "08315",
+    "name": "Breisgau-Hochschwarzwald",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 20
+  },
+  {
+    "level": "district",
+    "ags": "08115",
+    "name": "Böblingen",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 21
+  },
+  {
+    "level": "district",
+    "ags": "08235",
+    "name": "Calw",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 22
+  },
+  {
+    "level": "district",
+    "ags": "08316",
+    "name": "Emmendingen",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 23
+  },
+  {
+    "level": "district",
+    "ags": "08236",
+    "name": "Enzkreis",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 24
+  },
+  {
+    "level": "district",
+    "ags": "08116",
+    "name": "Esslingen",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 25
+  },
+  {
+    "level": "district",
+    "ags": "08311",
+    "name": "Freiburg im Breisgau, Stadtkreis",
+    "stateName": "Baden-Württemberg",
+    "kind": "Stadtkreis",
+    "orderIndex": 26
+  },
+  {
+    "level": "district",
+    "ags": "08237",
+    "name": "Freudenstadt",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 27
+  },
+  {
+    "level": "district",
+    "ags": "08117",
+    "name": "Göppingen",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 28
+  },
+  {
+    "level": "district",
+    "ags": "08221",
+    "name": "Heidelberg, Stadtkreis",
+    "stateName": "Baden-Württemberg",
+    "kind": "Stadtkreis",
+    "orderIndex": 29
+  },
+  {
+    "level": "district",
+    "ags": "08135",
+    "name": "Heidenheim",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 30
+  },
+  {
+    "level": "district",
+    "ags": "08125",
+    "name": "Heilbronn",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 31
+  },
+  {
+    "level": "district",
+    "ags": "08121",
+    "name": "Heilbronn, Stadtkreis",
+    "stateName": "Baden-Württemberg",
+    "kind": "Stadtkreis",
+    "orderIndex": 32
+  },
+  {
+    "level": "district",
+    "ags": "08126",
+    "name": "Hohenlohekreis",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 33
+  },
+  {
+    "level": "district",
+    "ags": "08215",
+    "name": "Karlsruhe",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 34
+  },
+  {
+    "level": "district",
+    "ags": "08212",
+    "name": "Karlsruhe, Stadtkreis",
+    "stateName": "Baden-Württemberg",
+    "kind": "Stadtkreis",
+    "orderIndex": 35
+  },
+  {
+    "level": "district",
+    "ags": "08335",
+    "name": "Konstanz",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 36
+  },
+  {
+    "level": "district",
+    "ags": "08118",
+    "name": "Ludwigsburg",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 37
+  },
+  {
+    "level": "district",
+    "ags": "08336",
+    "name": "Lörrach",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 38
+  },
+  {
+    "level": "district",
+    "ags": "08128",
+    "name": "Main-Tauber-Kreis",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 39
+  },
+  {
+    "level": "district",
+    "ags": "08222",
+    "name": "Mannheim, Stadtkreis",
+    "stateName": "Baden-Württemberg",
+    "kind": "Stadtkreis",
+    "orderIndex": 40
+  },
+  {
+    "level": "district",
+    "ags": "08225",
+    "name": "Neckar-Odenwald-Kreis",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 41
+  },
+  {
+    "level": "district",
+    "ags": "08317",
+    "name": "Ortenaukreis",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 42
+  },
+  {
+    "level": "district",
+    "ags": "08136",
+    "name": "Ostalbkreis",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 43
+  },
+  {
+    "level": "district",
+    "ags": "08231",
+    "name": "Pforzheim, Stadtkreis",
+    "stateName": "Baden-Württemberg",
+    "kind": "Stadtkreis",
+    "orderIndex": 44
+  },
+  {
+    "level": "district",
+    "ags": "08216",
+    "name": "Rastatt",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 45
+  },
+  {
+    "level": "district",
+    "ags": "08436",
+    "name": "Ravensburg",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 46
+  },
+  {
+    "level": "district",
+    "ags": "08119",
+    "name": "Rems-Murr-Kreis",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 47
+  },
+  {
+    "level": "district",
+    "ags": "08415",
+    "name": "Reutlingen",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 48
+  },
+  {
+    "level": "district",
+    "ags": "08226",
+    "name": "Rhein-Neckar-Kreis",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 49
+  },
+  {
+    "level": "district",
+    "ags": "08325",
+    "name": "Rottweil",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 50
+  },
+  {
+    "level": "district",
+    "ags": "08326",
+    "name": "Schwarzwald-Baar-Kreis",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 51
+  },
+  {
+    "level": "district",
+    "ags": "08127",
+    "name": "Schwäbisch Hall",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 52
+  },
+  {
+    "level": "district",
+    "ags": "08437",
+    "name": "Sigmaringen",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 53
+  },
+  {
+    "level": "district",
+    "ags": "08111",
+    "name": "Stuttgart, Stadtkreis",
+    "stateName": "Baden-Württemberg",
+    "kind": "Stadtkreis",
+    "orderIndex": 54
+  },
+  {
+    "level": "district",
+    "ags": "08327",
+    "name": "Tuttlingen",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 55
+  },
+  {
+    "level": "district",
+    "ags": "08416",
+    "name": "Tübingen",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 56
+  },
+  {
+    "level": "district",
+    "ags": "08421",
+    "name": "Ulm, Stadtkreis",
+    "stateName": "Baden-Württemberg",
+    "kind": "Stadtkreis",
+    "orderIndex": 57
+  },
+  {
+    "level": "district",
+    "ags": "08337",
+    "name": "Waldshut",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 58
+  },
+  {
+    "level": "district",
+    "ags": "08417",
+    "name": "Zollernalbkreis",
+    "stateName": "Baden-Württemberg",
+    "kind": "Landkreis",
+    "orderIndex": 59
+  },
+  {
+    "level": "district",
+    "ags": "09771",
+    "name": "Aichach-Friedberg",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 60
+  },
+  {
+    "level": "district",
+    "ags": "09171",
+    "name": "Altötting",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 61
+  },
+  {
+    "level": "district",
+    "ags": "09361",
+    "name": "Amberg",
+    "stateName": "Bayern",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 62
+  },
+  {
+    "level": "district",
+    "ags": "09371",
+    "name": "Amberg-Sulzbach",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 63
+  },
+  {
+    "level": "district",
+    "ags": "09561",
+    "name": "Ansbach",
+    "stateName": "Bayern",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 64
+  },
+  {
+    "level": "district",
+    "ags": "09571",
+    "name": "Ansbach",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 65
+  },
+  {
+    "level": "district",
+    "ags": "09661",
+    "name": "Aschaffenburg",
+    "stateName": "Bayern",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 66
+  },
+  {
+    "level": "district",
+    "ags": "09671",
+    "name": "Aschaffenburg",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 67
+  },
+  {
+    "level": "district",
+    "ags": "09761",
+    "name": "Augsburg",
+    "stateName": "Bayern",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 68
+  },
+  {
+    "level": "district",
+    "ags": "09772",
+    "name": "Augsburg",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 69
+  },
+  {
+    "level": "district",
+    "ags": "09672",
+    "name": "Bad Kissingen",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 70
+  },
+  {
+    "level": "district",
+    "ags": "09173",
+    "name": "Bad Tölz-Wolfratshausen",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 71
+  },
+  {
+    "level": "district",
+    "ags": "09461",
+    "name": "Bamberg",
+    "stateName": "Bayern",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 72
+  },
+  {
+    "level": "district",
+    "ags": "09471",
+    "name": "Bamberg",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 73
+  },
+  {
+    "level": "district",
+    "ags": "09462",
+    "name": "Bayreuth",
+    "stateName": "Bayern",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 74
+  },
+  {
+    "level": "district",
+    "ags": "09472",
+    "name": "Bayreuth",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 75
+  },
+  {
+    "level": "district",
+    "ags": "09172",
+    "name": "Berchtesgadener Land",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 76
+  },
+  {
+    "level": "district",
+    "ags": "09372",
+    "name": "Cham",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 77
+  },
+  {
+    "level": "district",
+    "ags": "09463",
+    "name": "Coburg",
+    "stateName": "Bayern",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 78
+  },
+  {
+    "level": "district",
+    "ags": "09473",
+    "name": "Coburg",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 79
+  },
+  {
+    "level": "district",
+    "ags": "09174",
+    "name": "Dachau",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 80
+  },
+  {
+    "level": "district",
+    "ags": "09271",
+    "name": "Deggendorf",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 81
+  },
+  {
+    "level": "district",
+    "ags": "09773",
+    "name": "Dillingen a.d.Donau",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 82
+  },
+  {
+    "level": "district",
+    "ags": "09279",
+    "name": "Dingolfing-Landau",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 83
+  },
+  {
+    "level": "district",
+    "ags": "09779",
+    "name": "Donau-Ries",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 84
+  },
+  {
+    "level": "district",
+    "ags": "09175",
+    "name": "Ebersberg",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 85
+  },
+  {
+    "level": "district",
+    "ags": "09176",
+    "name": "Eichstätt",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 86
+  },
+  {
+    "level": "district",
+    "ags": "09177",
+    "name": "Erding",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 87
+  },
+  {
+    "level": "district",
+    "ags": "09562",
+    "name": "Erlangen",
+    "stateName": "Bayern",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 88
+  },
+  {
+    "level": "district",
+    "ags": "09572",
+    "name": "Erlangen-Höchstadt",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 89
+  },
+  {
+    "level": "district",
+    "ags": "09474",
+    "name": "Forchheim",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 90
+  },
+  {
+    "level": "district",
+    "ags": "09178",
+    "name": "Freising",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 91
+  },
+  {
+    "level": "district",
+    "ags": "09272",
+    "name": "Freyung-Grafenau",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 92
+  },
+  {
+    "level": "district",
+    "ags": "09179",
+    "name": "Fürstenfeldbruck",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 93
+  },
+  {
+    "level": "district",
+    "ags": "09563",
+    "name": "Fürth",
+    "stateName": "Bayern",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 94
+  },
+  {
+    "level": "district",
+    "ags": "09573",
+    "name": "Fürth",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 95
+  },
+  {
+    "level": "district",
+    "ags": "09180",
+    "name": "Garmisch-Partenkirchen",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 96
+  },
+  {
+    "level": "district",
+    "ags": "09774",
+    "name": "Günzburg",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 97
+  },
+  {
+    "level": "district",
+    "ags": "09674",
+    "name": "Haßberge",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 98
+  },
+  {
+    "level": "district",
+    "ags": "09464",
+    "name": "Hof",
+    "stateName": "Bayern",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 99
+  },
+  {
+    "level": "district",
+    "ags": "09475",
+    "name": "Hof",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 100
+  },
+  {
+    "level": "district",
+    "ags": "09161",
+    "name": "Ingolstadt",
+    "stateName": "Bayern",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 101
+  },
+  {
+    "level": "district",
+    "ags": "09762",
+    "name": "Kaufbeuren",
+    "stateName": "Bayern",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 102
+  },
+  {
+    "level": "district",
+    "ags": "09273",
+    "name": "Kelheim",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 103
+  },
+  {
+    "level": "district",
+    "ags": "09763",
+    "name": "Kempten (Allgäu)",
+    "stateName": "Bayern",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 104
+  },
+  {
+    "level": "district",
+    "ags": "09675",
+    "name": "Kitzingen",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 105
+  },
+  {
+    "level": "district",
+    "ags": "09476",
+    "name": "Kronach",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 106
+  },
+  {
+    "level": "district",
+    "ags": "09477",
+    "name": "Kulmbach",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 107
+  },
+  {
+    "level": "district",
+    "ags": "09181",
+    "name": "Landsberg am Lech",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 108
+  },
+  {
+    "level": "district",
+    "ags": "09261",
+    "name": "Landshut",
+    "stateName": "Bayern",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 109
+  },
+  {
+    "level": "district",
+    "ags": "09274",
+    "name": "Landshut",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 110
+  },
+  {
+    "level": "district",
+    "ags": "09478",
+    "name": "Lichtenfels",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 111
+  },
+  {
+    "level": "district",
+    "ags": "09776",
+    "name": "Lindau (Bodensee)",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 112
+  },
+  {
+    "level": "district",
+    "ags": "09677",
+    "name": "Main-Spessart",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 113
+  },
+  {
+    "level": "district",
+    "ags": "09764",
+    "name": "Memmingen",
+    "stateName": "Bayern",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 114
+  },
+  {
+    "level": "district",
+    "ags": "09182",
+    "name": "Miesbach",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 115
+  },
+  {
+    "level": "district",
+    "ags": "09676",
+    "name": "Miltenberg",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 116
+  },
+  {
+    "level": "district",
+    "ags": "09183",
+    "name": "Mühldorf a.Inn",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 117
+  },
+  {
+    "level": "district",
+    "ags": "09184",
+    "name": "München",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 118
+  },
+  {
+    "level": "district",
+    "ags": "09162",
+    "name": "München, Landeshauptstadt",
+    "stateName": "Bayern",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 119
+  },
+  {
+    "level": "district",
+    "ags": "09775",
+    "name": "Neu-Ulm",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 120
+  },
+  {
+    "level": "district",
+    "ags": "09185",
+    "name": "Neuburg-Schrobenhausen",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 121
+  },
+  {
+    "level": "district",
+    "ags": "09373",
+    "name": "Neumarkt i.d.OPf.",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 122
+  },
+  {
+    "level": "district",
+    "ags": "09575",
+    "name": "Neustadt a.d.Aisch-Bad Windsheim",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 123
+  },
+  {
+    "level": "district",
+    "ags": "09374",
+    "name": "Neustadt a.d.Waldnaab",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 124
+  },
+  {
+    "level": "district",
+    "ags": "09564",
+    "name": "Nürnberg",
+    "stateName": "Bayern",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 125
+  },
+  {
+    "level": "district",
+    "ags": "09574",
+    "name": "Nürnberger Land",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 126
+  },
+  {
+    "level": "district",
+    "ags": "09780",
+    "name": "Oberallgäu",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 127
+  },
+  {
+    "level": "district",
+    "ags": "09777",
+    "name": "Ostallgäu",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 128
+  },
+  {
+    "level": "district",
+    "ags": "09262",
+    "name": "Passau",
+    "stateName": "Bayern",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 129
+  },
+  {
+    "level": "district",
+    "ags": "09275",
+    "name": "Passau",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 130
+  },
+  {
+    "level": "district",
+    "ags": "09186",
+    "name": "Pfaffenhofen a.d.Ilm",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 131
+  },
+  {
+    "level": "district",
+    "ags": "09276",
+    "name": "Regen",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 132
+  },
+  {
+    "level": "district",
+    "ags": "09362",
+    "name": "Regensburg",
+    "stateName": "Bayern",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 133
+  },
+  {
+    "level": "district",
+    "ags": "09375",
+    "name": "Regensburg",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 134
+  },
+  {
+    "level": "district",
+    "ags": "09673",
+    "name": "Rhön-Grabfeld",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 135
+  },
+  {
+    "level": "district",
+    "ags": "09163",
+    "name": "Rosenheim",
+    "stateName": "Bayern",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 136
+  },
+  {
+    "level": "district",
+    "ags": "09187",
+    "name": "Rosenheim",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 137
+  },
+  {
+    "level": "district",
+    "ags": "09576",
+    "name": "Roth",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 138
+  },
+  {
+    "level": "district",
+    "ags": "09277",
+    "name": "Rottal-Inn",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 139
+  },
+  {
+    "level": "district",
+    "ags": "09565",
+    "name": "Schwabach",
+    "stateName": "Bayern",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 140
+  },
+  {
+    "level": "district",
+    "ags": "09376",
+    "name": "Schwandorf",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 141
+  },
+  {
+    "level": "district",
+    "ags": "09662",
+    "name": "Schweinfurt",
+    "stateName": "Bayern",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 142
+  },
+  {
+    "level": "district",
+    "ags": "09678",
+    "name": "Schweinfurt",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 143
+  },
+  {
+    "level": "district",
+    "ags": "09188",
+    "name": "Starnberg",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 144
+  },
+  {
+    "level": "district",
+    "ags": "09263",
+    "name": "Straubing",
+    "stateName": "Bayern",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 145
+  },
+  {
+    "level": "district",
+    "ags": "09278",
+    "name": "Straubing-Bogen",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 146
+  },
+  {
+    "level": "district",
+    "ags": "09377",
+    "name": "Tirschenreuth",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 147
+  },
+  {
+    "level": "district",
+    "ags": "09189",
+    "name": "Traunstein",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 148
+  },
+  {
+    "level": "district",
+    "ags": "09778",
+    "name": "Unterallgäu",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 149
+  },
+  {
+    "level": "district",
+    "ags": "09363",
+    "name": "Weiden i.d.OPf.",
+    "stateName": "Bayern",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 150
+  },
+  {
+    "level": "district",
+    "ags": "09190",
+    "name": "Weilheim-Schongau",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 151
+  },
+  {
+    "level": "district",
+    "ags": "09577",
+    "name": "Weißenburg-Gunzenhausen",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 152
+  },
+  {
+    "level": "district",
+    "ags": "09479",
+    "name": "Wunsiedel i.Fichtelgebirge",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 153
+  },
+  {
+    "level": "district",
+    "ags": "09663",
+    "name": "Würzburg",
+    "stateName": "Bayern",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 154
+  },
+  {
+    "level": "district",
+    "ags": "09679",
+    "name": "Würzburg",
+    "stateName": "Bayern",
+    "kind": "Landkreis",
+    "orderIndex": 155
+  },
+  {
+    "level": "district",
+    "ags": "11000",
+    "name": "Berlin, Stadt",
+    "stateName": "Berlin",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 156
+  },
+  {
+    "level": "district",
+    "ags": "12060",
+    "name": "Barnim",
+    "stateName": "Brandenburg",
+    "kind": "Landkreis",
+    "orderIndex": 157
+  },
+  {
+    "level": "district",
+    "ags": "12051",
+    "name": "Brandenburg an der Havel, Stadt",
+    "stateName": "Brandenburg",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 158
+  },
+  {
+    "level": "district",
+    "ags": "12052",
+    "name": "Cottbus, Stadt",
+    "stateName": "Brandenburg",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 159
+  },
+  {
+    "level": "district",
+    "ags": "12061",
+    "name": "Dahme-Spreewald",
+    "stateName": "Brandenburg",
+    "kind": "Landkreis",
+    "orderIndex": 160
+  },
+  {
+    "level": "district",
+    "ags": "12062",
+    "name": "Elbe-Elster",
+    "stateName": "Brandenburg",
+    "kind": "Landkreis",
+    "orderIndex": 161
+  },
+  {
+    "level": "district",
+    "ags": "12053",
+    "name": "Frankfurt (Oder), Stadt",
+    "stateName": "Brandenburg",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 162
+  },
+  {
+    "level": "district",
+    "ags": "12063",
+    "name": "Havelland",
+    "stateName": "Brandenburg",
+    "kind": "Landkreis",
+    "orderIndex": 163
+  },
+  {
+    "level": "district",
+    "ags": "12064",
+    "name": "Märkisch-Oderland",
+    "stateName": "Brandenburg",
+    "kind": "Landkreis",
+    "orderIndex": 164
+  },
+  {
+    "level": "district",
+    "ags": "12065",
+    "name": "Oberhavel",
+    "stateName": "Brandenburg",
+    "kind": "Landkreis",
+    "orderIndex": 165
+  },
+  {
+    "level": "district",
+    "ags": "12066",
+    "name": "Oberspreewald-Lausitz",
+    "stateName": "Brandenburg",
+    "kind": "Landkreis",
+    "orderIndex": 166
+  },
+  {
+    "level": "district",
+    "ags": "12067",
+    "name": "Oder-Spree",
+    "stateName": "Brandenburg",
+    "kind": "Landkreis",
+    "orderIndex": 167
+  },
+  {
+    "level": "district",
+    "ags": "12068",
+    "name": "Ostprignitz-Ruppin",
+    "stateName": "Brandenburg",
+    "kind": "Landkreis",
+    "orderIndex": 168
+  },
+  {
+    "level": "district",
+    "ags": "12054",
+    "name": "Potsdam, Stadt",
+    "stateName": "Brandenburg",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 169
+  },
+  {
+    "level": "district",
+    "ags": "12069",
+    "name": "Potsdam-Mittelmark",
+    "stateName": "Brandenburg",
+    "kind": "Landkreis",
+    "orderIndex": 170
+  },
+  {
+    "level": "district",
+    "ags": "12070",
+    "name": "Prignitz",
+    "stateName": "Brandenburg",
+    "kind": "Landkreis",
+    "orderIndex": 171
+  },
+  {
+    "level": "district",
+    "ags": "12071",
+    "name": "Spree-Neiße",
+    "stateName": "Brandenburg",
+    "kind": "Landkreis",
+    "orderIndex": 172
+  },
+  {
+    "level": "district",
+    "ags": "12072",
+    "name": "Teltow-Fläming",
+    "stateName": "Brandenburg",
+    "kind": "Landkreis",
+    "orderIndex": 173
+  },
+  {
+    "level": "district",
+    "ags": "12073",
+    "name": "Uckermark",
+    "stateName": "Brandenburg",
+    "kind": "Landkreis",
+    "orderIndex": 174
+  },
+  {
+    "level": "district",
+    "ags": "04011",
+    "name": "Bremen, Stadt",
+    "stateName": "Bremen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 175
+  },
+  {
+    "level": "district",
+    "ags": "04012",
+    "name": "Bremerhaven, Stadt",
+    "stateName": "Bremen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 176
+  },
+  {
+    "level": "district",
+    "ags": "02000",
+    "name": "Hamburg, Freie und Hansestadt",
+    "stateName": "Hamburg",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 177
+  },
+  {
+    "level": "district",
+    "ags": "06431",
+    "name": "Bergstraße",
+    "stateName": "Hessen",
+    "kind": "Landkreis",
+    "orderIndex": 178
+  },
+  {
+    "level": "district",
+    "ags": "06411",
+    "name": "Darmstadt, Wissenschaftsstadt",
+    "stateName": "Hessen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 179
+  },
+  {
+    "level": "district",
+    "ags": "06432",
+    "name": "Darmstadt-Dieburg",
+    "stateName": "Hessen",
+    "kind": "Landkreis",
+    "orderIndex": 180
+  },
+  {
+    "level": "district",
+    "ags": "06412",
+    "name": "Frankfurt am Main, Stadt",
+    "stateName": "Hessen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 181
+  },
+  {
+    "level": "district",
+    "ags": "06631",
+    "name": "Fulda",
+    "stateName": "Hessen",
+    "kind": "Landkreis",
+    "orderIndex": 182
+  },
+  {
+    "level": "district",
+    "ags": "06531",
+    "name": "Gießen",
+    "stateName": "Hessen",
+    "kind": "Landkreis",
+    "orderIndex": 183
+  },
+  {
+    "level": "district",
+    "ags": "06433",
+    "name": "Groß-Gerau",
+    "stateName": "Hessen",
+    "kind": "Landkreis",
+    "orderIndex": 184
+  },
+  {
+    "level": "district",
+    "ags": "06632",
+    "name": "Hersfeld-Rotenburg",
+    "stateName": "Hessen",
+    "kind": "Landkreis",
+    "orderIndex": 185
+  },
+  {
+    "level": "district",
+    "ags": "06434",
+    "name": "Hochtaunuskreis",
+    "stateName": "Hessen",
+    "kind": "Landkreis",
+    "orderIndex": 186
+  },
+  {
+    "level": "district",
+    "ags": "06633",
+    "name": "Kassel",
+    "stateName": "Hessen",
+    "kind": "Landkreis",
+    "orderIndex": 187
+  },
+  {
+    "level": "district",
+    "ags": "06611",
+    "name": "Kassel, documenta-Stadt",
+    "stateName": "Hessen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 188
+  },
+  {
+    "level": "district",
+    "ags": "06532",
+    "name": "Lahn-Dill-Kreis",
+    "stateName": "Hessen",
+    "kind": "Landkreis",
+    "orderIndex": 189
+  },
+  {
+    "level": "district",
+    "ags": "06533",
+    "name": "Limburg-Weilburg",
+    "stateName": "Hessen",
+    "kind": "Landkreis",
+    "orderIndex": 190
+  },
+  {
+    "level": "district",
+    "ags": "06435",
+    "name": "Main-Kinzig-Kreis",
+    "stateName": "Hessen",
+    "kind": "Landkreis",
+    "orderIndex": 191
+  },
+  {
+    "level": "district",
+    "ags": "06436",
+    "name": "Main-Taunus-Kreis",
+    "stateName": "Hessen",
+    "kind": "Landkreis",
+    "orderIndex": 192
+  },
+  {
+    "level": "district",
+    "ags": "06534",
+    "name": "Marburg-Biedenkopf",
+    "stateName": "Hessen",
+    "kind": "Landkreis",
+    "orderIndex": 193
+  },
+  {
+    "level": "district",
+    "ags": "06437",
+    "name": "Odenwaldkreis",
+    "stateName": "Hessen",
+    "kind": "Landkreis",
+    "orderIndex": 194
+  },
+  {
+    "level": "district",
+    "ags": "06438",
+    "name": "Offenbach",
+    "stateName": "Hessen",
+    "kind": "Landkreis",
+    "orderIndex": 195
+  },
+  {
+    "level": "district",
+    "ags": "06413",
+    "name": "Offenbach am Main, Stadt",
+    "stateName": "Hessen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 196
+  },
+  {
+    "level": "district",
+    "ags": "06439",
+    "name": "Rheingau-Taunus-Kreis",
+    "stateName": "Hessen",
+    "kind": "Landkreis",
+    "orderIndex": 197
+  },
+  {
+    "level": "district",
+    "ags": "06634",
+    "name": "Schwalm-Eder-Kreis",
+    "stateName": "Hessen",
+    "kind": "Landkreis",
+    "orderIndex": 198
+  },
+  {
+    "level": "district",
+    "ags": "06535",
+    "name": "Vogelsbergkreis",
+    "stateName": "Hessen",
+    "kind": "Landkreis",
+    "orderIndex": 199
+  },
+  {
+    "level": "district",
+    "ags": "06635",
+    "name": "Waldeck-Frankenberg",
+    "stateName": "Hessen",
+    "kind": "Landkreis",
+    "orderIndex": 200
+  },
+  {
+    "level": "district",
+    "ags": "06636",
+    "name": "Werra-Meißner-Kreis",
+    "stateName": "Hessen",
+    "kind": "Landkreis",
+    "orderIndex": 201
+  },
+  {
+    "level": "district",
+    "ags": "06440",
+    "name": "Wetteraukreis",
+    "stateName": "Hessen",
+    "kind": "Landkreis",
+    "orderIndex": 202
+  },
+  {
+    "level": "district",
+    "ags": "06414",
+    "name": "Wiesbaden, Landeshauptstadt",
+    "stateName": "Hessen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 203
+  },
+  {
+    "level": "district",
+    "ags": "13072",
+    "name": "Landkreis Rostock",
+    "stateName": "Mecklenburg-Vorpommern",
+    "kind": "Landkreis",
+    "orderIndex": 204
+  },
+  {
+    "level": "district",
+    "ags": "13076",
+    "name": "Ludwigslust-Parchim",
+    "stateName": "Mecklenburg-Vorpommern",
+    "kind": "Landkreis",
+    "orderIndex": 205
+  },
+  {
+    "level": "district",
+    "ags": "13071",
+    "name": "Mecklenburgische Seenplatte",
+    "stateName": "Mecklenburg-Vorpommern",
+    "kind": "Landkreis",
+    "orderIndex": 206
+  },
+  {
+    "level": "district",
+    "ags": "13074",
+    "name": "Nordwestmecklenburg",
+    "stateName": "Mecklenburg-Vorpommern",
+    "kind": "Landkreis",
+    "orderIndex": 207
+  },
+  {
+    "level": "district",
+    "ags": "13003",
+    "name": "Rostock",
+    "stateName": "Mecklenburg-Vorpommern",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 208
+  },
+  {
+    "level": "district",
+    "ags": "13004",
+    "name": "Schwerin",
+    "stateName": "Mecklenburg-Vorpommern",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 209
+  },
+  {
+    "level": "district",
+    "ags": "13075",
+    "name": "Vorpommern-Greifswald",
+    "stateName": "Mecklenburg-Vorpommern",
+    "kind": "Landkreis",
+    "orderIndex": 210
+  },
+  {
+    "level": "district",
+    "ags": "13073",
+    "name": "Vorpommern-Rügen",
+    "stateName": "Mecklenburg-Vorpommern",
+    "kind": "Landkreis",
+    "orderIndex": 211
+  },
+  {
+    "level": "district",
+    "ags": "03451",
+    "name": "Ammerland",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 212
+  },
+  {
+    "level": "district",
+    "ags": "03452",
+    "name": "Aurich",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 213
+  },
+  {
+    "level": "district",
+    "ags": "03101",
+    "name": "Braunschweig, Stadt",
+    "stateName": "Niedersachsen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 214
+  },
+  {
+    "level": "district",
+    "ags": "03351",
+    "name": "Celle",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 215
+  },
+  {
+    "level": "district",
+    "ags": "03453",
+    "name": "Cloppenburg",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 216
+  },
+  {
+    "level": "district",
+    "ags": "03352",
+    "name": "Cuxhaven",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 217
+  },
+  {
+    "level": "district",
+    "ags": "03401",
+    "name": "Delmenhorst, Stadt",
+    "stateName": "Niedersachsen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 218
+  },
+  {
+    "level": "district",
+    "ags": "03251",
+    "name": "Diepholz",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 219
+  },
+  {
+    "level": "district",
+    "ags": "03402",
+    "name": "Emden, Stadt",
+    "stateName": "Niedersachsen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 220
+  },
+  {
+    "level": "district",
+    "ags": "03454",
+    "name": "Emsland",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 221
+  },
+  {
+    "level": "district",
+    "ags": "03455",
+    "name": "Friesland",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 222
+  },
+  {
+    "level": "district",
+    "ags": "03151",
+    "name": "Gifhorn",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 223
+  },
+  {
+    "level": "district",
+    "ags": "03153",
+    "name": "Goslar",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 224
+  },
+  {
+    "level": "district",
+    "ags": "03456",
+    "name": "Grafschaft Bentheim",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 225
+  },
+  {
+    "level": "district",
+    "ags": "03159",
+    "name": "Göttingen",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 226
+  },
+  {
+    "level": "district",
+    "ags": "03252",
+    "name": "Hameln-Pyrmont",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 227
+  },
+  {
+    "level": "district",
+    "ags": "03353",
+    "name": "Harburg",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 228
+  },
+  {
+    "level": "district",
+    "ags": "03358",
+    "name": "Heidekreis",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 229
+  },
+  {
+    "level": "district",
+    "ags": "03154",
+    "name": "Helmstedt",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 230
+  },
+  {
+    "level": "district",
+    "ags": "03254",
+    "name": "Hildesheim",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 231
+  },
+  {
+    "level": "district",
+    "ags": "03255",
+    "name": "Holzminden",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 232
+  },
+  {
+    "level": "district",
+    "ags": "03457",
+    "name": "Leer",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 233
+  },
+  {
+    "level": "district",
+    "ags": "03354",
+    "name": "Lüchow-Dannenberg",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 234
+  },
+  {
+    "level": "district",
+    "ags": "03355",
+    "name": "Lüneburg",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 235
+  },
+  {
+    "level": "district",
+    "ags": "03256",
+    "name": "Nienburg (Weser)",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 236
+  },
+  {
+    "level": "district",
+    "ags": "03155",
+    "name": "Northeim",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 237
+  },
+  {
+    "level": "district",
+    "ags": "03458",
+    "name": "Oldenburg",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 238
+  },
+  {
+    "level": "district",
+    "ags": "03403",
+    "name": "Oldenburg (Oldenburg), Stadt",
+    "stateName": "Niedersachsen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 239
+  },
+  {
+    "level": "district",
+    "ags": "03459",
+    "name": "Osnabrück",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 240
+  },
+  {
+    "level": "district",
+    "ags": "03404",
+    "name": "Osnabrück, Stadt",
+    "stateName": "Niedersachsen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 241
+  },
+  {
+    "level": "district",
+    "ags": "03356",
+    "name": "Osterholz",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 242
+  },
+  {
+    "level": "district",
+    "ags": "03157",
+    "name": "Peine",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 243
+  },
+  {
+    "level": "district",
+    "ags": "03241",
+    "name": "Region Hannover",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 244
+  },
+  {
+    "level": "district",
+    "ags": "03357",
+    "name": "Rotenburg (Wümme)",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 245
+  },
+  {
+    "level": "district",
+    "ags": "03102",
+    "name": "Salzgitter, Stadt",
+    "stateName": "Niedersachsen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 246
+  },
+  {
+    "level": "district",
+    "ags": "03257",
+    "name": "Schaumburg",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 247
+  },
+  {
+    "level": "district",
+    "ags": "03359",
+    "name": "Stade",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 248
+  },
+  {
+    "level": "district",
+    "ags": "03360",
+    "name": "Uelzen",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 249
+  },
+  {
+    "level": "district",
+    "ags": "03460",
+    "name": "Vechta",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 250
+  },
+  {
+    "level": "district",
+    "ags": "03361",
+    "name": "Verden",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 251
+  },
+  {
+    "level": "district",
+    "ags": "03461",
+    "name": "Wesermarsch",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 252
+  },
+  {
+    "level": "district",
+    "ags": "03405",
+    "name": "Wilhelmshaven, Stadt",
+    "stateName": "Niedersachsen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 253
+  },
+  {
+    "level": "district",
+    "ags": "03462",
+    "name": "Wittmund",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 254
+  },
+  {
+    "level": "district",
+    "ags": "03158",
+    "name": "Wolfenbüttel",
+    "stateName": "Niedersachsen",
+    "kind": "Landkreis",
+    "orderIndex": 255
+  },
+  {
+    "level": "district",
+    "ags": "03103",
+    "name": "Wolfsburg, Stadt",
+    "stateName": "Niedersachsen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 256
+  },
+  {
+    "level": "district",
+    "ags": "05711",
+    "name": "Bielefeld, Stadt",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 257
+  },
+  {
+    "level": "district",
+    "ags": "05911",
+    "name": "Bochum, Stadt",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 258
+  },
+  {
+    "level": "district",
+    "ags": "05314",
+    "name": "Bonn, Stadt",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 259
+  },
+  {
+    "level": "district",
+    "ags": "05554",
+    "name": "Borken",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreis",
+    "orderIndex": 260
+  },
+  {
+    "level": "district",
+    "ags": "05512",
+    "name": "Bottrop, Stadt",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 261
+  },
+  {
+    "level": "district",
+    "ags": "05558",
+    "name": "Coesfeld",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreis",
+    "orderIndex": 262
+  },
+  {
+    "level": "district",
+    "ags": "05913",
+    "name": "Dortmund, Stadt",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 263
+  },
+  {
+    "level": "district",
+    "ags": "05112",
+    "name": "Duisburg, Stadt",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 264
+  },
+  {
+    "level": "district",
+    "ags": "05358",
+    "name": "Düren",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreis",
+    "orderIndex": 265
+  },
+  {
+    "level": "district",
+    "ags": "05111",
+    "name": "Düsseldorf, Stadt",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 266
+  },
+  {
+    "level": "district",
+    "ags": "05954",
+    "name": "Ennepe-Ruhr-Kreis",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreis",
+    "orderIndex": 267
+  },
+  {
+    "level": "district",
+    "ags": "05113",
+    "name": "Essen, Stadt",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 268
+  },
+  {
+    "level": "district",
+    "ags": "05366",
+    "name": "Euskirchen",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreis",
+    "orderIndex": 269
+  },
+  {
+    "level": "district",
+    "ags": "05513",
+    "name": "Gelsenkirchen, Stadt",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 270
+  },
+  {
+    "level": "district",
+    "ags": "05754",
+    "name": "Gütersloh",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreis",
+    "orderIndex": 271
+  },
+  {
+    "level": "district",
+    "ags": "05914",
+    "name": "Hagen, Stadt der FernUniversität",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 272
+  },
+  {
+    "level": "district",
+    "ags": "05915",
+    "name": "Hamm, Stadt",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 273
+  },
+  {
+    "level": "district",
+    "ags": "05370",
+    "name": "Heinsberg",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreis",
+    "orderIndex": 274
+  },
+  {
+    "level": "district",
+    "ags": "05758",
+    "name": "Herford",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreis",
+    "orderIndex": 275
+  },
+  {
+    "level": "district",
+    "ags": "05916",
+    "name": "Herne, Stadt",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 276
+  },
+  {
+    "level": "district",
+    "ags": "05958",
+    "name": "Hochsauerlandkreis",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreis",
+    "orderIndex": 277
+  },
+  {
+    "level": "district",
+    "ags": "05762",
+    "name": "Höxter",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreis",
+    "orderIndex": 278
+  },
+  {
+    "level": "district",
+    "ags": "05154",
+    "name": "Kleve",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreis",
+    "orderIndex": 279
+  },
+  {
+    "level": "district",
+    "ags": "05114",
+    "name": "Krefeld, Stadt",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 280
+  },
+  {
+    "level": "district",
+    "ags": "05315",
+    "name": "Köln, Stadt",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 281
+  },
+  {
+    "level": "district",
+    "ags": "05316",
+    "name": "Leverkusen, Stadt",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 282
+  },
+  {
+    "level": "district",
+    "ags": "05766",
+    "name": "Lippe",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreis",
+    "orderIndex": 283
+  },
+  {
+    "level": "district",
+    "ags": "05158",
+    "name": "Mettmann",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreis",
+    "orderIndex": 284
+  },
+  {
+    "level": "district",
+    "ags": "05770",
+    "name": "Minden-Lübbecke",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreis",
+    "orderIndex": 285
+  },
+  {
+    "level": "district",
+    "ags": "05962",
+    "name": "Märkischer Kreis",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreis",
+    "orderIndex": 286
+  },
+  {
+    "level": "district",
+    "ags": "05116",
+    "name": "Mönchengladbach, Stadt",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 287
+  },
+  {
+    "level": "district",
+    "ags": "05117",
+    "name": "Mülheim an der Ruhr, Stadt",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 288
+  },
+  {
+    "level": "district",
+    "ags": "05515",
+    "name": "Münster, Stadt",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 289
+  },
+  {
+    "level": "district",
+    "ags": "05374",
+    "name": "Oberbergischer Kreis",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreis",
+    "orderIndex": 290
+  },
+  {
+    "level": "district",
+    "ags": "05119",
+    "name": "Oberhausen, Stadt",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 291
+  },
+  {
+    "level": "district",
+    "ags": "05966",
+    "name": "Olpe",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreis",
+    "orderIndex": 292
+  },
+  {
+    "level": "district",
+    "ags": "05774",
+    "name": "Paderborn",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreis",
+    "orderIndex": 293
+  },
+  {
+    "level": "district",
+    "ags": "05562",
+    "name": "Recklinghausen",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreis",
+    "orderIndex": 294
+  },
+  {
+    "level": "district",
+    "ags": "05120",
+    "name": "Remscheid, Stadt",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 295
+  },
+  {
+    "level": "district",
+    "ags": "05362",
+    "name": "Rhein-Erft-Kreis",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreis",
+    "orderIndex": 296
+  },
+  {
+    "level": "district",
+    "ags": "05162",
+    "name": "Rhein-Kreis Neuss",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreis",
+    "orderIndex": 297
+  },
+  {
+    "level": "district",
+    "ags": "05382",
+    "name": "Rhein-Sieg-Kreis",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreis",
+    "orderIndex": 298
+  },
+  {
+    "level": "district",
+    "ags": "05378",
+    "name": "Rheinisch-Bergischer Kreis",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreis",
+    "orderIndex": 299
+  },
+  {
+    "level": "district",
+    "ags": "05970",
+    "name": "Siegen-Wittgenstein",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreis",
+    "orderIndex": 300
+  },
+  {
+    "level": "district",
+    "ags": "05974",
+    "name": "Soest",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreis",
+    "orderIndex": 301
+  },
+  {
+    "level": "district",
+    "ags": "05122",
+    "name": "Solingen, Klingenstadt",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 302
+  },
+  {
+    "level": "district",
+    "ags": "05566",
+    "name": "Steinfurt",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreis",
+    "orderIndex": 303
+  },
+  {
+    "level": "district",
+    "ags": "05334",
+    "name": "Städteregion Aachen",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreis",
+    "orderIndex": 304
+  },
+  {
+    "level": "district",
+    "ags": "05978",
+    "name": "Unna",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreis",
+    "orderIndex": 305
+  },
+  {
+    "level": "district",
+    "ags": "05166",
+    "name": "Viersen",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreis",
+    "orderIndex": 306
+  },
+  {
+    "level": "district",
+    "ags": "05570",
+    "name": "Warendorf",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreis",
+    "orderIndex": 307
+  },
+  {
+    "level": "district",
+    "ags": "05170",
+    "name": "Wesel",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreis",
+    "orderIndex": 308
+  },
+  {
+    "level": "district",
+    "ags": "05124",
+    "name": "Wuppertal, Stadt",
+    "stateName": "Nordrhein-Westfalen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 309
+  },
+  {
+    "level": "district",
+    "ags": "07131",
+    "name": "Ahrweiler",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Landkreis",
+    "orderIndex": 310
+  },
+  {
+    "level": "district",
+    "ags": "07132",
+    "name": "Altenkirchen (Westerwald)",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Landkreis",
+    "orderIndex": 311
+  },
+  {
+    "level": "district",
+    "ags": "07331",
+    "name": "Alzey-Worms",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Landkreis",
+    "orderIndex": 312
+  },
+  {
+    "level": "district",
+    "ags": "07332",
+    "name": "Bad Dürkheim",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Landkreis",
+    "orderIndex": 313
+  },
+  {
+    "level": "district",
+    "ags": "07133",
+    "name": "Bad Kreuznach",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Landkreis",
+    "orderIndex": 314
+  },
+  {
+    "level": "district",
+    "ags": "07231",
+    "name": "Bernkastel-Wittlich",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Landkreis",
+    "orderIndex": 315
+  },
+  {
+    "level": "district",
+    "ags": "07134",
+    "name": "Birkenfeld",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Landkreis",
+    "orderIndex": 316
+  },
+  {
+    "level": "district",
+    "ags": "07135",
+    "name": "Cochem-Zell",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Landkreis",
+    "orderIndex": 317
+  },
+  {
+    "level": "district",
+    "ags": "07333",
+    "name": "Donnersbergkreis",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Landkreis",
+    "orderIndex": 318
+  },
+  {
+    "level": "district",
+    "ags": "07232",
+    "name": "Eifelkreis Bitburg-Prüm",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Landkreis",
+    "orderIndex": 319
+  },
+  {
+    "level": "district",
+    "ags": "07311",
+    "name": "Frankenthal (Pfalz), kreisfreie Stadt",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 320
+  },
+  {
+    "level": "district",
+    "ags": "07334",
+    "name": "Germersheim",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Landkreis",
+    "orderIndex": 321
+  },
+  {
+    "level": "district",
+    "ags": "07335",
+    "name": "Kaiserslautern",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Landkreis",
+    "orderIndex": 322
+  },
+  {
+    "level": "district",
+    "ags": "07312",
+    "name": "Kaiserslautern, kreisfreie Stadt",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 323
+  },
+  {
+    "level": "district",
+    "ags": "07111",
+    "name": "Koblenz, kreisfreie Stadt",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 324
+  },
+  {
+    "level": "district",
+    "ags": "07336",
+    "name": "Kusel",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Landkreis",
+    "orderIndex": 325
+  },
+  {
+    "level": "district",
+    "ags": "07313",
+    "name": "Landau in der Pfalz, kreisfreie Stadt",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 326
+  },
+  {
+    "level": "district",
+    "ags": "07314",
+    "name": "Ludwigshafen am Rhein, kreisfreie Stadt",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 327
+  },
+  {
+    "level": "district",
+    "ags": "07315",
+    "name": "Mainz, kreisfreie Stadt",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 328
+  },
+  {
+    "level": "district",
+    "ags": "07339",
+    "name": "Mainz-Bingen",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Landkreis",
+    "orderIndex": 329
+  },
+  {
+    "level": "district",
+    "ags": "07137",
+    "name": "Mayen-Koblenz",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Landkreis",
+    "orderIndex": 330
+  },
+  {
+    "level": "district",
+    "ags": "07316",
+    "name": "Neustadt an der Weinstraße, kreisfreie Stadt",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 331
+  },
+  {
+    "level": "district",
+    "ags": "07138",
+    "name": "Neuwied",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Landkreis",
+    "orderIndex": 332
+  },
+  {
+    "level": "district",
+    "ags": "07317",
+    "name": "Pirmasens, kreisfreie Stadt",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 333
+  },
+  {
+    "level": "district",
+    "ags": "07140",
+    "name": "Rhein-Hunsrück-Kreis",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Landkreis",
+    "orderIndex": 334
+  },
+  {
+    "level": "district",
+    "ags": "07141",
+    "name": "Rhein-Lahn-Kreis",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Landkreis",
+    "orderIndex": 335
+  },
+  {
+    "level": "district",
+    "ags": "07338",
+    "name": "Rhein-Pfalz-Kreis",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Landkreis",
+    "orderIndex": 336
+  },
+  {
+    "level": "district",
+    "ags": "07318",
+    "name": "Speyer, kreisfreie Stadt",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 337
+  },
+  {
+    "level": "district",
+    "ags": "07337",
+    "name": "Südliche Weinstraße",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Landkreis",
+    "orderIndex": 338
+  },
+  {
+    "level": "district",
+    "ags": "07340",
+    "name": "Südwestpfalz",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Landkreis",
+    "orderIndex": 339
+  },
+  {
+    "level": "district",
+    "ags": "07211",
+    "name": "Trier, kreisfreie Stadt",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 340
+  },
+  {
+    "level": "district",
+    "ags": "07235",
+    "name": "Trier-Saarburg",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Landkreis",
+    "orderIndex": 341
+  },
+  {
+    "level": "district",
+    "ags": "07233",
+    "name": "Vulkaneifel",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Landkreis",
+    "orderIndex": 342
+  },
+  {
+    "level": "district",
+    "ags": "07143",
+    "name": "Westerwaldkreis",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Landkreis",
+    "orderIndex": 343
+  },
+  {
+    "level": "district",
+    "ags": "07319",
+    "name": "Worms, kreisfreie Stadt",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 344
+  },
+  {
+    "level": "district",
+    "ags": "07320",
+    "name": "Zweibrücken, kreisfreie Stadt",
+    "stateName": "Rheinland-Pfalz",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 345
+  },
+  {
+    "level": "district",
+    "ags": "10042",
+    "name": "Merzig-Wadern",
+    "stateName": "Saarland",
+    "kind": "Landkreis",
+    "orderIndex": 346
+  },
+  {
+    "level": "district",
+    "ags": "10043",
+    "name": "Neunkirchen",
+    "stateName": "Saarland",
+    "kind": "Landkreis",
+    "orderIndex": 347
+  },
+  {
+    "level": "district",
+    "ags": "10041",
+    "name": "Regionalverband Saarbrücken",
+    "stateName": "Saarland",
+    "kind": "Regionalverband",
+    "orderIndex": 348
+  },
+  {
+    "level": "district",
+    "ags": "10044",
+    "name": "Saarlouis",
+    "stateName": "Saarland",
+    "kind": "Landkreis",
+    "orderIndex": 349
+  },
+  {
+    "level": "district",
+    "ags": "10045",
+    "name": "Saarpfalz-Kreis",
+    "stateName": "Saarland",
+    "kind": "Landkreis",
+    "orderIndex": 350
+  },
+  {
+    "level": "district",
+    "ags": "10046",
+    "name": "St. Wendel",
+    "stateName": "Saarland",
+    "kind": "Landkreis",
+    "orderIndex": 351
+  },
+  {
+    "level": "district",
+    "ags": "14625",
+    "name": "Bautzen",
+    "stateName": "Sachsen",
+    "kind": "Landkreis",
+    "orderIndex": 352
+  },
+  {
+    "level": "district",
+    "ags": "14511",
+    "name": "Chemnitz, Stadt",
+    "stateName": "Sachsen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 353
+  },
+  {
+    "level": "district",
+    "ags": "14612",
+    "name": "Dresden, Stadt",
+    "stateName": "Sachsen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 354
+  },
+  {
+    "level": "district",
+    "ags": "14521",
+    "name": "Erzgebirgskreis",
+    "stateName": "Sachsen",
+    "kind": "Landkreis",
+    "orderIndex": 355
+  },
+  {
+    "level": "district",
+    "ags": "14626",
+    "name": "Görlitz",
+    "stateName": "Sachsen",
+    "kind": "Landkreis",
+    "orderIndex": 356
+  },
+  {
+    "level": "district",
+    "ags": "14729",
+    "name": "Leipzig",
+    "stateName": "Sachsen",
+    "kind": "Landkreis",
+    "orderIndex": 357
+  },
+  {
+    "level": "district",
+    "ags": "14713",
+    "name": "Leipzig, Stadt",
+    "stateName": "Sachsen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 358
+  },
+  {
+    "level": "district",
+    "ags": "14627",
+    "name": "Meißen",
+    "stateName": "Sachsen",
+    "kind": "Landkreis",
+    "orderIndex": 359
+  },
+  {
+    "level": "district",
+    "ags": "14522",
+    "name": "Mittelsachsen",
+    "stateName": "Sachsen",
+    "kind": "Landkreis",
+    "orderIndex": 360
+  },
+  {
+    "level": "district",
+    "ags": "14730",
+    "name": "Nordsachsen",
+    "stateName": "Sachsen",
+    "kind": "Landkreis",
+    "orderIndex": 361
+  },
+  {
+    "level": "district",
+    "ags": "14628",
+    "name": "Sächsische Schweiz-Osterzgebirge",
+    "stateName": "Sachsen",
+    "kind": "Landkreis",
+    "orderIndex": 362
+  },
+  {
+    "level": "district",
+    "ags": "14523",
+    "name": "Vogtlandkreis",
+    "stateName": "Sachsen",
+    "kind": "Landkreis",
+    "orderIndex": 363
+  },
+  {
+    "level": "district",
+    "ags": "14524",
+    "name": "Zwickau",
+    "stateName": "Sachsen",
+    "kind": "Landkreis",
+    "orderIndex": 364
+  },
+  {
+    "level": "district",
+    "ags": "15081",
+    "name": "Altmarkkreis Salzwedel",
+    "stateName": "Sachsen-Anhalt",
+    "kind": "Landkreis",
+    "orderIndex": 365
+  },
+  {
+    "level": "district",
+    "ags": "15082",
+    "name": "Anhalt-Bitterfeld",
+    "stateName": "Sachsen-Anhalt",
+    "kind": "Landkreis",
+    "orderIndex": 366
+  },
+  {
+    "level": "district",
+    "ags": "15084",
+    "name": "Burgenlandkreis",
+    "stateName": "Sachsen-Anhalt",
+    "kind": "Landkreis",
+    "orderIndex": 367
+  },
+  {
+    "level": "district",
+    "ags": "15083",
+    "name": "Börde",
+    "stateName": "Sachsen-Anhalt",
+    "kind": "Landkreis",
+    "orderIndex": 368
+  },
+  {
+    "level": "district",
+    "ags": "15001",
+    "name": "Dessau-Roßlau, Stadt",
+    "stateName": "Sachsen-Anhalt",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 369
+  },
+  {
+    "level": "district",
+    "ags": "15002",
+    "name": "Halle (Saale), Stadt",
+    "stateName": "Sachsen-Anhalt",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 370
+  },
+  {
+    "level": "district",
+    "ags": "15085",
+    "name": "Harz",
+    "stateName": "Sachsen-Anhalt",
+    "kind": "Landkreis",
+    "orderIndex": 371
+  },
+  {
+    "level": "district",
+    "ags": "15086",
+    "name": "Jerichower Land",
+    "stateName": "Sachsen-Anhalt",
+    "kind": "Landkreis",
+    "orderIndex": 372
+  },
+  {
+    "level": "district",
+    "ags": "15003",
+    "name": "Magdeburg, Landeshauptstadt",
+    "stateName": "Sachsen-Anhalt",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 373
+  },
+  {
+    "level": "district",
+    "ags": "15087",
+    "name": "Mansfeld-Südharz",
+    "stateName": "Sachsen-Anhalt",
+    "kind": "Landkreis",
+    "orderIndex": 374
+  },
+  {
+    "level": "district",
+    "ags": "15088",
+    "name": "Saalekreis",
+    "stateName": "Sachsen-Anhalt",
+    "kind": "Landkreis",
+    "orderIndex": 375
+  },
+  {
+    "level": "district",
+    "ags": "15089",
+    "name": "Salzlandkreis",
+    "stateName": "Sachsen-Anhalt",
+    "kind": "Landkreis",
+    "orderIndex": 376
+  },
+  {
+    "level": "district",
+    "ags": "15090",
+    "name": "Stendal",
+    "stateName": "Sachsen-Anhalt",
+    "kind": "Landkreis",
+    "orderIndex": 377
+  },
+  {
+    "level": "district",
+    "ags": "15091",
+    "name": "Wittenberg",
+    "stateName": "Sachsen-Anhalt",
+    "kind": "Landkreis",
+    "orderIndex": 378
+  },
+  {
+    "level": "district",
+    "ags": "01051",
+    "name": "Dithmarschen",
+    "stateName": "Schleswig-Holstein",
+    "kind": "Kreis",
+    "orderIndex": 379
+  },
+  {
+    "level": "district",
+    "ags": "01001",
+    "name": "Flensburg, Stadt",
+    "stateName": "Schleswig-Holstein",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 380
+  },
+  {
+    "level": "district",
+    "ags": "01053",
+    "name": "Herzogtum Lauenburg",
+    "stateName": "Schleswig-Holstein",
+    "kind": "Kreis",
+    "orderIndex": 381
+  },
+  {
+    "level": "district",
+    "ags": "01002",
+    "name": "Kiel, Landeshauptstadt",
+    "stateName": "Schleswig-Holstein",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 382
+  },
+  {
+    "level": "district",
+    "ags": "01003",
+    "name": "Lübeck, Hansestadt",
+    "stateName": "Schleswig-Holstein",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 383
+  },
+  {
+    "level": "district",
+    "ags": "01004",
+    "name": "Neumünster, Stadt",
+    "stateName": "Schleswig-Holstein",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 384
+  },
+  {
+    "level": "district",
+    "ags": "01054",
+    "name": "Nordfriesland",
+    "stateName": "Schleswig-Holstein",
+    "kind": "Kreis",
+    "orderIndex": 385
+  },
+  {
+    "level": "district",
+    "ags": "01055",
+    "name": "Ostholstein",
+    "stateName": "Schleswig-Holstein",
+    "kind": "Kreis",
+    "orderIndex": 386
+  },
+  {
+    "level": "district",
+    "ags": "01056",
+    "name": "Pinneberg",
+    "stateName": "Schleswig-Holstein",
+    "kind": "Kreis",
+    "orderIndex": 387
+  },
+  {
+    "level": "district",
+    "ags": "01057",
+    "name": "Plön",
+    "stateName": "Schleswig-Holstein",
+    "kind": "Kreis",
+    "orderIndex": 388
+  },
+  {
+    "level": "district",
+    "ags": "01058",
+    "name": "Rendsburg-Eckernförde",
+    "stateName": "Schleswig-Holstein",
+    "kind": "Kreis",
+    "orderIndex": 389
+  },
+  {
+    "level": "district",
+    "ags": "01059",
+    "name": "Schleswig-Flensburg",
+    "stateName": "Schleswig-Holstein",
+    "kind": "Kreis",
+    "orderIndex": 390
+  },
+  {
+    "level": "district",
+    "ags": "01060",
+    "name": "Segeberg",
+    "stateName": "Schleswig-Holstein",
+    "kind": "Kreis",
+    "orderIndex": 391
+  },
+  {
+    "level": "district",
+    "ags": "01061",
+    "name": "Steinburg",
+    "stateName": "Schleswig-Holstein",
+    "kind": "Kreis",
+    "orderIndex": 392
+  },
+  {
+    "level": "district",
+    "ags": "01062",
+    "name": "Stormarn",
+    "stateName": "Schleswig-Holstein",
+    "kind": "Kreis",
+    "orderIndex": 393
+  },
+  {
+    "level": "district",
+    "ags": "16077",
+    "name": "Altenburger Land",
+    "stateName": "Thüringen",
+    "kind": "Landkreis",
+    "orderIndex": 394
+  },
+  {
+    "level": "district",
+    "ags": "16061",
+    "name": "Eichsfeld",
+    "stateName": "Thüringen",
+    "kind": "Landkreis",
+    "orderIndex": 395
+  },
+  {
+    "level": "district",
+    "ags": "16051",
+    "name": "Erfurt, Stadt",
+    "stateName": "Thüringen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 396
+  },
+  {
+    "level": "district",
+    "ags": "16052",
+    "name": "Gera, Stadt",
+    "stateName": "Thüringen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 397
+  },
+  {
+    "level": "district",
+    "ags": "16067",
+    "name": "Gotha",
+    "stateName": "Thüringen",
+    "kind": "Landkreis",
+    "orderIndex": 398
+  },
+  {
+    "level": "district",
+    "ags": "16076",
+    "name": "Greiz",
+    "stateName": "Thüringen",
+    "kind": "Landkreis",
+    "orderIndex": 399
+  },
+  {
+    "level": "district",
+    "ags": "16069",
+    "name": "Hildburghausen",
+    "stateName": "Thüringen",
+    "kind": "Landkreis",
+    "orderIndex": 400
+  },
+  {
+    "level": "district",
+    "ags": "16070",
+    "name": "Ilm-Kreis",
+    "stateName": "Thüringen",
+    "kind": "Landkreis",
+    "orderIndex": 401
+  },
+  {
+    "level": "district",
+    "ags": "16053",
+    "name": "Jena, Stadt",
+    "stateName": "Thüringen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 402
+  },
+  {
+    "level": "district",
+    "ags": "16065",
+    "name": "Kyffhäuserkreis",
+    "stateName": "Thüringen",
+    "kind": "Landkreis",
+    "orderIndex": 403
+  },
+  {
+    "level": "district",
+    "ags": "16062",
+    "name": "Nordhausen",
+    "stateName": "Thüringen",
+    "kind": "Landkreis",
+    "orderIndex": 404
+  },
+  {
+    "level": "district",
+    "ags": "16074",
+    "name": "Saale-Holzland-Kreis",
+    "stateName": "Thüringen",
+    "kind": "Landkreis",
+    "orderIndex": 405
+  },
+  {
+    "level": "district",
+    "ags": "16075",
+    "name": "Saale-Orla-Kreis",
+    "stateName": "Thüringen",
+    "kind": "Landkreis",
+    "orderIndex": 406
+  },
+  {
+    "level": "district",
+    "ags": "16073",
+    "name": "Saalfeld-Rudolstadt",
+    "stateName": "Thüringen",
+    "kind": "Landkreis",
+    "orderIndex": 407
+  },
+  {
+    "level": "district",
+    "ags": "16066",
+    "name": "Schmalkalden-Meiningen",
+    "stateName": "Thüringen",
+    "kind": "Landkreis",
+    "orderIndex": 408
+  },
+  {
+    "level": "district",
+    "ags": "16072",
+    "name": "Sonneberg",
+    "stateName": "Thüringen",
+    "kind": "Landkreis",
+    "orderIndex": 409
+  },
+  {
+    "level": "district",
+    "ags": "16054",
+    "name": "Suhl, Stadt",
+    "stateName": "Thüringen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 410
+  },
+  {
+    "level": "district",
+    "ags": "16068",
+    "name": "Sömmerda",
+    "stateName": "Thüringen",
+    "kind": "Landkreis",
+    "orderIndex": 411
+  },
+  {
+    "level": "district",
+    "ags": "16064",
+    "name": "Unstrut-Hainich-Kreis",
+    "stateName": "Thüringen",
+    "kind": "Landkreis",
+    "orderIndex": 412
+  },
+  {
+    "level": "district",
+    "ags": "16063",
+    "name": "Wartburgkreis",
+    "stateName": "Thüringen",
+    "kind": "Landkreis",
+    "orderIndex": 413
+  },
+  {
+    "level": "district",
+    "ags": "16055",
+    "name": "Weimar, Stadt",
+    "stateName": "Thüringen",
+    "kind": "Kreisfreie Stadt",
+    "orderIndex": 414
+  },
+  {
+    "level": "district",
+    "ags": "16071",
+    "name": "Weimarer Land",
+    "stateName": "Thüringen",
+    "kind": "Landkreis",
+    "orderIndex": 415
+  }
+]
