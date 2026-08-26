@@ -354,3 +354,27 @@ same tenant must answer „Bereits vorhanden“ and create no extra row/occurren
   size, and must land in `fehlerhaft/` with `PDF ist nicht lesbar` in the worker log and NO document row —
   a stray empty document with 0 pages/0 occurrences is the regression. Always fixture a valid PDF in the
   same round to prove one failure does not stop the others.
+
+## Angebote (Quotes, `/billing/quotes`) — testing notes
+- After migrating a fresh DB you MUST re-run `scripts/seed.ts`: the quote permissions
+  (`billing.quote.read|write|send|accept`) come from the seed's hard-coded list, so a migrate-only
+  database leaves `/billing/quotes` erroring with a permission failure.
+- Start the MinIO container (`docker start xmaster-center-minio`) before testing the quote PDF —
+  without storage the restored ad cannot be loaded and every PDF falls back to
+  `Anzeigenbild nicht verfügbar`, which looks like a code defect.
+- Pick fixtures from `select id, image_key from ingestion_occurrences` — one row WITH and one
+  WITHOUT `image_key` covers both PDF paths (embedded image vs. the German fallback line).
+- PDF assertions with `poppler-utils`: `pdfimages -list` (exactly one raster image, aspect ratio must
+  match the source PNG), `pdftotext -layout` (line texts), `pdftotext -bbox` plus `pdftoppm -r 150`
+  and a pixel measurement of the rendered page to check column edges against the table rule —
+  a column can overflow the rule while nothing is visibly clipped. PDFKit defaults to US Letter
+  (612×792), so always assert the page box is A4 (595.28×841.89) too.
+- Idempotency of `acceptQuote` is enforced in the DB (`SELECT ... FOR UPDATE` plus
+  `billing_quotes.invoice_id`), so test it for real: double-click `Annehmen` and click it again
+  afterwards, then count `billing_invoices` — exactly one new draft, and compare its items to the
+  quote's items.
+- Domain errors from billing quote routes arrive as tRPC `BAD_REQUEST` with the German message
+  (`Fundstelle nicht gefunden`, `Nur versendete Angebote können angenommen werden`); if the UI shows
+  `Interner Serverfehler` instead, the error mapping in `modules/billing/src/router.ts` regressed.
+- Known display gap: after accepting a quote the invoice list is only refreshed after `F5`
+  (the client invalidates `quotes.list` only) — not a data defect.
