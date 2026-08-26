@@ -8,6 +8,15 @@ from app.services.sitemap import discover_sitemaps, extract_pdf_urls_from_sitema
 from app.services.search_provider import web_search
 
 
+def _policy(url, budget):
+    try:
+        return check_url_policy(url, robots_cache=budget.robots_cache, budget=budget)
+    except TypeError as error:
+        if "unexpected keyword" not in str(error):
+            raise
+        return check_url_policy(url)
+
+
 def upsert_source(db: Session, url: str, score: float, meta: dict):
     src=db.scalar(select(Source).where(Source.url==url))
     if not src:
@@ -56,9 +65,9 @@ def discover_proposals(
                 candidate_pages.append(hit['url'])
     for page in candidate_pages[:max_results]:
         if page in visited: continue
-        visited.add(page)
         if '.pdf' in page.lower():
-            if check_url_policy(page)['status'] == 'APPROVED':
+            visited.add(page)
+            if _policy(page, budget)['status'] == 'APPROVED':
                 reason = candidate_rejection_reason(page, area_name=area_name)
                 if reason:
                     if rejected is not None:
@@ -73,7 +82,7 @@ def discover_proposals(
                 })
             continue
         try:
-            collected.extend(discover_pdf_links(page, budget=budget, area_name=area_name, rejected=rejected))
+            collected.extend(discover_pdf_links(page, budget=budget, area_name=area_name, rejected=rejected, visited=visited))
         except Exception:
             pass
         try:

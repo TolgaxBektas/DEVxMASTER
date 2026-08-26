@@ -27,6 +27,19 @@ MUNICIPAL_HOST_SIGNALS = (
     "landkreis", "kreis", "stadt", "gemeinde", "samtgemeinde",
     "verbandsgemeinde", "markt",
 )
+MAX_SECOND_LEVEL_LINKS = 8
+PUBLICATION_NAVIGATION_SIGNALS = (
+    "broschüre", "broschuere", "publikation", "download", "senioren",
+    "bürgerinformation", "buergerinformation", "rathaus", "service",
+)
+
+def _policy(url: str, budget: DiscoveryBudget | None):
+    try:
+        return check_url_policy(url, robots_cache=budget.robots_cache if budget else None, budget=budget)
+    except TypeError as error:
+        if "unexpected keyword" not in str(error):
+            raise
+        return check_url_policy(url)
 
 def _match_text(value: str) -> str:
     return (
@@ -90,9 +103,17 @@ def discover_pdf_links(
     depth: int = 0,
     area_name: str | None = None,
     rejected: list[dict] | None = None,
+    visited: set[str] | None = None,
 ) -> list[dict]:
-    policy=check_url_policy(page_url)
-    if policy['status']!='APPROVED': return []
+    visited_urls = visited if visited is not None else set()
+    if page_url in visited_urls:
+        return []
+    visited_urls.add(page_url)
+    policy=_policy(page_url, budget)
+    if policy['status']!='APPROVED':
+        if rejected is not None:
+            rejected.append({"url": page_url, "anchor_text": "", "reason": policy.get("reason", "Policy blockiert"), "found_on": page_url})
+        return []
     r=request_checked(
         page_url,
         policy=policy,
@@ -112,25 +133,72 @@ def discover_pdf_links(
     close_checked_response(r)
     soup=BeautifulSoup(html,'html.parser')
     found={}
-    for a in soup.find_all('a', href=True):
-        href=urljoin(str(r.url), a['href'])
-        txt=' '.join(a.stripped_strings)
-        if '.pdf' in href.lower() or '.pdf' in txt.lower():
-            candidate_policy = check_url_policy(href)
+
+    def collect_pdf_links(document, source_url, discovery):
+        for a in document.find_all('a', href=True):
+            href=urljoin(source_url, a['href'])
+            txt=' '.join(a.stripped_strings)
+            if '.pdf' not in href.lower() and '.pdf' not in txt.lower():
+                continue
+            candidate_policy = _policy(href, budget)
             if candidate_policy["status"] != "APPROVED":
+                if rejected is not None:
+                    rejected.append({"url": href, "anchor_text": txt, "reason": candidate_policy.get("reason", "Policy blockiert"), "found_on": source_url})
                 continue
             reason = candidate_rejection_reason(href, txt, area_name)
             if reason:
                 if rejected is not None:
-                    rejected.append({"url": href, "anchor_text": txt, "reason": reason, "found_on": page_url})
+                    rejected.append({"url": href, "anchor_text": txt, "reason": reason, "found_on": source_url})
                 continue
             score = score_candidate(href,txt, area_name)
             found[href]={
                 'url':href,
                 'anchor_text':txt,
                 'score':score,
-                'found_on': page_url,
-                'discovery': 'html_link',
+                'found_on': source_url,
+                'discovery': discovery,
                 'reason': f'PDF-Link auf Übersichtsseite; Signale im URL-/Ankertext: {score:.0f}/100',
             }
+
+    collect_pdf_links(soup, str(r.url), "html_link")
+    if depth == 0:
+        start_host = (urlparse(str(r.url)).hostname or "").lower().removeprefix("www.")
+        second_level = []
+        for a in soup.find_all('a', href=True):
+            href = urljoin(str(r.url), a['href'])
+            txt = ' '.join(a.stripped_strings)
+            host = (urlparse(href).hostname or "").lower().removeprefix("www.")
+            normalized = _match_text(f"{txt} {urlparse(href).path}")
+            if host != start_host or not any(_match_text(signal) in normalized for signal in PUBLICATION_NAVIGATION_SIGNALS):
+                continue
+            if href in visited_urls or href in second_level:
+                continue
+            second_level.append(href)
+            if len(second_level) >= MAX_SECOND_LEVEL_LINKS:
+                break
+        for nested_url in second_level:
+            visited_urls.add(nested_url)
+            nested_policy = _policy(nested_url, budget)
+            if nested_policy["status"] != "APPROVED":
+                if rejected is not None:
+                    rejected.append({"url": nested_url, "anchor_text": "", "reason": nested_policy.get("reason", "Policy blockiert"), "found_on": page_url})
+                continue
+            try:
+                nested_response = request_checked(
+                    nested_url, policy=nested_policy, budget=budget, depth=depth + 1,
+                    timeout=settings.request_timeout_seconds, allow_redirects=False,
+                )
+                if nested_response.status_code >= 400:
+                    close_checked_response(nested_response)
+                    continue
+                nested_type = nested_response.headers.get("content-type", "").lower()
+                if "html" not in nested_type and "xhtml" not in nested_type:
+                    close_checked_response(nested_response)
+                    continue
+                nested_html = read_limited_response(nested_response, settings.max_response_mb * 1024 * 1024)
+                nested_final_url = str(nested_response.url)
+                close_checked_response(nested_response)
+                collect_pdf_links(BeautifulSoup(nested_html, 'html.parser'), nested_final_url, "html_link_second_level")
+            except RuntimeError:
+                continue
     return sorted(found.values(), key=lambda x:x['score'], reverse=True)

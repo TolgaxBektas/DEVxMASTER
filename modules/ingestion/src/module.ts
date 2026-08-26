@@ -24,6 +24,7 @@ import type { PifReviewClient } from "./review-client.js";
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { areaSearchTerms } from "./search-terms.js";
 import { PUBLISHER_SEED_PAGES } from "./publishers.js";
+import { areaWebsiteSeeds } from "./website-registry.js";
 
 function sameSourceHost(firstUrl: string, secondUrl: string): boolean {
   try {
@@ -364,8 +365,12 @@ export function createIngestionModule(deps: {
             await repository.updateArea(tenantId, area.id, { status: "running", startedAt: now, lastError: null });
             try {
               if (!deps.discoverProposals) throw new Error("Quellensuche ist nicht konfiguriert");
+              const websiteSelection = areaWebsiteSeeds(area.ags, area.municipalityOffset ?? 0);
               const proposals = await deps.discoverProposals({
-                seedPages: [...PUBLISHER_SEED_PAGES],
+                seedPages: [
+                  ...PUBLISHER_SEED_PAGES,
+                  ...websiteSelection.seedPages,
+                ],
                 searchTerms: areaSearchTerms(area.name, area.level, undefined, area.kind),
                 maxResults: 40,
                 areaName: area.name,
@@ -390,6 +395,7 @@ export function createIngestionModule(deps: {
                 startedAt: null,
                 nextDueAt: new Date(now.getTime() + 180 * 86_400_000),
                 foundSources,
+                municipalityOffset: websiteSelection.nextMunicipalityOffset,
               });
             } catch (error) {
               await repository.updateArea(tenantId, area.id, {

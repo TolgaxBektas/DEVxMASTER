@@ -9,6 +9,7 @@ import { classifications, documents, occurrences, pages } from "./schema.js";
 import { classificationCorrectionSchema, createIngestionRouter } from "./router.js";
 import { periodIncludesYear } from "./repository.js";
 import { documentActualityStatus } from "./actuality.js";
+import { areaWebsiteSeeds, websiteRegister } from "./website-registry.js";
 
 const context = (tenantId: string | null, payload: unknown) => ({
   job: { tenantId, payload },
@@ -67,6 +68,46 @@ describe("Ingestion-Bestand", () => {
     await job.handle({ limit: 1 }, context("1", {}));
     expect(searched).toEqual(["Seniorenwegweiser Landkreis Kreis"]);
     expect((await repository.listAreas("1")).find((area) => area.level === "state")?.status).toBe("pending");
+  });
+
+  it("begrenzt Gemeinde-Seeds und setzt den Fortschrittscursor stabil fort", async () => {
+    const register = websiteRegister().websites;
+    const grouped = new Map<string, typeof register>();
+    for (const website of register) {
+      const current = grouped.get(website.ags) ?? [];
+      current.push(website);
+      grouped.set(website.ags, current);
+    }
+    const ags = [...grouped.entries()].find(([, websites]) =>
+      websites.filter((website) => website.level === "gemeinde").length > 25
+    )?.[0];
+    if (!ags) throw new Error("Kein Gebiet mit genügend Gemeindewebsites");
+    const first = areaWebsiteSeeds(ags, 0);
+    const second = areaWebsiteSeeds(ags, first.nextMunicipalityOffset);
+    expect(first.municipalityCount).toBe(25);
+    expect(second.municipalityCount).toBe(25);
+    expect(new Set(first.seedPages).size).toBe(first.seedPages.length);
+    expect(first.seedPages.slice(-25)).not.toEqual(second.seedPages.slice(-25));
+
+    const repository = new MemoryIngestionRepository();
+    await repository.upsertArea("1", {
+      level: "district", ags, name: "Kreis", stateName: "Land", kind: "Landkreis", orderIndex: 1,
+      status: "pending", lastRunAt: null, startedAt: null, nextDueAt: null, lastError: null, foundSources: 0,
+    });
+    const calls: string[][] = [];
+    const module = createIngestionModule({
+      repository, publish: async () => undefined, enqueue: async () => undefined,
+      discoverProposals: async ({ seedPages }) => { calls.push(seedPages); return []; },
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.discovery.run");
+    if (!job) throw new Error("Gebietssuchjob fehlt");
+    await job.handle({ limit: 1 }, context("1", {}));
+    expect(calls[0]?.slice(-25)).toEqual(first.seedPages.slice(-25));
+    expect((await repository.listAreas("1"))[0]?.municipalityOffset).toBe(25);
+    await repository.updateArea("1", 1, { status: "pending", nextDueAt: new Date(0) });
+    await job.handle({ limit: 1 }, context("1", {}));
+    expect(calls[1]?.slice(-25)).toEqual(second.seedPages.slice(-25));
+    expect((await repository.listAreas("1"))[0]?.municipalityOffset).toBe(50);
   });
 
   it("markiert eine Quelle nach drei Fehlern als nicht erreichbar und setzt den Zähler bei Erfolg zurück", async () => {

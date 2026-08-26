@@ -1,10 +1,91 @@
 import pytest
 
+from app.services import discovery
 from app.services.discovery import (
+    MAX_SECOND_LEVEL_LINKS,
     MIN_CANDIDATE_SCORE,
     candidate_rejection_reason,
+    discover_pdf_links,
     score_candidate,
 )
+from app.services.policy import DiscoveryBudget
+
+
+def test_discovery_follows_bounded_second_level_publication_links(monkeypatch):
+    root = "https://kreis.example/"
+    nested = [f"https://kreis.example/service/{index}" for index in range(MAX_SECOND_LEVEL_LINKS + 2)]
+    requests = []
+
+    class Response:
+        def __init__(self, url, body):
+            self.url = url
+            self.body = body
+            self.status_code = 200
+            self.headers = {"content-type": "text/html"}
+
+        def iter_content(self, _size):
+            yield self.body
+
+        def close(self):
+            pass
+
+    pages = {
+        root: Response(
+            root,
+            ("".join(f"<a href='{url}'>Downloads {index}</a>" for index, url in enumerate(nested))
+             + "<a href='https://other.example/downloads'>Downloads außen</a>").encode(),
+        ),
+        **{
+            url: Response(
+                url,
+                f"<a href='/download/Seniorenwegweiser-2026-{index}.pdf'>PDF</a>".encode(),
+            )
+            for index, url in enumerate(nested)
+        },
+    }
+    monkeypatch.setattr(discovery, "check_url_policy", lambda _url, **_kwargs: {
+        "status": "APPROVED", "hostname": "kreis.example", "address": "93.184.216.34",
+    })
+    monkeypatch.setattr(discovery, "request_checked", lambda url, **_kwargs: (requests.append(url) or pages[url]))
+
+    results = discover_pdf_links(
+        root,
+        budget=DiscoveryBudget(max_requests=30, max_depth=1, max_seconds=10),
+    )
+
+    assert requests == [root, *nested[:MAX_SECOND_LEVEL_LINKS]]
+    assert len(results) == MAX_SECOND_LEVEL_LINKS
+    assert all(item["discovery"] == "html_link_second_level" for item in results)
+
+
+def test_discovery_does_not_follow_a_third_level(monkeypatch):
+    root = "https://kreis.example/"
+    nested = "https://kreis.example/downloads"
+    requested = []
+
+    class Response:
+        status_code = 200
+        headers = {"content-type": "text/html"}
+        url = root
+
+        def iter_content(self, _size):
+            yield b"<a href='/downloads'>Downloads</a>"
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(discovery, "check_url_policy", lambda _url, **_kwargs: {
+        "status": "APPROVED", "hostname": "kreis.example", "address": "93.184.216.34",
+    })
+    monkeypatch.setattr(discovery, "request_checked", lambda url, **_kwargs: (requested.append(url) or Response()))
+
+    discover_pdf_links(
+        nested,
+        budget=DiscoveryBudget(max_requests=10, max_depth=2, max_seconds=10),
+        depth=1,
+    )
+
+    assert requested == [nested]
 
 def test_pdf_publication_scores_high():
     assert score_candidate('https://example.org/Seniorenwegweiser-2026.pdf') >= 50

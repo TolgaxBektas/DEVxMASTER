@@ -87,7 +87,7 @@ export class MemoryIngestionRepository implements IngestionRepository {
     this.areas.push(area);
     return area;
   }
-  async updateArea(tenantId: string, areaId: number, input: Partial<Pick<IngestionArea, "status" | "lastRunAt" | "startedAt" | "nextDueAt" | "lastError" | "foundSources">>) {
+  async updateArea(tenantId: string, areaId: number, input: Partial<Pick<IngestionArea, "status" | "lastRunAt" | "startedAt" | "nextDueAt" | "lastError" | "foundSources" | "municipalityOffset">>) {
     const area = this.areas.find((a) => a.tenantId === tenantId && a.id === areaId);
     if (!area) throw new Error("Gebiet nicht gefunden");
     Object.assign(area, input);

@@ -1,7 +1,7 @@
 import pytest
 
 from app.services import discovery, downloader, sitemap
-from app.services.policy import DiscoveryBudget, read_limited_response
+from app.services.policy import DiscoveryBudget, RobotsCache, check_url_policy, read_limited_response
 from app.api import routes
 from app.schemas.api import RevisitRequest
 
@@ -127,3 +127,25 @@ def test_revisit_preserves_target_http_status(monkeypatch):
 
     assert result["http_status"] == 404
     assert result["note"] == "Zielquelle antwortete mit HTTP 404"
+
+
+def test_robots_disallow_is_cached_and_blocks_only_target_url(monkeypatch):
+    requested = []
+    monkeypatch.setattr("app.services.policy._resolve_public_addresses", lambda _hostname: ["93.184.216.34"])
+
+    def fake_request(url, **_kwargs):
+        requested.append(url)
+        response = FakeResponse(b"User-agent: *\nDisallow: /private\n")
+        response.text = response.body.decode()
+        return response
+
+    monkeypatch.setattr("app.services.policy.request_checked", fake_request)
+    cache = RobotsCache()
+
+    blocked = check_url_policy("https://public.example/private/file.html", robots_cache=cache)
+    allowed = check_url_policy("https://public.example/public/file.html", robots_cache=cache)
+
+    assert blocked["status"] == "BLOCKED"
+    assert blocked["reason"] == "robots_disallow"
+    assert allowed["status"] == "APPROVED"
+    assert requested == ["https://public.example/robots.txt"]
