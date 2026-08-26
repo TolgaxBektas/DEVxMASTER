@@ -56,6 +56,7 @@ export class MemoryIngestionRepository implements IngestionRepository {
       nextCheckAt: input.nextCheckAt ?? null,
       productive: false,
       fingerprint: null,
+      revisitFailures: 0,
     };
     this.sources.push(source);
     return source;
@@ -70,6 +71,7 @@ export class MemoryIngestionRepository implements IngestionRepository {
     lastFetchedAt?: Date | null; lastError?: string | null;
     areaId?: number | null; revisitIntervalDays?: number; nextCheckAt?: Date | null;
     productive?: boolean; fingerprint?: string | null;
+    revisitFailures?: number;
   }) {
     const source = await this.getSource(tenantId, sourceId);
     Object.assign(source, input);

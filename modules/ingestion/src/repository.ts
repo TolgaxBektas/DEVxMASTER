@@ -25,6 +25,7 @@ export type IngestionSource = {
   nextCheckAt: Date | null;
   productive: boolean;
   fingerprint: string | null;
+  revisitFailures: number;
   lastCheckedAt?: Date | null;
   actualityHint?: ActualityStatus | null;
 };
@@ -161,6 +162,7 @@ export type IngestionRepository = {
     nextCheckAt?: Date | null;
     productive?: boolean;
     fingerprint?: string | null;
+    revisitFailures?: number;
   }): Promise<IngestionSource>;
   listAreas(tenantId: string): Promise<IngestionArea[]>;
   upsertArea(tenantId: string, input: Omit<IngestionArea, "id" | "tenantId" | "createdAt">): Promise<IngestionArea>;

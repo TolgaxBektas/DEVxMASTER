@@ -103,12 +103,12 @@ const ingestion = createIngestionModule({
     });
     return processor(input);
   },
-  discoverProposals: async ({ seedPages, searchTerms, maxResults }) => {
+  discoverProposals: async ({ seedPages, searchTerms, maxResults, areaName }) => {
     if (!env.PIF_SERVICE_TOKEN) throw new Error("PIF-Service-Token fehlt");
     const response = await fetch(`${env.PIF_BASE_URL}/api/v1/discovery/proposals`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-service-token": env.PIF_SERVICE_TOKEN },
-      body: JSON.stringify({ seed_pages: seedPages, search_terms: searchTerms, max_results: maxResults }),
+      body: JSON.stringify({ seed_pages: seedPages, search_terms: searchTerms, max_results: maxResults, area_name: areaName }),
     });
     if (!response.ok) throw new Error(`Quellensuche fehlgeschlagen (${response.status})`);
     const body = await response.json() as { proposals?: Array<Record<string, unknown>> };
@@ -137,9 +137,21 @@ const ingestion = createIngestionModule({
       body: JSON.stringify({ url, fingerprint }),
     });
     if (!response.ok) throw new Error(`Quellenprüfung fehlgeschlagen (${response.status})`);
-    return await response.json() as {
-      httpStatus?: number | null; newPdfUrls?: string[]; newPdfCount?: number;
-      changed?: boolean; fingerprint?: string | null; note?: string | null;
+    const body = await response.json() as {
+      http_status?: number | null;
+      new_pdf_urls?: string[];
+      new_pdf_count?: number;
+      changed?: boolean;
+      fingerprint?: string | null;
+      note?: string | null;
+    };
+    return {
+      httpStatus: body.http_status ?? null,
+      newPdfUrls: body.new_pdf_urls ?? [],
+      newPdfCount: body.new_pdf_count ?? 0,
+      changed: body.changed ?? false,
+      fingerprint: body.fingerprint ?? null,
+      note: body.note ?? null,
     };
   },
   publish: (input) => eventBus.publish(input),

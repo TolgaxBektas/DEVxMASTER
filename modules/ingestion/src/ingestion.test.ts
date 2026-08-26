@@ -44,6 +44,62 @@ describe("Ingestion-Bestand", () => {
     expect((await repository.listSources("1"))[0]).toMatchObject({ revisitIntervalDays: 90, areaId: 1 });
   });
 
+  it("überspringt Bundesländer bei Gebietsläufen", async () => {
+    const repository = new MemoryIngestionRepository();
+    await repository.upsertArea("1", {
+      level: "state", ags: "01", name: "Land", stateName: "Land", kind: "Bundesland", orderIndex: 0,
+      status: "pending", lastRunAt: null, startedAt: null, nextDueAt: null, lastError: null, foundSources: 0,
+    });
+    await repository.upsertArea("1", {
+      level: "district", ags: "01001", name: "Kreis", stateName: "Land", kind: "Landkreis", orderIndex: 1,
+      status: "pending", lastRunAt: null, startedAt: null, nextDueAt: null, lastError: null, foundSources: 0,
+    });
+    const searched: string[] = [];
+    const module = createIngestionModule({
+      repository, publish: async () => undefined, enqueue: async () => undefined,
+      discoverProposals: async ({ searchTerms }) => {
+        searched.push(searchTerms[0] ?? "");
+        return [];
+      },
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.discovery.run");
+    if (!job) throw new Error("Gebietssuchjob fehlt");
+    await job.handle({ limit: 1 }, context("1", {}));
+    expect(searched).toEqual(["Seniorenwegweiser Landkreis Kreis"]);
+    expect((await repository.listAreas("1")).find((area) => area.level === "state")?.status).toBe("pending");
+  });
+
+  it("markiert eine Quelle nach drei Fehlern als nicht erreichbar und setzt den Zähler bei Erfolg zurück", async () => {
+    const repository = new MemoryIngestionRepository();
+    const source = await repository.createSource("1", {
+      url: "https://example.invalid/source.pdf", score: 50, metadata: {},
+    });
+    await repository.updateSource("1", source.id, {
+      status: "approved", nextCheckAt: new Date(0),
+    });
+    let attempts = 0;
+    const module = createIngestionModule({
+      repository, publish: async () => undefined, enqueue: async () => undefined,
+      revisitSource: async () => {
+        attempts += 1;
+        if (attempts < 3) return { httpStatus: 404, note: "Zielquelle antwortete mit HTTP 404" };
+        return { httpStatus: 200, changed: false, fingerprint: "ok" };
+      },
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.source.revisit");
+    if (!job) throw new Error("Wiedervorlagejob fehlt");
+    for (let i = 0; i < 2; i += 1) {
+      await repository.updateSource("1", source.id, { nextCheckAt: new Date(0) });
+      await job.handle({}, context("1", {}));
+    }
+    expect((await repository.getSource("1", source.id)).revisitFailures).toBe(2);
+    await repository.updateSource("1", source.id, { nextCheckAt: new Date(0) });
+    await job.handle({}, context("1", {}));
+    expect((await repository.getSource("1", source.id)).revisitFailures).toBe(0);
+    expect((await repository.getSource("1", source.id)).status).toBe("approved");
+    expect(repository.sourceVisits.map((visit) => visit.httpStatus)).toEqual([404, 404, 200]);
+  });
+
   it("greift verwaiste Gebietsläufe nach 24 Stunden wieder auf und bewahrt fremde Gebietszuordnung", async () => {
     const repository = new MemoryIngestionRepository();
     const stale = await repository.upsertArea("1", {
@@ -77,13 +133,20 @@ describe("Ingestion-Bestand", () => {
     await repository.updateSource("1", source.id, {
       status: "approved", nextCheckAt: new Date(0),
     });
+    const knownPdf = await repository.createSource("1", {
+      url: "https://example.invalid:9443/known.pdf", score: 50, metadata: {},
+    });
+    await repository.updateSource("1", knownPdf.id, { status: "approved" });
     const enqueued: unknown[] = [];
     const module = createIngestionModule({
       repository, publish: async () => undefined,
       enqueue: async (item) => { enqueued.push(item); },
       revisitSource: async () => ({
-        httpStatus: 200, newPdfUrls: ["http://example.invalid:9443/new.pdf"],
-        newPdfCount: 1, changed: true, fingerprint: "new",
+        httpStatus: 200, newPdfUrls: [
+          "https://example.invalid:9443/known.pdf",
+          "http://example.invalid:9443/new.pdf",
+        ],
+        newPdfCount: 99, changed: true, fingerprint: "new",
       }),
     });
     const job = module.jobs.find((item) => item.name === "ingestion.source.revisit");

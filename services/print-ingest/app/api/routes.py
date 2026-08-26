@@ -1,4 +1,5 @@
 from urllib.parse import urlparse
+import re
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.security import APIKeyHeader
 from app.core.config import settings
@@ -47,12 +48,16 @@ def discover(req: DiscoverRequest, db: Session=Depends(get_db), _token: None=Dep
 
 @router.post('/discovery/run')
 def autodiscover(req: AutoDiscoverRequest, db: Session=Depends(get_db), _token: None=Depends(require_service_token)):
-    return run_discovery(db,[str(x) for x in req.seed_pages],req.search_terms,req.max_results)
+    return run_discovery(db,[str(x) for x in req.seed_pages],req.search_terms,req.max_results,req.area_name)
 
 @router.post('/discovery/proposals')
 def proposals(req: AutoDiscoverRequest, _token: None=Depends(require_service_token)):
-    items = discover_proposals([str(x) for x in req.seed_pages], req.search_terms, req.max_results)
-    return {'proposals': items}
+    rejected: list[dict] = []
+    items = discover_proposals(
+        [str(x) for x in req.seed_pages], req.search_terms, req.max_results,
+        req.area_name, rejected,
+    )
+    return {'proposals': items, 'rejected': rejected}
 
 @router.post('/sources/revisit')
 def revisit(req: RevisitRequest, _token: None=Depends(require_service_token)):
@@ -66,7 +71,15 @@ def revisit(req: RevisitRequest, _token: None=Depends(require_service_token)):
             response = request_checked(url, policy=policy, budget=budget, stream=True,
                                        timeout=settings.request_timeout_seconds, allow_redirects=False)
             try:
-                response.raise_for_status()
+                if response.status_code >= 400:
+                    return {
+                        'http_status': response.status_code,
+                        'new_pdf_urls': [],
+                        'new_pdf_count': 0,
+                        'changed': False,
+                        'fingerprint': req.fingerprint,
+                        'note': f'Zielquelle antwortete mit HTTP {response.status_code}',
+                    }
                 signature = response.headers.get('ETag') or response.headers.get('Last-Modified')
                 if not signature:
                     signature = hashlib.sha256(read_limited_response(
@@ -93,6 +106,19 @@ def revisit(req: RevisitRequest, _token: None=Depends(require_service_token)):
             'fingerprint': signature,
             'note': 'PDF-Links der Übersichtsseite geprüft',
         }
+    except RuntimeError as exc:
+        match = re.fullmatch(r"discovery_http_error:(\d+)", str(exc))
+        if match:
+            status = int(match.group(1))
+            return {
+                'http_status': status,
+                'new_pdf_urls': [],
+                'new_pdf_count': 0,
+                'changed': False,
+                'fingerprint': req.fingerprint,
+                'note': f'Zielquelle antwortete mit HTTP {status}',
+            }
+        raise HTTPException(400, 'Quellenprüfung fehlgeschlagen') from exc
     except Exception as exc:
         raise HTTPException(400, 'Quellenprüfung fehlgeschlagen') from exc
 

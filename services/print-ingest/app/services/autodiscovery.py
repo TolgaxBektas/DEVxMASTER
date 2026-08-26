@@ -2,7 +2,7 @@ from urllib.parse import urlparse
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 from app.models.entities import Source
-from app.services.discovery import discover_pdf_links, score_candidate
+from app.services.discovery import candidate_rejection_reason, discover_pdf_links, score_candidate
 from app.services.policy import DiscoveryBudget, check_url_policy
 from app.services.sitemap import discover_sitemaps, extract_pdf_urls_from_sitemap
 from app.services.search_provider import web_search
@@ -18,8 +18,17 @@ def upsert_source(db: Session, url: str, score: float, meta: dict):
     return src
 
 
-def run_discovery(db: Session, seed_pages: list[str], search_terms: list[str], max_results: int=100):
-    proposals = discover_proposals(seed_pages, search_terms, max_results)
+def run_discovery(
+    db: Session,
+    seed_pages: list[str],
+    search_terms: list[str],
+    max_results: int = 100,
+    area_name: str | None = None,
+):
+    rejected: list[dict] = []
+    proposals = discover_proposals(
+        seed_pages, search_terms, max_results, area_name, rejected,
+    )
     for item in proposals:
         upsert_source(db, item["url"], item["score"], item)
     db.commit()
@@ -27,9 +36,16 @@ def run_discovery(db: Session, seed_pages: list[str], search_terms: list[str], m
         'candidate_pages': len({item.get('found_on') or item['url'] for item in proposals}),
         'pdf_sources': len(proposals),
         'urls': [item['url'] for item in proposals],
+        'rejected': rejected,
     }
 
-def discover_proposals(seed_pages: list[str], search_terms: list[str], max_results: int=100):
+def discover_proposals(
+    seed_pages: list[str],
+    search_terms: list[str],
+    max_results: int = 100,
+    area_name: str | None = None,
+    rejected: list[dict] | None = None,
+):
     collected=[]
     visited=set()
     candidate_pages=list(seed_pages)
@@ -43,24 +59,39 @@ def discover_proposals(seed_pages: list[str], search_terms: list[str], max_resul
         visited.add(page)
         if '.pdf' in page.lower():
             if check_url_policy(page)['status'] == 'APPROVED':
+                reason = candidate_rejection_reason(page, area_name=area_name)
+                if reason:
+                    if rejected is not None:
+                        rejected.append({"url": page, "reason": reason, "discovery": "search_or_seed_direct"})
+                    continue
                 collected.append({
                     'url': page,
-                    'score': score_candidate(page),
+                    'score': score_candidate(page, area_name=area_name),
                     'found_on': None,
                     'discovery': 'search_or_seed_direct',
                     'reason': 'Direkte PDF-Adresse aus Startseite oder Suchtreffer.',
                 })
             continue
         try:
-            collected.extend(discover_pdf_links(page, budget=budget))
+            collected.extend(discover_pdf_links(page, budget=budget, area_name=area_name, rejected=rejected))
         except Exception:
             pass
         try:
             for sm in discover_sitemaps(page, budget=budget):
                 for pdf_url in extract_pdf_urls_from_sitemap(sm, budget=budget):
+                    reason = candidate_rejection_reason(pdf_url, area_name=area_name)
+                    if reason:
+                        if rejected is not None:
+                            rejected.append({
+                                "url": pdf_url,
+                                "reason": reason,
+                                "found_on": page,
+                                "found_in_sitemap": sm,
+                            })
+                        continue
                     collected.append({
                         'url': pdf_url,
-                        'score': score_candidate(pdf_url),
+                        'score': score_candidate(pdf_url, area_name=area_name),
                         'found_on': page,
                         'found_in_sitemap': sm,
                         'discovery': 'sitemap',

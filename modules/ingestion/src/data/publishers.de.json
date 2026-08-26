@@ -1,0 +1,69 @@
+[
+  {
+    "name": "inixmedia",
+    "homepage": "https://www.inixmedia.de/",
+    "evidence": "Die Startseite beschreibt kommunale Printmedien und listet zahlreiche realisierte Projekte für Kreise, Städte und Gemeinden; ein veröffentlichtes Ansbach-Seniorenwegweiser-Blätterbuch ist unter flipbook.inixmedia.de abrufbar.",
+    "seedPages": [
+      "https://www.inixmedia.de/",
+      "https://flipbook.inixmedia.de/ansbach_sen_2902/files/basic-html/page4.html"
+    ]
+  },
+  {
+    "name": "mediaprint infoverlag / total-lokal",
+    "homepage": "https://www.total-lokal.de/",
+    "evidence": "Die Startseite beschreibt bundesweite Informationsbroschüren für Städte, Kreise und Gemeinden; eine Landkreis-Würzburg-Bürgerinfobroschüre ist gebietsbezogen gelistet und zeigt 60 Inserenten.",
+    "seedPages": [
+      "https://www.total-lokal.de/",
+      "https://www.total-lokal.de/publikationen/informationen-fuer-buergerinnen-und-buerger-im-landkreis-wuerzburg-auflage-3-.html"
+    ]
+  },
+  {
+    "name": "Beck Medien",
+    "homepage": "https://beckmedien.de/",
+    "evidence": "Die Beck-Medien-Seite beschreibt werbefinanzierte Broschüren und Magazine für Kommunen; ein Seniorenwegweiser-PDF von beckmedien.de war als gebietsbezogener Fund abrufbar.",
+    "seedPages": [
+      "https://beckmedien.de/"
+    ]
+  },
+  {
+    "name": "anCos Verlag",
+    "homepage": "https://www.ancos-verlag.de/verlag/",
+    "evidence": "Die Verlagsseite nennt werbefinanzierte Bürgerinformations- und Imagebroschüren, Seniorenwegweiser und regionale Themenbroschüren; sie listet konkrete Seniorenwegweiser-Projekte und ein Blätterbuch ist abrufbar.",
+    "seedPages": [
+      "https://www.ancos-verlag.de/verlag/",
+      "https://stadt-bielefeld-senioren.ancos-verlag.de/"
+    ]
+  },
+  {
+    "name": "VkW-Verlag",
+    "homepage": "https://www.vkw-verlag.de/",
+    "evidence": "Die Startseite heißt ausdrücklich Willkommen beim Seniorenwegweiser und listet regionale Ausgaben für Kassel sowie Waldeck-Frankenberg.",
+    "seedPages": [
+      "https://www.vkw-verlag.de/"
+    ]
+  },
+  {
+    "name": "Agentur communicate",
+    "homepage": "https://www.agentur-communicate.de/verlag.html",
+    "evidence": "Die Verlagsseite beschreibt einen Spezialverlag für kommunale Seniorenwegweiser, regionale Broschüren und Anzeigenfinanzierung für Städte, Gemeinden und Kreise.",
+    "seedPages": [
+      "https://www.agentur-communicate.de/verlag.html"
+    ]
+  },
+  {
+    "name": "Städte-Verlag",
+    "homepage": "https://www.staedte-verlag.de/produkte/broschueren",
+    "evidence": "Die Produktseite beschreibt werbefinanzierte Informationsbroschüren und Online-Bürgerinformationsbroschüren; eine konkrete Unstrut-Hainich-Kreis-Informationsbroschüre war als PDF abrufbar.",
+    "seedPages": [
+      "https://www.staedte-verlag.de/produkte/broschueren"
+    ]
+  },
+  {
+    "name": "Bürgerinformationsbroschuere.de",
+    "homepage": "https://buergerinformationsbroschuere.de/kommunale-werbung/",
+    "evidence": "Die Seite beschreibt kommunale Werbebroschüren für Städte, Gemeinden und Landkreise und listet konkrete Bürgerinformationsbroschüren für Landkreis Miesbach, Lindau, Aystetten und weitere Gebiete.",
+    "seedPages": [
+      "https://buergerinformationsbroschuere.de/kommunale-werbung/"
+    ]
+  }
+]

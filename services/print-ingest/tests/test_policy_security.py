@@ -2,6 +2,8 @@ import pytest
 
 from app.services import discovery, downloader, sitemap
 from app.services.policy import DiscoveryBudget, read_limited_response
+from app.api import routes
+from app.schemas.api import RevisitRequest
 
 
 class FakeResponse:
@@ -112,3 +114,16 @@ def test_pdf_signature_is_authoritative(monkeypatch):
     ))
     with pytest.raises(downloader.DownloadError, match="not_a_real_pdf_signature"):
         downloader.download_pdf("https://public.example/file.pdf")
+
+
+def test_revisit_preserves_target_http_status(monkeypatch):
+    allowed = {"status": "APPROVED", "hostname": "public.example", "address": "93.184.216.34"}
+    monkeypatch.setattr(routes, "check_url_policy", lambda _url: allowed)
+    monkeypatch.setattr(routes, "request_checked", lambda *args, **kwargs: FakeResponse(
+        b"", "application/pdf", 404,
+    ))
+
+    result = routes.revisit(RevisitRequest(url="https://public.example/source.pdf"))
+
+    assert result["http_status"] == 404
+    assert result["note"] == "Zielquelle antwortete mit HTTP 404"

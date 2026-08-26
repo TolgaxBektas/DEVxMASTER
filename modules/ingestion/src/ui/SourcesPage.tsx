@@ -25,6 +25,7 @@ const statusLabels: Record<string, string> = {
   proposed: "Vorgeschlagen",
   approved: "Freigegeben",
   rejected: "Abgelehnt",
+  dead: "Nicht erreichbar",
 };
 const formatDate = (value?: string | null) =>
   value ? new Date(value).toLocaleString("de-DE") : "—";

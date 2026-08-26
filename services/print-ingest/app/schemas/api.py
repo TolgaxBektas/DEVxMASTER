@@ -23,6 +23,7 @@ class AutoDiscoverRequest(BaseModel):
     seed_pages: list[HttpUrl] = []
     search_terms: list[str] = []
     max_results: int = 100
+    area_name: str | None = None
 
 class RevisitRequest(BaseModel):
     url: HttpUrl

@@ -23,6 +23,7 @@ import { ingestionPages, IngestionPage, OccurrencesPage, ReviewPage, AreasPage }
 import type { PifReviewClient } from "./review-client.js";
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { areaSearchTerms } from "./search-terms.js";
+import { PUBLISHER_SEED_PAGES } from "./publishers.js";
 
 function sameSourceHost(firstUrl: string, secondUrl: string): boolean {
   try {
@@ -244,7 +245,7 @@ export function createIngestionModule(deps: {
     creationDate?: string;
   } }>;
   fetchSource?: (input: { url: string }) => Promise<{ bytes: Buffer; filename: string }>;
-  discoverProposals?: (input: { seedPages: string[]; searchTerms: string[]; maxResults: number }) => Promise<Array<{
+  discoverProposals?: (input: { seedPages: string[]; searchTerms: string[]; maxResults: number; areaName?: string }) => Promise<Array<{
     url: string; score: number; metadata: Record<string, unknown>;
   }>>;
   revisitSource?: (input: { url: string; fingerprint?: string | null }) => Promise<{
@@ -350,11 +351,12 @@ export function createIngestionModule(deps: {
           const limit = typeof configuredLimit === "number" && configuredLimit > 0 ? Math.floor(configuredLimit) : 3;
           const areas = (await repository.listAreas(tenantId))
             .filter((area) =>
-              area.status === "pending"
+              area.level === "district"
+              && (area.status === "pending"
               || (area.nextDueAt !== null && area.nextDueAt <= now)
               || (area.status === "running"
                 && (area.startedAt === null
-                  || area.startedAt.getTime() <= now.getTime() - 24 * 86_400_000)),
+                  || area.startedAt.getTime() <= now.getTime() - 24 * 86_400_000))),
             )
             .sort((a, b) => a.orderIndex - b.orderIndex)
             .slice(0, limit);
@@ -363,9 +365,10 @@ export function createIngestionModule(deps: {
             try {
               if (!deps.discoverProposals) throw new Error("Quellensuche ist nicht konfiguriert");
               const proposals = await deps.discoverProposals({
-                seedPages: [],
+                seedPages: [...PUBLISHER_SEED_PAGES],
                 searchTerms: areaSearchTerms(area.name, area.level, undefined, area.kind),
                 maxResults: 40,
+                areaName: area.name,
               });
               let foundSources = 0;
               for (const proposal of proposals) {
@@ -421,6 +424,25 @@ export function createIngestionModule(deps: {
           for (const source of sources) {
             try {
               const result = await deps.revisitSource({ url: source.url, fingerprint: source.fingerprint });
+              const httpStatus = result.httpStatus ?? null;
+              const targetFailure = httpStatus !== null && httpStatus >= 400;
+              if (targetFailure) {
+                const failures = source.revisitFailures + 1;
+                const note = result.note ?? `Zielquelle antwortete mit HTTP ${httpStatus}`;
+                await repository.createSourceVisit(tenantId, {
+                  sourceId: source.id, checkedAt: now, httpStatus,
+                  newPdfCount: 0, changed: false, note,
+                });
+                await repository.updateSource(tenantId, source.id, {
+                  status: failures >= 3 ? "dead" : source.status,
+                  revisitFailures: failures,
+                  nextCheckAt: failures >= 3
+                    ? null
+                    : new Date(now.getTime() + 90 * 86_400_000),
+                  lastError: note,
+                });
+                continue;
+              }
               const urls = result.newPdfUrls ?? [];
               let newCount = 0;
               for (const url of urls) {
@@ -474,6 +496,7 @@ export function createIngestionModule(deps: {
                 fingerprint: result.fingerprint ?? source.fingerprint,
                 nextCheckAt: new Date(now.getTime() + (productive ? 30 : 90) * 86_400_000),
                 lastError: null,
+                revisitFailures: 0,
               });
               await deps.publish({
                 name: "ingestion.source.revisited",
@@ -484,13 +507,17 @@ export function createIngestionModule(deps: {
                 idempotencyKey: `ingestion.source.revisited:${tenantId}:${source.id}:${now.toISOString()}`,
               });
             } catch (error) {
+              const failures = source.revisitFailures + 1;
+              const note = "Quellenprüfung fehlgeschlagen";
               await repository.createSourceVisit(tenantId, {
                 sourceId: source.id, checkedAt: now, httpStatus: null, newPdfCount: 0,
-                changed: false, note: error instanceof Error ? error.message : "Quellenprüfung fehlgeschlagen",
+                changed: false, note,
               });
               await repository.updateSource(tenantId, source.id, {
-                nextCheckAt: new Date(now.getTime() + 90 * 86_400_000),
-                lastError: error instanceof Error ? error.message : "Quellenprüfung fehlgeschlagen",
+                status: failures >= 3 ? "dead" : source.status,
+                revisitFailures: failures,
+                nextCheckAt: failures >= 3 ? null : new Date(now.getTime() + 90 * 86_400_000),
+                lastError: note,
               });
             }
           }

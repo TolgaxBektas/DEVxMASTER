@@ -123,6 +123,7 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
         areaId: input.areaId ?? null,
         revisitIntervalDays: input.revisitIntervalDays ?? 90,
         nextCheckAt: input.nextCheckAt ?? null,
+        revisitFailures: 0,
       });
       const created = (await database.select().from(sources)
         .where(eq(sources.id, Number(result[0]?.insertId))).limit(1))[0];

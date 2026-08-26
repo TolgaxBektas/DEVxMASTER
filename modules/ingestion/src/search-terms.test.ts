@@ -15,4 +15,13 @@ describe("Gebietssuchbegriffe", () => {
     expect(first.every((term) => !term.includes("Buergerbroschuere"))).toBe(true);
     expect(new Set(first).size).toBe(first.length);
   });
+
+  it("verwendet natürliche Kreisbegriffe und lässt Bundesland weg", () => {
+    expect(areaSearchTerms("Böblingen", "district", 2026, "Landkreis")[0])
+      .toBe("Seniorenwegweiser Landkreis Böblingen");
+    expect(areaSearchTerms("Bayern", "state", 2026, "Bundesland")[0])
+      .toBe("Seniorenwegweiser Bayern");
+    expect(areaSearchTerms("Berlin", "state", 2026, "Bundesland"))
+      .not.toContain("Seniorenwegweiser Bundesland Berlin");
+  });
 });

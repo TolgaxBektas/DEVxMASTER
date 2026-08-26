@@ -16,6 +16,7 @@ export const sources = mysqlTable("ingestion_sources", {
   nextCheckAt: timestamp("next_check_at"),
   productive: boolean("productive").default(false).notNull(),
   fingerprint: varchar("fingerprint", { length: 255 }),
+  revisitFailures: int("revisit_failures").default(0).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   tenantUrl: uniqueIndex("ingestion_sources_tenant_url_uq").on(table.tenantId, table.url),
