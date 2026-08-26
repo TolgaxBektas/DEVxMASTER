@@ -10,14 +10,23 @@ export const PUBLICATION_TERMS = [
   "Stadtmagazin",
 ] as const;
 
-export function areaSearchTerms(name: string, level: "state" | "district", year = new Date().getFullYear()): string[] {
+export function areaSearchTerms(
+  name: string,
+  _level: "state" | "district",
+  year = new Date().getFullYear(),
+  kind?: string,
+): string[] {
   const area = name.trim();
-  const suffix = level === "state" ? "Bundesland" : "Kreis";
+  const type = kind?.trim() && !["Kreisfreie Stadt", "Stadtkreis"].includes(kind.trim())
+    ? `${kind.trim()} `
+    : "";
   const values = new Set<string>();
   for (const publication of PUBLICATION_TERMS) {
-    for (const variant of [publication, `${publication} PDF`, `${publication} ${year}`, `${publication} ${year - 1}`]) {
-      values.add(`${variant} ${area} ${suffix}`);
-    }
+    values.add(`${publication} ${type}${area}`.trim());
+    values.add(`${publication} PDF ${type}${area}`.trim());
   }
-  return [...values].slice(0, 72);
+  for (const publication of PUBLICATION_TERMS.slice(0, 3)) {
+    values.add(`${publication} ${year} ${type}${area}`.trim());
+  }
+  return [...values].slice(0, 24);
 }

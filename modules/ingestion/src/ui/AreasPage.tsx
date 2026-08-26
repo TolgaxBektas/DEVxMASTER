@@ -27,7 +27,7 @@ export function AreasPage({ api }: ModulePageProps) {
     } catch (error) { setMessage(error instanceof Error ? error.message : "Gebietslauf fehlgeschlagen"); }
   };
   return <div className="stack">
-    <div className="page-heading"><div><div className="eyebrow">INGESTION</div><h1>Gebiete</h1><p>{done} von 400 Gebieten abgearbeitet</p></div></div>
+    <div className="page-heading"><div><div className="eyebrow">INGESTION</div><h1>Gebiete</h1><p>{done} von {districts.length} Gebieten abgearbeitet</p></div></div>
     {message && <div className="form-message">{message}</div>}
     <Card><label>Filter <select value={filter} onChange={(event) => setFilter(event.target.value)}>
       <option value="all">Alle</option><option value="pending">Offen</option><option value="running">In Arbeit</option><option value="done">Erledigt</option><option value="due">Fällig</option>

@@ -24,6 +24,15 @@ import type { PifReviewClient } from "./review-client.js";
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { areaSearchTerms } from "./search-terms.js";
 
+function sameSourceHost(firstUrl: string, secondUrl: string): boolean {
+  try {
+    const normalize = (value: string) => new URL(value).hostname.toLocaleLowerCase("de-DE").replace(/^www\./, "");
+    return normalize(firstUrl) === normalize(secondUrl);
+  } catch {
+    return false;
+  }
+}
+
 export type AdBoundingBox = {
   x: number;
   y: number;
@@ -340,17 +349,23 @@ export function createIngestionModule(deps: {
           const configuredLimit = (payload as { limit?: unknown }).limit;
           const limit = typeof configuredLimit === "number" && configuredLimit > 0 ? Math.floor(configuredLimit) : 3;
           const areas = (await repository.listAreas(tenantId))
-            .filter((area) => area.status === "pending" || (area.nextDueAt !== null && area.nextDueAt <= now))
+            .filter((area) =>
+              area.status === "pending"
+              || (area.nextDueAt !== null && area.nextDueAt <= now)
+              || (area.status === "running"
+                && (area.startedAt === null
+                  || area.startedAt.getTime() <= now.getTime() - 24 * 86_400_000)),
+            )
             .sort((a, b) => a.orderIndex - b.orderIndex)
             .slice(0, limit);
           for (const area of areas) {
-            await repository.updateArea(tenantId, area.id, { status: "running", lastError: null });
+            await repository.updateArea(tenantId, area.id, { status: "running", startedAt: now, lastError: null });
             try {
               if (!deps.discoverProposals) throw new Error("Quellensuche ist nicht konfiguriert");
               const proposals = await deps.discoverProposals({
                 seedPages: [],
-                searchTerms: areaSearchTerms(area.name, area.level),
-                maxResults: 25,
+                searchTerms: areaSearchTerms(area.name, area.level, undefined, area.kind),
+                maxResults: 40,
               });
               let foundSources = 0;
               for (const proposal of proposals) {
@@ -361,17 +376,22 @@ export function createIngestionModule(deps: {
                   nextCheckAt: new Date(now.getTime() + 90 * 86_400_000),
                 });
                 if (source.areaId === area.id) foundSources += 1;
-                else await repository.updateSource(tenantId, source.id, { areaId: area.id });
+                else if (source.areaId === null) {
+                  await repository.updateSource(tenantId, source.id, { areaId: area.id });
+                  foundSources += 1;
+                }
               }
               await repository.updateArea(tenantId, area.id, {
                 status: "done",
                 lastRunAt: now,
+                startedAt: null,
                 nextDueAt: new Date(now.getTime() + 180 * 86_400_000),
                 foundSources,
               });
             } catch (error) {
               await repository.updateArea(tenantId, area.id, {
                 status: "pending",
+                startedAt: null,
                 lastError: error instanceof Error ? error.message : "Gebietslauf fehlgeschlagen",
               });
             }
@@ -392,14 +412,19 @@ export function createIngestionModule(deps: {
           const configuredLimit = (payload as { limit?: unknown }).limit;
           const limit = typeof configuredLimit === "number" && configuredLimit > 0 ? Math.floor(configuredLimit) : 25;
           const now = new Date();
-          const sources = (await repository.listSources(tenantId))
+          const allSources = await repository.listSources(tenantId);
+          const sources = allSources
             .filter((source) => source.status === "approved" && source.nextCheckAt !== null && source.nextCheckAt <= now)
+            .sort((a, b) => (a.nextCheckAt?.getTime() ?? Number.MAX_SAFE_INTEGER) - (b.nextCheckAt?.getTime() ?? Number.MAX_SAFE_INTEGER))
             .slice(0, limit);
+          const knownUrls = new Set(allSources.map((source) => source.url));
           for (const source of sources) {
             try {
               const result = await deps.revisitSource({ url: source.url, fingerprint: source.fingerprint });
               const urls = result.newPdfUrls ?? [];
+              let newCount = 0;
               for (const url of urls) {
+                const isNew = !knownUrls.has(url);
                 const candidate = await repository.createSource(tenantId, {
                   url,
                   score: 100,
@@ -408,7 +433,23 @@ export function createIngestionModule(deps: {
                   revisitIntervalDays: 90,
                   nextCheckAt: new Date(now.getTime() + 90 * 86_400_000),
                 });
-                if (candidate.status === "approved" && deps.enqueue) {
+                knownUrls.add(url);
+                if (isNew) newCount += 1;
+                const trustedHost = sameSourceHost(source.url, url);
+                const wasApproved = candidate.status === "approved";
+                if (trustedHost && !wasApproved) {
+                  await repository.updateSource(tenantId, candidate.id, {
+                    status: "approved",
+                    approvedBy: "Ingestion-Worker",
+                    approvedAt: now,
+                    nextCheckAt: new Date(now.getTime() + 90 * 86_400_000),
+                    lastError: null,
+                  });
+                }
+                const approvedCandidate = trustedHost && !wasApproved
+                  ? await repository.getSource(tenantId, candidate.id)
+                  : candidate;
+                if (trustedHost && !wasApproved && approvedCandidate.status === "approved" && deps.enqueue) {
                   await deps.enqueue({ name: "ingestion.source.fetch", tenantId, payload: { sourceId: candidate.id } });
                 }
               }
@@ -419,7 +460,6 @@ export function createIngestionModule(deps: {
                   payload: { sourceId: source.id },
                 });
               }
-              const newCount = result.newPdfCount ?? urls.length;
               const productive = source.productive || newCount > 0 || result.changed === true;
               await repository.createSourceVisit(tenantId, {
                 sourceId: source.id,

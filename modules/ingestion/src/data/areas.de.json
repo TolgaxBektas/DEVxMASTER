@@ -4,112 +4,128 @@
     "ags": "08",
     "name": "Baden-Württemberg",
     "stateName": "Baden-Württemberg",
-    "orderIndex": 0
+    "orderIndex": 0,
+    "kind": "Bundesland"
   },
   {
     "level": "state",
     "ags": "09",
     "name": "Bayern",
     "stateName": "Bayern",
-    "orderIndex": 1
+    "orderIndex": 1,
+    "kind": "Bundesland"
   },
   {
     "level": "state",
     "ags": "11",
     "name": "Berlin",
     "stateName": "Berlin",
-    "orderIndex": 2
+    "orderIndex": 2,
+    "kind": "Bundesland"
   },
   {
     "level": "state",
     "ags": "12",
     "name": "Brandenburg",
     "stateName": "Brandenburg",
-    "orderIndex": 3
+    "orderIndex": 3,
+    "kind": "Bundesland"
   },
   {
     "level": "state",
     "ags": "04",
     "name": "Bremen",
     "stateName": "Bremen",
-    "orderIndex": 4
+    "orderIndex": 4,
+    "kind": "Bundesland"
   },
   {
     "level": "state",
     "ags": "02",
     "name": "Hamburg",
     "stateName": "Hamburg",
-    "orderIndex": 5
+    "orderIndex": 5,
+    "kind": "Bundesland"
   },
   {
     "level": "state",
     "ags": "06",
     "name": "Hessen",
     "stateName": "Hessen",
-    "orderIndex": 6
+    "orderIndex": 6,
+    "kind": "Bundesland"
   },
   {
     "level": "state",
     "ags": "13",
     "name": "Mecklenburg-Vorpommern",
     "stateName": "Mecklenburg-Vorpommern",
-    "orderIndex": 7
+    "orderIndex": 7,
+    "kind": "Bundesland"
   },
   {
     "level": "state",
     "ags": "03",
     "name": "Niedersachsen",
     "stateName": "Niedersachsen",
-    "orderIndex": 8
+    "orderIndex": 8,
+    "kind": "Bundesland"
   },
   {
     "level": "state",
     "ags": "05",
     "name": "Nordrhein-Westfalen",
     "stateName": "Nordrhein-Westfalen",
-    "orderIndex": 9
+    "orderIndex": 9,
+    "kind": "Bundesland"
   },
   {
     "level": "state",
     "ags": "07",
     "name": "Rheinland-Pfalz",
     "stateName": "Rheinland-Pfalz",
-    "orderIndex": 10
+    "orderIndex": 10,
+    "kind": "Bundesland"
   },
   {
     "level": "state",
     "ags": "10",
     "name": "Saarland",
     "stateName": "Saarland",
-    "orderIndex": 11
+    "orderIndex": 11,
+    "kind": "Bundesland"
   },
   {
     "level": "state",
     "ags": "14",
     "name": "Sachsen",
     "stateName": "Sachsen",
-    "orderIndex": 12
+    "orderIndex": 12,
+    "kind": "Bundesland"
   },
   {
     "level": "state",
     "ags": "15",
     "name": "Sachsen-Anhalt",
     "stateName": "Sachsen-Anhalt",
-    "orderIndex": 13
+    "orderIndex": 13,
+    "kind": "Bundesland"
   },
   {
     "level": "state",
     "ags": "01",
     "name": "Schleswig-Holstein",
     "stateName": "Schleswig-Holstein",
-    "orderIndex": 14
+    "orderIndex": 14,
+    "kind": "Bundesland"
   },
   {
     "level": "state",
     "ags": "16",
     "name": "Thüringen",
     "stateName": "Thüringen",
-    "orderIndex": 15
+    "orderIndex": 15,
+    "kind": "Bundesland"
   },
   {
     "level": "district",

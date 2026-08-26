@@ -1,5 +1,5 @@
 import type { MySql2Database } from "drizzle-orm/mysql2";
-import { and, asc, desc, eq, gte, lte, ne } from "drizzle-orm";
+import { and, asc, desc, eq, gte, lte, max, ne } from "drizzle-orm";
 import { areas, classifications, documents, occurrences, pages, sourceVisits, sources, ingestionSchema } from "./schema.js";
 import type { DerivedClassification, DocumentClassification } from "./classification.js";
 import { documentActualityStatus, sourceActualityHint, type ActualityStatus } from "./actuality.js";
@@ -87,7 +87,14 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
       const result = await database.select().from(sources)
         .where(eq(sources.tenantId, Number(tenantId)))
         .orderBy(desc(sources.createdAt));
-      return Promise.all(result.map(async (source) => ({
+      const latestVisits = await database.select({
+        sourceId: sourceVisits.sourceId,
+        checkedAt: max(sourceVisits.checkedAt),
+      }).from(sourceVisits)
+        .where(eq(sourceVisits.tenantId, Number(tenantId)))
+        .groupBy(sourceVisits.sourceId);
+      const lastCheckedAt = new Map(latestVisits.map((visit) => [visit.sourceId, visit.checkedAt ?? null]));
+      return result.map((source) => ({
         ...source,
         tenantId: String(source.tenantId),
         metadata: source.metadata && typeof source.metadata === "object"
@@ -98,10 +105,8 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
             ? source.metadata as Record<string, unknown>
             : null,
         ),
-        lastCheckedAt: ((await database.select({ checkedAt: sourceVisits.checkedAt }).from(sourceVisits).where(and(
-          eq(sourceVisits.tenantId, Number(tenantId)), eq(sourceVisits.sourceId, source.id),
-        )).orderBy(desc(sourceVisits.checkedAt)).limit(1))[0]?.checkedAt ?? null),
-      })));
+        lastCheckedAt: lastCheckedAt.get(source.id) ?? null,
+      }));
     },
     async createSource(tenantId, input) {
       const existing = await database.select().from(sources).where(and(

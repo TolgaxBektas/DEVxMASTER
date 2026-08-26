@@ -89,13 +89,23 @@ if (!identity) {
   });
 }
 const areaData = JSON.parse(await readFile(resolve("modules/ingestion/src/data/areas.de.json"), "utf8")) as Array<{
-  level: "state" | "district"; ags: string; name: string; stateName: string; orderIndex: number;
+  level: "state" | "district"; ags: string; name: string; stateName: string; kind: string; orderIndex: number;
 }>;
 for (const area of areaData) {
   const existingArea = (await db.select().from(areas).where(and(
     eq(areas.tenantId, tenantId), eq(areas.ags, area.ags),
   )).limit(1))[0];
-  if (!existingArea) await db.insert(areas).values({ tenantId, ...area, status: "pending", foundSources: 0 });
+  if (existingArea) {
+    await db.update(areas).set({
+      level: area.level,
+      name: area.name,
+      stateName: area.stateName,
+      kind: area.kind,
+      orderIndex: area.orderIndex,
+    }).where(and(eq(areas.id, existingArea.id), eq(areas.tenantId, tenantId)));
+  } else {
+    await db.insert(areas).values({ tenantId, ...area, status: "pending", foundSources: 0 });
+  }
 }
 await factory.close();
 console.log(JSON.stringify({ seeded: true, tenantId, userId, login: "admin", pinFromEnv: "ADMIN_PIN" }));
