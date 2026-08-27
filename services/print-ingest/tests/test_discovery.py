@@ -1,7 +1,12 @@
 import pytest
 
 from app.services import autodiscovery, discovery
-from app.services.archive_index import ArchiveIndex, ArchiveIndexResult, ArchivePdf
+from app.services.archive_index import (
+    ArchiveIndex,
+    ArchiveIndexResult,
+    ArchivePdf,
+    deduplicate_archive_entries,
+)
 from app.services.discovery import (
     MAX_SECOND_LEVEL_LINKS,
     MIN_CANDIDATE_SCORE,
@@ -134,7 +139,7 @@ def test_discovery_records_page_errors_instead_of_swallowing_them(monkeypatch):
     assert rejected[0]["error_type"] == "RuntimeError"
 
 
-def test_archive_candidate_uses_latest_seen_year_for_age_veto(monkeypatch):
+def test_archive_timestamp_cannot_make_an_old_url_current(monkeypatch):
     archive = ArchivePdf(
         original="https://kreis.example/Seniorenwegweiser-2019.pdf",
         timestamp="20250102112233",
@@ -158,10 +163,44 @@ def test_archive_candidate_uses_latest_seen_year_for_age_veto(monkeypatch):
         archive_domains=["kreis.example"],
     )
 
-    assert len(proposals) == 1
-    assert proposals[0]["archiveTimestamp"] == "20250102112233"
-    assert proposals[0]["archiveStatusCode"] == 404
-    assert rejected == []
+    assert proposals == []
+    assert rejected[0]["reason"].startswith("Jahreszahl älter als")
+
+
+@pytest.mark.parametrize("url", [
+    "https://www.gottenheim.de/Liederkranz/130Jahre/2005_MGV_Festschrift.pdf",
+    "https://www.gottenheim.de/Musikverein/125Jahre/2007_MV_Festschrift.pdf",
+    "https://www.gottenheim.de/WG/50Jahre/2010_WG_Festschrift.pdf",
+    "https://www.boetzingen.de/site/Boetzingen/get/params_E976260030_Dattachment/3638149/B%C3%96TZINGEN_Gastgeberverzeichnis%202017.pdf",
+])
+def test_evidence_old_url_years_remain_rejected_with_current_archive_timestamp(url):
+    assert candidate_rejection_reason(
+        url,
+        archive_timestamp="20260827000000",
+    ).startswith("Jahreszahl älter als")
+
+
+def test_archive_timestamp_is_age_fallback_without_url_year(monkeypatch):
+    archive = ArchivePdf(
+        original="https://kreis.example/Seniorenwegweiser.pdf",
+        timestamp="20200102112233",
+        status_code=404,
+        length=None,
+        archive_url="https://web.archive.org/web/20200102112233id_/https://kreis.example/Seniorenwegweiser.pdf",
+    )
+    monkeypatch.setattr(ArchiveIndex, "fetch_many", lambda *_args, **_kwargs: {
+        "kreis.example": ArchiveIndexResult(entries=(archive,)),
+    })
+    monkeypatch.setattr(autodiscovery, "web_search", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(autodiscovery, "discover_pdf_links", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(autodiscovery, "discover_sitemaps", lambda *_args, **_kwargs: [])
+
+    rejected = []
+    proposals = autodiscovery.discover_proposals(
+        [], [], area_name="Kreis", rejected=rejected, archive_domains=["kreis.example"],
+    )
+    assert proposals == []
+    assert rejected[0]["reason"].startswith("Jahreszahl älter als")
 
 def test_pdf_publication_scores_high():
     assert score_candidate('https://example.org/Seniorenwegweiser-2026.pdf') >= 50
@@ -211,6 +250,70 @@ def test_age_veto_uses_latest_year_from_wordpress_upload_path():
     assert candidate_rejection_reason(url) is None
 
 
+@pytest.mark.parametrize("term", [
+    "wegweiser", "ratgeber", "pflegewegweiser", "familienwegweiser",
+    "klinikfuehrer", "klinikführer", "gewerbeverzeichnis", "firmenverzeichnis",
+])
+def test_extended_publication_terms_are_accepted(term):
+    assert candidate_rejection_reason(f"https://example.org/{term}_2026.pdf") is None
+
+
+def test_extended_publication_terms_do_not_bypass_veto():
+    assert candidate_rejection_reason(
+        "https://example.org/Seniorenwegweiser_Datenschutzerklärung.pdf",
+    ).startswith("Ausschlusssignal:")
+
+
+def test_archive_entries_are_deduplicated_by_filename_and_length():
+    entries = [
+        ArchivePdf(
+            original=f"https://example.org/_Resources/Persistent/{index}/Gastgeberverzeichnis%20Breisach%20am%20Rhein%202025.pdf",
+            timestamp=f"2026010{index}000000",
+            status_code=200,
+            length=734724,
+            archive_url="archive",
+        )
+        for index in (1, 2, 3)
+    ]
+    entries.append(ArchivePdf(
+        original="https://example.org/other/Gastgeberverzeichnis%20Breisach%20am%20Rhein%202025.pdf",
+        timestamp="20260104000000",
+        status_code=200,
+        length=999999,
+        archive_url="archive",
+    ))
+    selected, duplicates = deduplicate_archive_entries(entries)
+    assert [entry.original for entry in selected] == [
+        entries[2].original,
+        entries[3].original,
+    ]
+    assert len(duplicates) == 2
+    assert all(item["duplicateOf"] == entries[2].original for item in duplicates)
+
+
+def test_archive_host_failures_are_isolated(monkeypatch):
+    archive = ArchivePdf(
+        original="https://good.example/Seniorenwegweiser-2026.pdf",
+        timestamp="20260102000000",
+        status_code=200,
+        length=123,
+        archive_url="archive",
+    )
+
+    def fetch(_self, host, *, budget):
+        if host == "bad.example":
+            raise RuntimeError("CDX-Verbindung abgebrochen")
+        return ArchiveIndexResult(entries=(archive,))
+
+    monkeypatch.setattr(ArchiveIndex, "fetch", fetch)
+    results = ArchiveIndex(sleep=lambda _seconds: None).fetch_many(
+        ["bad.example", "good.example"],
+        budget=DiscoveryBudget(max_requests=10, max_depth=0, max_seconds=10),
+    )
+    assert results["bad.example"].error == "RuntimeError: CDX-Verbindung abgebrochen"
+    assert results["good.example"].entries == (archive,)
+
+
 @pytest.mark.parametrize("url", [
     "https://ksr-breisgau-hochschwarzwald.de/wp-content/uploads/2024/06/ksr-breisgau-hochschwarzwald_seniorenwegweiser.pdf",
     "https://www.ulm.de/-/media/ulm/so/downloads/seniorinnen/internationaler-seniorenwegweiser-deutsch.pdf?rev=a963ec41630b46c0b088f620603b706b",
@@ -237,7 +340,6 @@ def test_old_useful_evaluation_urls_are_rejected_by_age(url):
     "https://www.lfk.de/fileadmin/PDFs/Publikationen/Materialien/LFK/netzwerk-senioren-programmheft-tagung.pdf",
     "https://s3856459e0e274fa3.jimcontent.com/download/version/1707987080/module/12138523021/name/Betreutes%20Wohnen%20fuer%20Senioren%20im%20Landkreis%20Karlsruhe2.PDF",
     "https://www.lpb-bw.de/fileadmin/lpb_hauptportal/pdf/publikationen/Leseprobe_Band_2_.pdf",
-    "https://www.bundesgesundheitsministerium.de/fileadmin/Dateien/5_Publikationen/Pflege/Broschueren/BMG_Ratgeber-Pflegeleistungen_zum_Nachschlagen_2023_bf.pdf",
     "https://stmgp.bayern.de/wp-content/uploads/2024/02/strategiepapier_gute-pflege.pdf",
     "https://admin.integreat-app.de/media/regions/115/2022/09/Vereinsliste_Andechs.pdf",
     "https://www.bkk-bayern.de/fileadmin/media/bkk-bayern/03_partner/PDF-Dateien/Netwerkfoerderung/Pflege/Anlage_4_Verwendungsnachweis___45c_SGBXI.pdf",

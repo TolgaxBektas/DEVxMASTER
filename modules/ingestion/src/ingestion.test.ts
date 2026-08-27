@@ -45,6 +45,59 @@ describe("Ingestion-Bestand", () => {
     expect((await repository.listSources("1"))[0]).toMatchObject({ revisitIntervalDays: 90, areaId: 1 });
   });
 
+  it("schließt ein Gebiet trotz einer fehlgeschlagenen Quellenanlage ab", async () => {
+    const repository = new MemoryIngestionRepository();
+    await repository.upsertArea("1", {
+      level: "district", ags: "01001", name: "Alpha", stateName: "Land", orderIndex: 1,
+      kind: "Landkreis", status: "pending", lastRunAt: null, startedAt: null,
+      nextDueAt: null, lastError: null, foundSources: 0,
+    });
+    const originalCreateSource = repository.createSource.bind(repository);
+    repository.createSource = async (tenantId, input) => {
+      if (input.url.includes("broken")) throw new Error("HTTP 503 Quelle nicht erreichbar");
+      return originalCreateSource(tenantId, input);
+    };
+    const module = createIngestionModule({
+      repository, publish: async () => undefined, enqueue: async () => undefined,
+      discoverProposals: async () => [
+        { url: "https://example.invalid/broken.pdf", score: 80, metadata: {} },
+        { url: "https://example.invalid/working.pdf", score: 80, metadata: {} },
+      ],
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.discovery.run");
+    if (!job) throw new Error("Gebietssuchjob fehlt");
+    await job.handle({ limit: 1 }, context("1", {}));
+    const area = (await repository.listAreas("1"))[0];
+    expect(area?.status).toBe("done");
+    expect(area?.foundSources).toBe(1);
+    expect(area?.lastError).toContain("broken.pdf: HTTP 503");
+    expect((await repository.listSources("1"))).toHaveLength(1);
+  });
+
+  it("speichert einen einzelnen Quellenabruf-Fehler an der Quelle", async () => {
+    const repository = new MemoryIngestionRepository();
+    const area = await repository.upsertArea("1", {
+      level: "district", ags: "01001", name: "Alpha", stateName: "Land", orderIndex: 1,
+      kind: "Landkreis", status: "done", lastRunAt: new Date(), startedAt: null,
+      nextDueAt: new Date(Date.now() + 86_400_000), lastError: null, foundSources: 1,
+    });
+    const source = await repository.createSource("1", {
+      url: "https://example.invalid/failed.pdf", score: 80, metadata: {}, areaId: area.id,
+    });
+    await repository.updateSource("1", source.id, { status: "approved" });
+    const module = createIngestionModule({
+      repository,
+      fetchSource: async () => { throw new Error("HTTP 403 durch Bot-Schutz"); },
+      publish: async () => undefined,
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.source.fetch");
+    if (!job) throw new Error("Quellenabrufjob fehlt");
+    await expect(job.handle({ sourceId: source.id }, context("1", { sourceId: source.id })))
+      .rejects.toThrow("HTTP 403 durch Bot-Schutz");
+    expect((await repository.getSource("1", source.id)).lastError).toBe("HTTP 403 durch Bot-Schutz");
+    expect((await repository.listAreas("1"))[0]?.status).toBe("done");
+  });
+
   it("überspringt Bundesländer bei Gebietsläufen", async () => {
     const repository = new MemoryIngestionRepository();
     await repository.upsertArea("1", {
@@ -1327,6 +1380,88 @@ describe("Ingestion-Bestand", () => {
       context("1", { documentId: document.document.id }),
     ))
       .rejects.toThrow("PDF-Verarbeitung ist nicht erreichbar");
+  });
+
+  it("weist Dokumente ohne ausreichende Anzeigen oder Seiten sichtbar zurück", async () => {
+    const repository = new MemoryIngestionRepository();
+    const document = await repository.createUploadedDocument("1", {
+      filename: "themenflyer.pdf",
+      sha256: "q".repeat(64),
+      storageKey: "themenflyer",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "source",
+    });
+    const published: unknown[] = [];
+    const pages = Array.from({ length: 15 }, (_, index) => ({
+      pageNumber: index + 1,
+      text: "Bürgerinformation",
+      imageKey: `page-${index + 1}.png`,
+      classification: "EDITORIAL",
+      adProbability: 0.1,
+      occurrences: index < 2 ? [{
+        bbox: { x: 0, y: 0, width: 1, height: 1, confidence: 0.9 },
+        imageKey: `ad-${index + 1}.png`,
+        confidence: 0.9,
+        evidence: ["test"],
+        company: `Muster ${index + 1}`,
+        preview: "Telefon",
+      }] : [],
+    }));
+    const module = createIngestionModule({
+      repository,
+      repositoryForTransaction: () => repository,
+      transaction: async (callback) => callback({}),
+      processDocument: async () => pages,
+      publish: async (event) => { published.push(event); },
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.processing.run");
+    if (!job) throw new Error("Verarbeitungsjob fehlt");
+    await job.handle({ documentId: document.document.id }, context("1", { documentId: document.document.id }));
+    const rejected = await repository.getDocument("1", document.document.id);
+    expect(rejected.state).toBe("rejected");
+    expect(rejected.error).toContain("2 Anzeigen auf 15 Seiten");
+    expect(await repository.listOccurrences("1")).toHaveLength(0);
+    expect(published).toHaveLength(0);
+  });
+
+  it("lässt ein Wegweiser-Dokument mit drei Anzeigen und 16 Seiten passieren", async () => {
+    const repository = new MemoryIngestionRepository();
+    const document = await repository.createUploadedDocument("1", {
+      filename: "wegweiser.pdf",
+      sha256: "r".repeat(64),
+      storageKey: "wegweiser",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "source-archive-20260827000000",
+    });
+    const pages = Array.from({ length: 16 }, (_, index) => ({
+      pageNumber: index + 1,
+      text: "Seniorenwegweiser",
+      imageKey: `page-${index + 1}.png`,
+      classification: "MIXED_CONTENT",
+      adProbability: index < 3 ? 0.9 : 0.1,
+      occurrences: index < 3 ? [{
+        bbox: { x: 0, y: 0, width: 1, height: 1, confidence: 0.9 },
+        imageKey: `ad-${index + 1}.png`,
+        confidence: 0.9,
+        evidence: ["test"],
+        company: `Muster ${index + 1}`,
+        preview: "Telefon",
+      }] : [],
+    }));
+    const module = createIngestionModule({
+      repository,
+      repositoryForTransaction: () => repository,
+      transaction: async (callback) => callback({}),
+      processDocument: async () => pages,
+      publish: async () => undefined,
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.processing.run");
+    if (!job) throw new Error("Verarbeitungsjob fehlt");
+    await job.handle({ documentId: document.document.id }, context("1", { documentId: document.document.id }));
+    expect((await repository.getDocument("1", document.document.id)).state).toBe("processed");
+    expect(await repository.listOccurrences("1")).toHaveLength(3);
   });
 
   it("verarbeitet ein Dokument des zweiten Mandanten mit dem Job-Mandanten", async () => {

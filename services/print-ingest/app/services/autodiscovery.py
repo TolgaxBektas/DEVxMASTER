@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select
 from app.core.config import settings
 from app.models.entities import Source
-from app.services.archive_index import ArchiveIndex
+from app.services.archive_index import ArchiveIndex, deduplicate_archive_entries
 from app.services.discovery import candidate_rejection_reason, discover_pdf_links, score_candidate
 from app.services.policy import DiscoveryBudget, check_url_policy
 from app.services.sitemap import discover_sitemaps, extract_pdf_urls_from_sitemap
@@ -156,7 +156,10 @@ def discover_proposals(
                 "archive_index",
             )
             continue
-        for entry in result.entries:
+        entries, duplicates = deduplicate_archive_entries(result.entries)
+        if rejected is not None:
+            rejected.extend(duplicates)
+        for entry in entries:
             if entry.status_code >= 400 and not entry.archive_url:
                 if rejected is not None:
                     rejected.append({

@@ -1,6 +1,6 @@
 import time
 from dataclasses import dataclass
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import requests
 
@@ -66,6 +66,53 @@ def parse_cdx_text(text: str) -> list[ArchivePdf]:
             archive_url=archive_url(original, timestamp),
         ))
     return entries
+
+
+def normalized_filename(original: str) -> str:
+    path = unquote(urlparse(original).path)
+    return path.rsplit("/", 1)[-1].casefold()
+
+
+def deduplicate_archive_entries(
+    entries: tuple[ArchivePdf, ...] | list[ArchivePdf],
+) -> tuple[list[ArchivePdf], list[dict[str, object]]]:
+    grouped: dict[tuple[str, int], list[ArchivePdf]] = {}
+    for entry in entries:
+        if entry.length is not None:
+            grouped.setdefault((normalized_filename(entry.original), entry.length), []).append(entry)
+
+    winners = {
+        key: max(group, key=lambda item: item.timestamp)
+        for key, group in grouped.items()
+    }
+    duplicate_ids = {
+        id(entry)
+        for key, group in grouped.items()
+        if len(group) > 1
+        for entry in group
+        if entry is not winners[key]
+    }
+    result: list[ArchivePdf] = []
+    duplicates: list[dict[str, object]] = []
+    for entry in entries:
+        if entry.length is None:
+            result.append(entry)
+            continue
+        key = (normalized_filename(entry.original), entry.length)
+        if id(entry) not in duplicate_ids:
+            result.append(entry)
+            continue
+        winner = winners[key]
+        duplicates.append({
+            "url": entry.original,
+            "reason": "Dublette: gleicher Dateiname und gleiche CDX-Länge",
+            "discovery": "archive_index",
+            "duplicateOf": winner.original,
+            "archiveTimestamp": entry.timestamp,
+            "archiveLength": entry.length,
+            "normalizedFilename": key[0],
+        })
+    return result, duplicates
 
 
 class ArchiveIndex:
@@ -152,7 +199,13 @@ class ArchiveIndex:
         *,
         budget: DiscoveryBudget,
     ) -> dict[str, ArchiveIndexResult]:
-        return {
-            normalize_host(host): self.fetch(host, budget=budget)
-            for host in dict.fromkeys(hosts)
-        }
+        results: dict[str, ArchiveIndexResult] = {}
+        for host in dict.fromkeys(hosts):
+            normalized = normalize_host(host)
+            try:
+                results[normalized] = self.fetch(normalized, budget=budget)
+            except Exception as error:
+                results[normalized] = ArchiveIndexResult(
+                    error=f"{type(error).__name__}: {error}",
+                )
+        return results

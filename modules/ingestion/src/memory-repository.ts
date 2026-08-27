@@ -291,11 +291,13 @@ export class MemoryIngestionRepository implements IngestionRepository {
         city: string | null;
       } | null;
     }>;
-  }>) {
+  }>, options?: { includeOccurrences?: boolean }) {
+    const includeOccurrences = options?.includeOccurrences ?? true;
     const document = await this.getDocument(tenantId, documentId);
     const previous = this.occurrences.filter((item) => item.documentId === document.id);
     this.occurrences = this.occurrences.filter((item) => item.documentId !== document.id);
-    const created = processedPages.flatMap((page) => page.occurrences.map((item) => {
+    const created = includeOccurrences
+      ? processedPages.flatMap((page) => page.occurrences.map((item) => {
       const fingerprint = occurrenceFingerprint({
         pageNumber: page.pageNumber,
         company: item.company,
@@ -318,7 +320,8 @@ export class MemoryIngestionRepository implements IngestionRepository {
       evidence: item.evidence ?? [],
       contacts: item.contacts ?? null,
     };
-    }));
+      }))
+      : [];
     this.occurrences.push(...created);
     document.state = "processed";
     document.error = null;
@@ -337,7 +340,7 @@ export class MemoryIngestionRepository implements IngestionRepository {
       discovered: ["processing", "failed"],
       processing: ["processed", "failed"],
       failed: ["processing"],
-      processed: [],
+      processed: ["rejected"],
     };
     if (!allowed[document.state]?.includes(state))
       throw new Error(`Ungültiger Dokumentzustand: ${document.state} -> ${state}`);

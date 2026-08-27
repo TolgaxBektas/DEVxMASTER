@@ -234,6 +234,7 @@ export type IngestionRepository = {
         } | null;
       }>;
     }>,
+    options?: { includeOccurrences?: boolean },
   ): Promise<IngestionOccurrence[]>;
   setDocumentState(
     tenantId: string,

@@ -26,6 +26,9 @@ import { areaSearchTerms } from "./search-terms.js";
 import { PUBLISHER_SEED_PAGES } from "./publishers.js";
 import { areaWebsiteSeeds } from "./website-registry.js";
 
+export const MIN_DOCUMENT_ADVERTISEMENTS = 3;
+export const MIN_DOCUMENT_PAGES = 16;
+
 function sameSourceHost(firstUrl: string, secondUrl: string): boolean {
   try {
     const normalize = (value: string) => new URL(value).hostname.toLocaleLowerCase("de-DE").replace(/^www\./, "");
@@ -87,6 +90,17 @@ function jobTenantId(context: unknown) {
   const tenantId = (context as JobContext).job?.tenantId;
   if (!tenantId) throw new Error("Mandant für Job fehlt");
   return tenantId;
+}
+
+function describeError(error: unknown) {
+  if (error instanceof Error) {
+    const cause = error.cause;
+    if (cause instanceof Error && cause.message !== error.message) {
+      return `${error.message} (${cause.name}: ${cause.message})`;
+    }
+    return error.message || error.name;
+  }
+  return typeof error === "string" ? error : "Unbekannter Fehler";
 }
 
 function jobDocumentId(payload: unknown) {
@@ -376,9 +390,10 @@ export function createIngestionModule(deps: {
             try {
               if (!deps.discoverProposals) throw new Error("Quellensuche ist nicht konfiguriert");
               const websiteSelection = areaWebsiteSeeds(area.ags, area.municipalityOffset ?? 0);
-              const heartbeat = setInterval(() => {
-                void (context as { heartbeat(): Promise<boolean> }).heartbeat();
-              }, 30_000);
+              const heartbeatFn = (context as { heartbeat?: () => Promise<boolean> }).heartbeat;
+              const heartbeat = heartbeatFn
+                ? setInterval(() => { void heartbeatFn(); }, 30_000)
+                : null;
               let proposals: Awaited<ReturnType<NonNullable<typeof deps.discoverProposals>>>;
               try {
                 proposals = await deps.discoverProposals({
@@ -392,20 +407,27 @@ export function createIngestionModule(deps: {
                   areaName: area.name,
                 });
               } finally {
-                clearInterval(heartbeat);
+                if (heartbeat) clearInterval(heartbeat);
               }
               let foundSources = 0;
+              const sourceErrors: string[] = [];
               for (const proposal of proposals) {
-                const source = await repository.createSource(tenantId, {
-                  ...proposal,
-                  areaId: area.id,
-                  revisitIntervalDays: 90,
-                  nextCheckAt: new Date(now.getTime() + 90 * 86_400_000),
-                });
-                if (source.areaId === area.id) foundSources += 1;
-                else if (source.areaId === null) {
-                  await repository.updateSource(tenantId, source.id, { areaId: area.id });
-                  foundSources += 1;
+                try {
+                  const source = await repository.createSource(tenantId, {
+                    ...proposal,
+                    areaId: area.id,
+                    revisitIntervalDays: 90,
+                    nextCheckAt: new Date(now.getTime() + 90 * 86_400_000),
+                  });
+                  if (source.areaId === area.id) foundSources += 1;
+                  else if (source.areaId === null) {
+                    await repository.updateSource(tenantId, source.id, { areaId: area.id });
+                    foundSources += 1;
+                  }
+                } catch (error) {
+                  sourceErrors.push(
+                    `${proposal.url}: ${describeError(error)}`,
+                  );
                 }
               }
               await repository.updateArea(tenantId, area.id, {
@@ -415,12 +437,13 @@ export function createIngestionModule(deps: {
                 nextDueAt: new Date(now.getTime() + 180 * 86_400_000),
                 foundSources,
                 municipalityOffset: websiteSelection.nextMunicipalityOffset,
+                lastError: sourceErrors.length > 0 ? sourceErrors.join("\n") : null,
               });
             } catch (error) {
               await repository.updateArea(tenantId, area.id, {
                 status: "pending",
                 startedAt: null,
-                lastError: error instanceof Error ? error.message : "Gebietslauf fehlgeschlagen",
+                lastError: describeError(error),
               });
             }
           }
@@ -654,6 +677,15 @@ export function createIngestionModule(deps: {
                 storageKey: document.storageKey,
                 outputPrefix: `tenants/${tenantId}/processed/${document.sha256}`,
               });
+              const advertisementCount = pages.reduce(
+                (total, page) => total + page.occurrences.length,
+                0,
+              );
+              const documentGateError = (document.origin === "source" || document.origin.startsWith("source-"))
+                && (pages.length < MIN_DOCUMENT_PAGES
+                || advertisementCount < MIN_DOCUMENT_ADVERTISEMENTS)
+                ? `Dokumenttor abgewiesen: ${advertisementCount} Anzeigen auf ${pages.length} Seiten; erforderlich sind mindestens ${MIN_DOCUMENT_ADVERTISEMENTS} Anzeigen und ${MIN_DOCUMENT_PAGES} Seiten.`
+                : null;
               await deps.transaction(async (db) => {
                 const txRepository = deps.repositoryForTransaction?.(db)
                   ?? createDrizzleIngestionRepository(db);
@@ -672,8 +704,20 @@ export function createIngestionModule(deps: {
               const occurrences = await txRepository.replaceProcessedDocument(
                 tenantId,
                 document.id,
-                pages,
+                documentGateError
+                  ? pages.map((page) => ({ ...page, occurrences: [] }))
+                  : pages,
+                documentGateError ? { includeOccurrences: false } : undefined,
               );
+              if (documentGateError) {
+                await txRepository.setDocumentState(
+                  tenantId,
+                  document.id,
+                  "rejected",
+                  documentGateError,
+                );
+                return;
+              }
               const processedDocument = await txRepository.getDocument(tenantId, document.id);
               const executor = createDrizzleEventRepository(db);
               const actualityStatus = processedDocument.actualityStatus

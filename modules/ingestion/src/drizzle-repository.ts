@@ -450,7 +450,8 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
       if (!document) throw new Error("Dokument nicht gefunden");
       return toDocument(document, await readClassification(String(document.tenantId), documentId));
     },
-    async replaceProcessedDocument(tenantId, documentId, processedPages) {
+    async replaceProcessedDocument(tenantId, documentId, processedPages, options) {
+      const includeOccurrences = options?.includeOccurrences ?? true;
       const document = await this.getDocument(tenantId, documentId);
       const previous = await database.select().from(occurrences).where(and(
         eq(occurrences.documentId, documentId),
@@ -490,6 +491,7 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
           adProbability: processed.adProbability,
         });
         const pageId = Number(pageRow[0]?.insertId);
+        if (!includeOccurrences) continue;
         for (const occurrence of processed.occurrences) {
           const occurrenceRow = await database.insert(occurrences).values({
             tenantId: Number(tenantId),
@@ -543,7 +545,7 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
         discovered: ["processing", "failed"],
         processing: ["processed", "failed"],
         failed: ["processing"],
-        processed: [],
+        processed: ["rejected"],
       };
       if (!allowed[current.state]?.includes(state))
         throw new Error(`Ungültiger Dokumentzustand: ${current.state} -> ${state}`);

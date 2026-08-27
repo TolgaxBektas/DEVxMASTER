@@ -1,5 +1,5 @@
 from datetime import date
-from urllib.parse import urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 import re, requests
 from bs4 import BeautifulSoup
 from app.core.config import settings
@@ -10,7 +10,9 @@ PUBLICATION_TERMS = {
  'seniorenwegweiser','seniorenratgeber','bürgerinformation','buergerinformation',
  'bürgerbroschüre','buergerbroschuere','gesundheitsführer','gesundheitsfuehrer',
  'stadtmagazin','gemeindemagazin','branchenführer','branchenfuehrer',
- 'gastgeberverzeichnis','vereinsmagazin','festschrift','messekatalog','ausstellerverzeichnis'
+ 'gastgeberverzeichnis','vereinsmagazin','festschrift','messekatalog','ausstellerverzeichnis',
+ 'wegweiser','ratgeber','pflegewegweiser','familienwegweiser',
+ 'klinikführer','klinikfuehrer','gewerbeverzeichnis','firmenverzeichnis',
 }
 
 MIN_CANDIDATE_SCORE = 50
@@ -82,7 +84,7 @@ def candidate_rejection_reason(
     area_name: str | None = None,
     archive_timestamp: str | None = None,
 ) -> str | None:
-    text = _match_text(url + " " + anchor_text)
+    text = _match_text(unquote(url) + " " + anchor_text)
     publication_terms = _publication_terms_in(text)
     if not publication_terms:
         return "Kein Publikationsbegriff in URL oder Ankertext"
@@ -90,7 +92,7 @@ def candidate_rejection_reason(
         if _match_text(signal) in text:
             return f"Ausschlusssignal: {signal}"
     years = [int(year) for year in re.findall(r"(?<!\d)20\d{2}(?!\d)", text)]
-    if archive_timestamp:
+    if not years and archive_timestamp:
         match = re.match(r"(20\d{2})", archive_timestamp)
         if match:
             years.append(int(match.group(1)))
