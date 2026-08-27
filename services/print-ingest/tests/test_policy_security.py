@@ -359,6 +359,33 @@ def test_archive_download_reports_all_truncated_captures(monkeypatch):
     assert second in message
 
 
+def test_archive_download_keeps_transient_capture_failures_retryable(monkeypatch):
+    allowed = {"status": "APPROVED", "hostname": "public.example", "address": "93.184.216.34"}
+    monkeypatch.setattr(downloader, "check_url_policy", lambda _url: allowed)
+    first = "https://web.archive.org/web/20240102112233id_/https://public.example/source.pdf"
+    second = "https://web.archive.org/web/20230102112233id_/https://public.example/source.pdf"
+
+    def request_checked(url, *args, **kwargs):
+        if url == "https://public.example/source.pdf":
+            return FakeResponse(b"blocked", "text/html", 403)
+        raise requests.Timeout("timed out")
+
+    monkeypatch.setattr(downloader, "request_checked", request_checked)
+
+    with pytest.raises(downloader.DownloadError) as error:
+        downloader.download_pdf(
+            "https://public.example/source.pdf",
+            archive_url=first,
+            archive_captures=[{"url": second, "timestamp": "20230102112233"}],
+        )
+
+    message = str(error.value)
+    assert "archive_captures_exhausted" not in message
+    assert first in message
+    assert second in message
+    assert "last_retryable_error: archive_fetch_failed: timed out" in message
+
+
 def test_cdx_parser_extracts_archive_rows():
     rows = parse_cdx_text(
         "https://public.example/Seniorenwegweiser-2024.pdf 20240102112233 200 12345\n"

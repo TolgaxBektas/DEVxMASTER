@@ -113,11 +113,16 @@ describe("Ingestion-Bestand", () => {
     expect(isPermanentSourceFetchError("http_404")).toBe(true);
     expect(isPermanentSourceFetchError("HTTP 400")).toBe(true);
     expect(isPermanentSourceFetchError("download_truncated: archive warning")).toBe(true);
-    expect(isPermanentSourceFetchError("archive_captures_exhausted: capture timeout")).toBe(true);
+    expect(isPermanentSourceFetchError(
+      "archive_captures_exhausted: all archive captures failed permanently",
+    )).toBe(true);
     expect(isPermanentSourceFetchError("policy blocked: private network")).toBe(true);
     expect(isPermanentSourceFetchError("not_a_real_pdf_signature")).toBe(true);
     expect(isPermanentSourceFetchError("file_too_large")).toBe(true);
     expect(isPermanentSourceFetchError("HTTPSConnectionPool: Read timed out")).toBe(false);
+    expect(isPermanentSourceFetchError(
+      "archive_fetch_failed: HTTPSConnectionPool: Read timed out",
+    )).toBe(false);
     expect(isPermanentSourceFetchError("http_503")).toBe(false);
   });
 
