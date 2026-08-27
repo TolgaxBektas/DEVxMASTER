@@ -3,6 +3,7 @@ from urllib.parse import urljoin, urlparse
 import re, requests
 from bs4 import BeautifulSoup
 from app.core.config import settings
+from app.services.archive_index import ArchiveIndex
 from app.services.policy import DiscoveryBudget, check_url_policy, close_checked_response, read_limited_response, request_checked
 
 PUBLICATION_TERMS = {
@@ -79,6 +80,7 @@ def candidate_rejection_reason(
     url: str,
     anchor_text: str = '',
     area_name: str | None = None,
+    archive_timestamp: str | None = None,
 ) -> str | None:
     text = _match_text(url + " " + anchor_text)
     publication_terms = _publication_terms_in(text)
@@ -88,6 +90,10 @@ def candidate_rejection_reason(
         if _match_text(signal) in text:
             return f"Ausschlusssignal: {signal}"
     years = [int(year) for year in re.findall(r"(?<!\d)20\d{2}(?!\d)", text)]
+    if archive_timestamp:
+        match = re.match(r"(20\d{2})", archive_timestamp)
+        if match:
+            years.append(int(match.group(1)))
     cutoff = date.today().year - 3
     if years and max(years) < cutoff:
         return f"Jahreszahl älter als {cutoff}"
@@ -131,10 +137,20 @@ def discover_pdf_links(
         raise RuntimeError("unexpected_content_type")
     html = read_limited_response(r, settings.max_response_mb * 1024 * 1024)
     close_checked_response(r)
+    if len(html) <= 1024 and re.search(rb"location\.reload\s*\(", html, re.IGNORECASE):
+        if rejected is not None:
+            rejected.append({
+                "url": page_url,
+                "reason": "bot_challenge",
+                "error_type": "BotChallenge",
+                "message": "Kleine HTML-Antwort mit location.reload() statt einer Inhaltsseite",
+                "found_on": page_url,
+            })
+        return []
     soup=BeautifulSoup(html,'html.parser')
     found={}
 
-    def collect_pdf_links(document, source_url, discovery):
+    def collect_pdf_links(document, source_url, discovery, redirects=None):
         for a in document.find_all('a', href=True):
             href=urljoin(source_url, a['href'])
             txt=' '.join(a.stripped_strings)
@@ -158,9 +174,10 @@ def discover_pdf_links(
                 'found_on': source_url,
                 'discovery': discovery,
                 'reason': f'PDF-Link auf Übersichtsseite; Signale im URL-/Ankertext: {score:.0f}/100',
+                'redirects': redirects or [],
             }
 
-    collect_pdf_links(soup, str(r.url), "html_link")
+    collect_pdf_links(soup, str(r.url), "html_link", getattr(r, "_xmaster_redirects", []))
     if depth == 0:
         start_host = (urlparse(str(r.url)).hostname or "").lower().removeprefix("www.")
         second_level = []
@@ -198,7 +215,12 @@ def discover_pdf_links(
                 nested_html = read_limited_response(nested_response, settings.max_response_mb * 1024 * 1024)
                 nested_final_url = str(nested_response.url)
                 close_checked_response(nested_response)
-                collect_pdf_links(BeautifulSoup(nested_html, 'html.parser'), nested_final_url, "html_link_second_level")
+                collect_pdf_links(
+                    BeautifulSoup(nested_html, 'html.parser'),
+                    nested_final_url,
+                    "html_link_second_level",
+                    getattr(nested_response, "_xmaster_redirects", []),
+                )
             except RuntimeError:
                 continue
     return sorted(found.values(), key=lambda x:x['score'], reverse=True)

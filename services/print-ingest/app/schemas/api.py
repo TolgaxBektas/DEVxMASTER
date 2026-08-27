@@ -21,6 +21,7 @@ class SourceOut(BaseModel):
 
 class AutoDiscoverRequest(BaseModel):
     seed_pages: list[HttpUrl] = []
+    archive_domains: list[str] = []
     search_terms: list[str] = []
     max_results: int = 100
     area_name: str | None = None

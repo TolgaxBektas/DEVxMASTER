@@ -1,6 +1,7 @@
 import pytest
 
-from app.services import discovery
+from app.services import autodiscovery, discovery
+from app.services.archive_index import ArchiveIndex, ArchiveIndexResult, ArchivePdf
 from app.services.discovery import (
     MAX_SECOND_LEVEL_LINKS,
     MIN_CANDIDATE_SCORE,
@@ -86,6 +87,81 @@ def test_discovery_does_not_follow_a_third_level(monkeypatch):
     )
 
     assert requested == [nested]
+
+
+def test_discovery_marks_small_reload_challenge(monkeypatch):
+    rejected = []
+
+    class Response:
+        status_code = 200
+        headers = {"content-type": "text/html"}
+        url = "https://kreis.example/"
+
+        def iter_content(self, _size):
+            yield b"<script>location.reload()</script>"
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(discovery, "check_url_policy", lambda _url, **_kwargs: {
+        "status": "APPROVED", "hostname": "kreis.example", "address": "93.184.216.34",
+    })
+    monkeypatch.setattr(discovery, "request_checked", lambda *_args, **_kwargs: Response())
+
+    assert discovery.discover_pdf_links("https://kreis.example/", rejected=rejected) == []
+    assert rejected[0]["reason"] == "bot_challenge"
+
+
+def test_discovery_records_page_errors_instead_of_swallowing_them(monkeypatch):
+    rejected = []
+    monkeypatch.setattr(autodiscovery, "discover_pdf_links", lambda *args, **kwargs: (_ for _ in ()).throw(
+        RuntimeError("discovery_request_budget_exceeded"),
+    ))
+    monkeypatch.setattr(autodiscovery, "discover_sitemaps", lambda *args, **kwargs: (_ for _ in ()).throw(
+        RuntimeError("sitemap_unavailable"),
+    ))
+    monkeypatch.setattr(autodiscovery, "web_search", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(ArchiveIndex, "fetch_many", lambda *_args, **_kwargs: {})
+
+    assert autodiscovery.discover_proposals(
+        ["https://kreis.example/"],
+        [],
+        area_name="Kreis",
+        rejected=rejected,
+        archive_domains=[],
+    ) == []
+    assert [item["reason"] for item in rejected] == ["crawl_error", "crawl_error"]
+    assert rejected[0]["error_type"] == "RuntimeError"
+
+
+def test_archive_candidate_uses_latest_seen_year_for_age_veto(monkeypatch):
+    archive = ArchivePdf(
+        original="https://kreis.example/Seniorenwegweiser-2019.pdf",
+        timestamp="20250102112233",
+        status_code=404,
+        length=None,
+        archive_url="https://web.archive.org/web/20250102112233id_/https://kreis.example/Seniorenwegweiser-2019.pdf",
+    )
+    monkeypatch.setattr(ArchiveIndex, "fetch_many", lambda *_args, **_kwargs: {
+        "kreis.example": ArchiveIndexResult(entries=(archive,)),
+    })
+    monkeypatch.setattr(autodiscovery, "web_search", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(autodiscovery, "discover_pdf_links", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(autodiscovery, "discover_sitemaps", lambda *_args, **_kwargs: [])
+
+    rejected = []
+    proposals = autodiscovery.discover_proposals(
+        [],
+        [],
+        area_name="Kreis",
+        rejected=rejected,
+        archive_domains=["kreis.example"],
+    )
+
+    assert len(proposals) == 1
+    assert proposals[0]["archiveTimestamp"] == "20250102112233"
+    assert proposals[0]["archiveStatusCode"] == 404
+    assert rejected == []
 
 def test_pdf_publication_scores_high():
     assert score_candidate('https://example.org/Seniorenwegweiser-2026.pdf') >= 50

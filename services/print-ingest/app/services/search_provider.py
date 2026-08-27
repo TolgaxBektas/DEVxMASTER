@@ -10,7 +10,7 @@ def web_search(query: str, limit: int=10) -> list[dict]:
     """
     endpoint=os.getenv('SEARXNG_URL','').rstrip('/')
     if not endpoint: return []
-    r=requests.get(endpoint+'/search',params={'q':query,'format':'json'},timeout=settings.request_timeout_seconds,headers={'User-Agent':settings.crawl_user_agent})
+    r=requests.get(endpoint+'/search',params={'q':query,'format':'json'},timeout=settings.search_timeout_seconds,headers={'User-Agent':settings.crawl_user_agent})
     r.raise_for_status()
     results=[]
     for item in r.json().get('results',[])[:limit]:

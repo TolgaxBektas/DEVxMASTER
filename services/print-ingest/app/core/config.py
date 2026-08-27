@@ -20,9 +20,10 @@ class Settings(BaseSettings):
     max_discovery_requests: int = 40
     max_discovery_depth: int = 2
     max_discovery_seconds: int = 90
-    max_redirects: int = 5
+    max_redirects: int = 3
     crawl_user_agent: str = 'PrintIntelligenceBot/0.1'
     request_timeout_seconds: int = 30
+    search_timeout_seconds: int = 5
     ocr_provider: str = 'local_tesseract'
     vision_provider: str = 'stub'
     openai_api_key: str | None = None

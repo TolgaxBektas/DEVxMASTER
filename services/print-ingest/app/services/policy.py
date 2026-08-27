@@ -1,7 +1,7 @@
 import ipaddress
 import socket
 import time
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 import requests
 from requests.adapters import HTTPAdapter
@@ -152,28 +152,71 @@ def _resolve_public_addresses(hostname: str) -> list[str]:
     ]
     return list(dict.fromkeys(public))
 
-def request_checked(url: str, *, policy: PolicyResult | None = None, budget: DiscoveryBudget | None = None, depth: int = 0, **kwargs):
-    if budget:
-        budget.check(depth)
-    checked = policy or check_url_policy(
-        url,
-        robots_cache=budget.robots_cache if budget else None,
-        budget=budget,
-    )
-    if checked["status"] != "APPROVED":
-        raise RuntimeError(f"policy_blocked:{checked['reason']}")
-    parsed = urlparse(url)
-    session = requests.Session()
-    session.trust_env = False
-    session.mount(parsed.scheme + "://", PinnedAddressAdapter(
-        str(checked["hostname"]),
-        str(checked["address"]),
-    ))
+def request_checked(
+    url: str,
+    *,
+    policy: PolicyResult | None = None,
+    budget: DiscoveryBudget | None = None,
+    depth: int = 0,
+    max_redirects: int | None = None,
+    **kwargs,
+):
     headers = dict(kwargs.pop("headers", {}) or {})
     headers.setdefault("User-Agent", settings.crawl_user_agent)
-    response = session.request("GET", url, headers=headers, **kwargs)
-    response._xmaster_session = session
-    return response
+    kwargs.pop("allow_redirects", None)
+    current_url = url
+    current_policy = policy
+    redirects: list[dict[str, str]] = []
+    redirect_limit = settings.max_redirects if max_redirects is None else max_redirects
+    for redirect_count in range(redirect_limit + 1):
+        if budget:
+            budget.check(depth)
+        checked = current_policy or check_url_policy(
+            current_url,
+            robots_cache=budget.robots_cache if budget else None,
+            budget=budget,
+        )
+        if checked["status"] != "APPROVED":
+            raise RuntimeError(f"policy_blocked:{checked['reason']}")
+        parsed = urlparse(current_url)
+        session = requests.Session()
+        session.trust_env = False
+        session.mount(parsed.scheme + "://", PinnedAddressAdapter(
+            str(checked["hostname"]),
+            str(checked["address"]),
+        ))
+        response = session.request("GET", current_url, headers=headers, allow_redirects=False, **kwargs)
+        response._xmaster_session = session
+        response.url = current_url
+        if not response.is_redirect and not response.is_permanent_redirect:
+            response._xmaster_redirects = redirects
+            return response
+        location = response.headers.get("Location")
+        if not location:
+            response._xmaster_redirects = redirects
+            return response
+        if redirect_count >= redirect_limit:
+            close_checked_response(response)
+            raise RuntimeError("redirect_limit_exceeded")
+        target = urljoin(current_url, location)
+        target_policy = check_url_policy(
+            target,
+            robots_cache=budget.robots_cache if budget else None,
+            budget=budget,
+        )
+        redirects.append({
+            "from": current_url,
+            "to": target,
+            "status": str(response.status_code),
+            "policy": target_policy["status"],
+            "reason": target_policy.get("reason", ""),
+        })
+        close_checked_response(response)
+        if target_policy["status"] != "APPROVED":
+            raise RuntimeError(f"redirect_policy_blocked:{target_policy.get('reason', 'blocked')}")
+        current_url = target
+        current_policy = target_policy
+    raise RuntimeError("redirect_limit_exceeded")
 
 def close_checked_response(response):
     close = getattr(response, "close", None)

@@ -245,8 +245,18 @@ export function createIngestionModule(deps: {
     subject?: string;
     creationDate?: string;
   } }>;
-  fetchSource?: (input: { url: string }) => Promise<{ bytes: Buffer; filename: string }>;
-  discoverProposals?: (input: { seedPages: string[]; searchTerms: string[]; maxResults: number; areaName?: string }) => Promise<Array<{
+  fetchSource?: (input: { url: string; archiveUrl?: string; archiveTimestamp?: string }) => Promise<{
+    bytes: Buffer;
+    filename: string;
+    origin?: string;
+  }>;
+  discoverProposals?: (input: {
+    seedPages: string[];
+    archiveDomains?: string[];
+    searchTerms: string[];
+    maxResults: number;
+    areaName?: string;
+  }) => Promise<Array<{
     url: string; score: number; metadata: Record<string, unknown>;
   }>>;
   revisitSource?: (input: { url: string; fingerprint?: string | null }) => Promise<{
@@ -366,15 +376,24 @@ export function createIngestionModule(deps: {
             try {
               if (!deps.discoverProposals) throw new Error("Quellensuche ist nicht konfiguriert");
               const websiteSelection = areaWebsiteSeeds(area.ags, area.municipalityOffset ?? 0);
-              const proposals = await deps.discoverProposals({
-                seedPages: [
-                  ...PUBLISHER_SEED_PAGES,
-                  ...websiteSelection.seedPages,
-                ],
-                searchTerms: areaSearchTerms(area.name, area.level, undefined, area.kind),
-                maxResults: 40,
-                areaName: area.name,
-              });
+              const heartbeat = setInterval(() => {
+                void (context as { heartbeat(): Promise<boolean> }).heartbeat();
+              }, 30_000);
+              let proposals: Awaited<ReturnType<NonNullable<typeof deps.discoverProposals>>>;
+              try {
+                proposals = await deps.discoverProposals({
+                  seedPages: [
+                    ...PUBLISHER_SEED_PAGES,
+                    ...websiteSelection.seedPages,
+                  ],
+                  archiveDomains: websiteSelection.archiveDomains,
+                  searchTerms: areaSearchTerms(area.name, area.level, undefined, area.kind),
+                  maxResults: 40,
+                  areaName: area.name,
+                });
+              } finally {
+                clearInterval(heartbeat);
+              }
               let foundSources = 0;
               for (const proposal of proposals) {
                 const source = await repository.createSource(tenantId, {
@@ -540,7 +559,14 @@ export function createIngestionModule(deps: {
           if (source.status !== "approved") throw new Error("Quelle ist nicht freigegeben");
           if (!deps.fetchSource) throw new Error("Quellenabruf ist nicht konfiguriert");
           try {
-            const fetched = await deps.fetchSource({ url: source.url });
+            const metadata = source.metadata ?? {};
+            const fetched = await deps.fetchSource({
+              url: source.url,
+              ...(typeof metadata.archiveUrl === "string" ? { archiveUrl: metadata.archiveUrl } : {}),
+              ...(typeof metadata.archiveTimestamp === "string"
+                ? { archiveTimestamp: metadata.archiveTimestamp }
+                : {}),
+            });
             const result = await persistDocumentBytes({
               db: deps.db,
               repository,
@@ -560,7 +586,7 @@ export function createIngestionModule(deps: {
               displayName: "Ingestion-Worker",
               bytes: fetched.bytes,
               filename: fetched.filename,
-              origin: "source",
+              origin: fetched.origin ?? "source",
               sourceId,
             });
             await repository.updateSource(tenantId, sourceId, {

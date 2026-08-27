@@ -103,12 +103,18 @@ const ingestion = createIngestionModule({
     });
     return processor(input);
   },
-  discoverProposals: async ({ seedPages, searchTerms, maxResults, areaName }) => {
+  discoverProposals: async ({ seedPages, archiveDomains, searchTerms, maxResults, areaName }) => {
     if (!env.PIF_SERVICE_TOKEN) throw new Error("PIF-Service-Token fehlt");
     const response = await fetch(`${env.PIF_BASE_URL}/api/v1/discovery/proposals`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-service-token": env.PIF_SERVICE_TOKEN },
-      body: JSON.stringify({ seed_pages: seedPages, search_terms: searchTerms, max_results: maxResults, area_name: areaName }),
+      body: JSON.stringify({
+        seed_pages: seedPages,
+        archive_domains: archiveDomains ?? [],
+        search_terms: searchTerms,
+        max_results: maxResults,
+        area_name: areaName,
+      }),
     });
     if (!response.ok) throw new Error(`Quellensuche fehlgeschlagen (${response.status})`);
     const body = await response.json() as { proposals?: Array<Record<string, unknown>> };
@@ -116,18 +122,23 @@ const ingestion = createIngestionModule({
       url: String(item.url), score: Number(item.score ?? 0), metadata: item,
     }));
   },
-  fetchSource: async ({ url }) => {
+  fetchSource: async ({ url, archiveUrl }) => {
     if (!env.PIF_SERVICE_TOKEN) throw new Error("PIF-Service-Token fehlt");
     const response = await fetch(`${env.PIF_BASE_URL}/api/v1/fetch`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-service-token": env.PIF_SERVICE_TOKEN },
-      body: JSON.stringify({ url }),
+      body: JSON.stringify({ url, ...(archiveUrl ? { archive_url: archiveUrl } : {}) }),
     });
     if (!response.ok) throw new Error(`Quellenabruf fehlgeschlagen (${response.status})`);
     const bytes = Buffer.from(await response.arrayBuffer());
     const disposition = response.headers.get("content-disposition") ?? "";
     const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? "source.pdf";
-    return { bytes, filename };
+    const origin = response.headers.get("X-Source-Origin");
+    return {
+      bytes,
+      filename,
+      ...(origin ? { origin } : {}),
+    };
   },
   revisitSource: async ({ url, fingerprint }) => {
     if (!env.PIF_SERVICE_TOKEN) throw new Error("PIF-Service-Token fehlt");

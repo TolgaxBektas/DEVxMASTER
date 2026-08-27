@@ -27,7 +27,12 @@ export const MAX_MUNICIPALITY_SEEDS_PER_RUN = 25;
 export function areaWebsiteSeeds(
   ags: string,
   municipalityOffset = 0,
-): { seedPages: string[]; municipalityCount: number; nextMunicipalityOffset: number } {
+): {
+  seedPages: string[];
+  archiveDomains: string[];
+  municipalityCount: number;
+  nextMunicipalityOffset: number;
+} {
   const websites = register.websites.filter((website) => website.ags === ags);
   const circlePages = websites
     .filter((website) => website.level === "kreis")
@@ -37,6 +42,15 @@ export function areaWebsiteSeeds(
   const selected = municipalities.slice(start, start + MAX_MUNICIPALITY_SEEDS_PER_RUN);
   return {
     seedPages: [...circlePages, ...selected.map((website) => website.url)],
+    archiveDomains: [...circlePages, ...selected.map((website) => website.url)]
+      .map((url) => {
+        try {
+          return new URL(url).hostname.toLocaleLowerCase("de-DE").replace(/^www\./, "");
+        } catch {
+          return null;
+        }
+      })
+      .filter((host): host is string => host !== null),
     municipalityCount: selected.length,
     nextMunicipalityOffset: start + selected.length,
   };

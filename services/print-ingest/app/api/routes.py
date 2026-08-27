@@ -48,14 +48,21 @@ def discover(req: DiscoverRequest, db: Session=Depends(get_db), _token: None=Dep
 
 @router.post('/discovery/run')
 def autodiscover(req: AutoDiscoverRequest, db: Session=Depends(get_db), _token: None=Depends(require_service_token)):
-    return run_discovery(db,[str(x) for x in req.seed_pages],req.search_terms,req.max_results,req.area_name)
+    return run_discovery(
+        db,
+        [str(x) for x in req.seed_pages],
+        req.search_terms,
+        req.max_results,
+        req.area_name,
+        req.archive_domains,
+    )
 
 @router.post('/discovery/proposals')
 def proposals(req: AutoDiscoverRequest, _token: None=Depends(require_service_token)):
     rejected: list[dict] = []
     items = discover_proposals(
         [str(x) for x in req.seed_pages], req.search_terms, req.max_results,
-        req.area_name, rejected,
+        req.area_name, rejected, req.archive_domains,
     )
     return {'proposals': items, 'rejected': rejected}
 
