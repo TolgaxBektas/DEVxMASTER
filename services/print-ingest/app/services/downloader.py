@@ -34,19 +34,46 @@ def download_pdf(
     *,
     archive_url: str | None = None,
     archive_length: int | None = None,
+    archive_captures: list[dict] | None = None,
     max_redirects: int | None = None,
     _origin: str | None = None,
 ) -> tuple[bytes, dict]:
     max_bytes = settings.max_download_mb * 1024 * 1024
     headers = {'User-Agent': settings.crawl_user_agent, 'Accept': 'application/pdf,*/*;q=0.8'}
-    attempts = [(
+    attempts: list[tuple[str, str, int | None]] = [(
         url,
         _origin or "live",
+        None,
     )]
-    if archive_url and _origin != "archive":
-        attempts.append((archive_url, "archive"))
+    if _origin != "archive":
+        seen_archive_urls: set[str] = set()
+        known_truncated_urls: set[str] = set()
+        candidates = []
+        for capture in archive_captures or []:
+            capture_url = capture.get("url") if isinstance(capture, dict) else None
+            if not isinstance(capture_url, str) or not capture_url:
+                continue
+            warning = str(capture.get("warning", "")).lower()
+            if capture.get("truncated") is True or "content truncated" in warning:
+                known_truncated_urls.add(capture_url)
+                continue
+            if capture_url in seen_archive_urls:
+                continue
+            seen_archive_urls.add(capture_url)
+            timestamp = str(capture.get("timestamp", ""))
+            length = capture.get("length")
+            candidates.append((timestamp, capture_url, length if isinstance(length, int) else None))
+        candidates.sort(reverse=True, key=lambda item: item[0])
+        if archive_url and archive_url not in known_truncated_urls:
+            candidates.insert(0, ("", archive_url, archive_length))
+            candidates = [
+                item for index, item in enumerate(candidates)
+                if index == 0 or item[1] != archive_url
+            ]
+        attempts.extend((candidate_url, "archive", length) for _, candidate_url, length in candidates[:4])
     last_error = "Quellenabruf fehlgeschlagen"
-    for candidate_url, origin in attempts:
+    capture_errors: list[str] = []
+    for candidate_url, origin, candidate_archive_length in attempts:
         archive_attempts = len(ARCHIVE_RETRY_DELAYS_SECONDS) + 1 if origin == "archive" else 1
         for archive_attempt in range(archive_attempts):
             response = None
@@ -83,8 +110,13 @@ def download_pdf(
                         archive_lock_held = False
                     return download_pdf(
                         urljoin(candidate_url, location),
-                        archive_url=archive_url,
-                        archive_length=archive_length,
+                        archive_url=candidate_url if origin == "archive" else archive_url,
+                        archive_length=(
+                            candidate_archive_length
+                            if origin == "archive"
+                            else archive_length
+                        ),
+                        archive_captures=None if origin == "archive" else archive_captures,
                         max_redirects=remaining - 1,
                         _origin=origin,
                     )
@@ -135,11 +167,19 @@ def download_pdf(
                         f"source-archive-{archive_match.group(1) if archive_match else 'unknown'}"
                     ),
                 }
-                if origin == "archive" and archive_length is not None:
-                    metadata["archive_index_length"] = archive_length
+                if origin == "archive" and candidate_archive_length is not None:
+                    metadata["archive_index_length"] = candidate_archive_length
                 return data, metadata
             except (DownloadError, requests.RequestException, RuntimeError) as error:
                 last_error = f"{origin}_fetch_failed: {error}" if str(error) else f"{origin}_fetch_failed: unknown_error"
+                if (
+                    origin == "archive"
+                    and (
+                        archive_attempt >= archive_attempts - 1
+                        or not _archive_error_is_retryable(error)
+                    )
+                ):
+                    capture_errors.append(f"{candidate_url}: {last_error}")
                 if (
                     origin != "archive"
                     or archive_attempt >= archive_attempts - 1
@@ -155,4 +195,8 @@ def download_pdf(
                     close_checked_response(response)
                 if archive_lock_held:
                     ARCHIVE_REQUEST_LOCK.release()
+    if capture_errors:
+        raise DownloadError(
+            "archive_captures_exhausted: " + "; ".join(capture_errors),
+        )
     raise DownloadError(last_error)

@@ -287,6 +287,78 @@ def test_archive_download_rejects_wayback_truncated_response(monkeypatch):
         )
 
 
+def test_archive_download_uses_complete_alternate_after_truncated_capture(monkeypatch):
+    allowed = {"status": "APPROVED", "hostname": "public.example", "address": "93.184.216.34"}
+    monkeypatch.setattr(downloader, "check_url_policy", lambda _url: allowed)
+    first = "https://web.archive.org/web/20240102112233id_/https://public.example/source.pdf"
+    second = "https://web.archive.org/web/20230102112233id_/https://public.example/source.pdf"
+    responses = iter([
+        FakeResponse(b"blocked", "text/html", 403),
+        FakeResponse(
+            b"%PDF-1.7\ntruncated",
+            "application/pdf",
+            200,
+            {
+                "Warning": '299 wayback content truncated by "length"',
+                "X-Archive-Orig-X-Crawler-Content-Length": "1000",
+            },
+        ),
+        FakeResponse(b"%PDF-1.7\ncomplete", "application/pdf", 200),
+    ])
+    seen = []
+
+    def request_checked(url, *args, **kwargs):
+        seen.append(url)
+        return next(responses)
+
+    monkeypatch.setattr(downloader, "request_checked", request_checked)
+
+    data, metadata = downloader.download_pdf(
+        "https://public.example/source.pdf",
+        archive_url=first,
+        archive_captures=[{"url": second, "timestamp": "20230102112233", "length": 10}],
+    )
+
+    assert data.startswith(b"%PDF-")
+    assert metadata["origin"] == "source-archive-20230102112233"
+    assert seen == ["https://public.example/source.pdf", first, second]
+
+
+def test_archive_download_reports_all_truncated_captures(monkeypatch):
+    allowed = {"status": "APPROVED", "hostname": "public.example", "address": "93.184.216.34"}
+    monkeypatch.setattr(downloader, "check_url_policy", lambda _url: allowed)
+    first = "https://web.archive.org/web/20240102112233id_/https://public.example/source.pdf"
+    second = "https://web.archive.org/web/20230102112233id_/https://public.example/source.pdf"
+    responses = iter([
+        FakeResponse(b"blocked", "text/html", 403),
+        FakeResponse(
+            b"%PDF-1.7\ntruncated",
+            "application/pdf",
+            200,
+            {"Warning": '299 wayback content truncated by "length"'},
+        ),
+        FakeResponse(
+            b"%PDF-1.7\ntruncated",
+            "application/pdf",
+            200,
+            {"Warning": '299 wayback content truncated by "length"'},
+        ),
+    ])
+    monkeypatch.setattr(downloader, "request_checked", lambda *args, **kwargs: next(responses))
+
+    with pytest.raises(downloader.DownloadError) as error:
+        downloader.download_pdf(
+            "https://public.example/source.pdf",
+            archive_url=first,
+            archive_captures=[{"url": second, "timestamp": "20230102112233"}],
+        )
+
+    message = str(error.value)
+    assert "archive_captures_exhausted" in message
+    assert first in message
+    assert second in message
+
+
 def test_cdx_parser_extracts_archive_rows():
     rows = parse_cdx_text(
         "https://public.example/Seniorenwegweiser-2024.pdf 20240102112233 200 12345\n"

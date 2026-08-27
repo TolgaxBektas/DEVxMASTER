@@ -113,6 +113,7 @@ describe("Ingestion-Bestand", () => {
     expect(isPermanentSourceFetchError("http_404")).toBe(true);
     expect(isPermanentSourceFetchError("HTTP 400")).toBe(true);
     expect(isPermanentSourceFetchError("download_truncated: archive warning")).toBe(true);
+    expect(isPermanentSourceFetchError("archive_captures_exhausted: capture timeout")).toBe(true);
     expect(isPermanentSourceFetchError("policy blocked: private network")).toBe(true);
     expect(isPermanentSourceFetchError("not_a_real_pdf_signature")).toBe(true);
     expect(isPermanentSourceFetchError("file_too_large")).toBe(true);
@@ -1434,6 +1435,56 @@ describe("Ingestion-Bestand", () => {
       context("1", { documentId: document.document.id }),
     ))
       .rejects.toThrow("PDF-Verarbeitung ist nicht erreichbar");
+  });
+
+  it("setzt fehlerhafte Dokumente im Sammellauf auf Fehler und verarbeitet weitere Dokumente", async () => {
+    const repository = new MemoryIngestionRepository();
+    const first = await repository.createUploadedDocument("1", {
+      filename: "bad.pdf",
+      sha256: "b".repeat(64),
+      storageKey: "bad",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "upload",
+    });
+    const second = await repository.createUploadedDocument("1", {
+      filename: "good.pdf",
+      sha256: "g".repeat(64),
+      storageKey: "good",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "upload",
+    });
+    const calls: number[] = [];
+    const module = createIngestionModule({
+      repository,
+      repositoryForTransaction: () => repository,
+      transaction: async (callback) => callback({}),
+      processDocument: async ({ documentId }) => {
+        calls.push(documentId);
+        if (documentId === first.document.id) {
+          throw new Error("Kaputter PDF-Text");
+        }
+        return [{
+          pageNumber: 1,
+          text: "Verarbeitbar",
+          imageKey: "page.png",
+          classification: "EDITORIAL_ONLY",
+          adProbability: 0.1,
+          occurrences: [],
+        }];
+      },
+      publish: async () => undefined,
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.processing.run");
+    if (!job) throw new Error("Verarbeitungsjob fehlt");
+
+    await job.handle({}, context("1", {}));
+
+    expect(calls).toEqual([first.document.id, second.document.id]);
+    expect((await repository.getDocument("1", first.document.id)).state).toBe("failed");
+    expect((await repository.getDocument("1", first.document.id)).error).toBe("Kaputter PDF-Text");
+    expect((await repository.getDocument("1", second.document.id)).state).toBe("processed");
   });
 
   it("weist Dokumente ohne ausreichende Anzeigen oder Seiten sichtbar zurück", async () => {

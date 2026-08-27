@@ -173,6 +173,18 @@ def discover_proposals(
         entries, duplicates = deduplicate_archive_entries(result.entries)
         if rejected is not None:
             rejected.extend(duplicates)
+        captures_by_original: dict[str, list[dict]] = {}
+        for capture in sorted(result.entries, key=lambda item: item.timestamp, reverse=True):
+            captures = captures_by_original.setdefault(capture.original, [])
+            if any(item["url"] == capture.archive_url for item in captures):
+                continue
+            if len(captures) < 4:
+                captures.append({
+                    "url": capture.archive_url,
+                    "timestamp": capture.timestamp,
+                    "statusCode": capture.status_code,
+                    "length": capture.length,
+                })
         for entry in entries:
             if entry.status_code >= 400 and not entry.archive_url:
                 if rejected is not None:
@@ -209,6 +221,7 @@ def discover_proposals(
                 "archiveTimestamp": entry.timestamp,
                 "archiveStatusCode": entry.status_code,
                 "archiveLength": entry.length,
+                "archiveCaptures": captures_by_original.get(entry.original, []),
             })
     unique = {}
     for item in collected:
