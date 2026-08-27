@@ -24,7 +24,8 @@ VETO_SIGNALS = (
     "pressemitteilung", "presseinformation", "leseprobe", "gesetz",
     "verordnung", "richtlinie", "merkblatt", "dossier", "strategiepapier",
     "präsentation", "ausschreibung", "stellenangebot", "kontaktliste",
-    "befragung",
+    "befragung", "radwegweiser", "radweg", "wanderweg", "schulweg",
+    "fussweg", "fußweg", "wegweisung",
 )
 MUNICIPAL_HOST_SIGNALS = (
     "landkreis", "kreis", "stadt", "gemeinde", "samtgemeinde",

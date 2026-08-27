@@ -264,6 +264,28 @@ def test_extended_publication_terms_do_not_bypass_veto():
     ).startswith("Ausschlusssignal:")
 
 
+@pytest.mark.parametrize("term", [
+    "Radwegweiser_2025", "Radweg", "Wanderweg", "Schulweg",
+    "Fussweg", "Fußweg", "Wegweisung",
+])
+def test_wayfinding_terms_are_rejected(term):
+    assert candidate_rejection_reason(
+        f"https://example.org/Seniorenwegweiser_{term}.pdf",
+    ).startswith(
+        "Ausschlusssignal:",
+    )
+
+
+@pytest.mark.parametrize("url", [
+    "https://www.bodenseekreis.de/fileadmin/01_soziales_gesundheit/senioren_pflege/downloads/altenhilfewegweiser/altenhilfewegweiser.pdf",
+    "https://www.leonberg.de/PDF/Familienwegweiser.PDF",
+    "https://www.bodenseekreis.de/fileadmin/01_soziales_gesundheit/psychiatrie/downloads/psychiatriewegweiser.pdf",
+    "https://www.boeblingen.de/site/Boeblingen-Responsiv/get/params_E-447969696/11878981/Seniorenwegweiser%202025.pdf",
+])
+def test_real_publication_wayfinders_remain_accepted(url):
+    assert candidate_rejection_reason(url) is None
+
+
 def test_archive_entries_are_deduplicated_by_filename_and_length():
     entries = [
         ArchivePdf(
@@ -276,7 +298,7 @@ def test_archive_entries_are_deduplicated_by_filename_and_length():
         for index in (1, 2, 3)
     ]
     entries.append(ArchivePdf(
-        original="https://example.org/other/Gastgeberverzeichnis%20Breisach%20am%20Rhein%202025.pdf",
+        original="https://other.example.org/other/Gastgeberverzeichnis%20Breisach%20am%20Rhein%202025.pdf",
         timestamp="20260104000000",
         status_code=200,
         length=999999,
@@ -289,6 +311,64 @@ def test_archive_entries_are_deduplicated_by_filename_and_length():
     ]
     assert len(duplicates) == 2
     assert all(item["duplicateOf"] == entries[2].original for item in duplicates)
+
+
+def test_archive_entries_are_also_deduplicated_by_host_and_filename():
+    entries = [
+        ArchivePdf(
+            original=f"https://www.example.org/path-{index}/Buergerinformation%20Badezentrum.pdf",
+            timestamp=f"2026010{index}000000",
+            status_code=200,
+            length=1000 + index,
+            archive_url="archive",
+        )
+        for index in (1, 2, 3)
+    ]
+    entries.append(ArchivePdf(
+        original="https://other.example.org/Buergerinformation%20Badezentrum.pdf",
+        timestamp="20260104000000",
+        status_code=200,
+        length=9999,
+        archive_url="archive",
+    ))
+    entries.append(ArchivePdf(
+        original="https://www.example.org/Buergerinformation%20Badezentrum%202025.pdf",
+        timestamp="20260105000000",
+        status_code=200,
+        length=1000,
+        archive_url="archive",
+    ))
+    selected, duplicates = deduplicate_archive_entries(entries)
+    assert [entry.original for entry in selected] == [
+        entries[2].original,
+        entries[3].original,
+        entries[4].original,
+    ]
+    assert len(duplicates) == 2
+    assert all(item["duplicateOf"] == entries[2].original for item in duplicates)
+    assert all(item["normalizedHost"] == "example.org" for item in duplicates)
+
+
+def test_archive_entries_keep_different_year_editions_separate():
+    entries = [
+        ArchivePdf(
+            original="https://example.org/Buergerinformation%20Badezentrum%202024.pdf",
+            timestamp="20260105000000",
+            status_code=200,
+            length=1000,
+            archive_url="archive",
+        ),
+        ArchivePdf(
+            original="https://example.org/Buergerinformation%20Badezentrum%202025.pdf",
+            timestamp="20260106000000",
+            status_code=200,
+            length=1100,
+            archive_url="archive",
+        ),
+    ]
+    selected, duplicates = deduplicate_archive_entries(entries)
+    assert [entry.original for entry in selected] == [entry.original for entry in entries]
+    assert duplicates == []
 
 
 def test_archive_host_failures_are_isolated(monkeypatch):

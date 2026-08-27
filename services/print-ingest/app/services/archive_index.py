@@ -73,44 +73,72 @@ def normalized_filename(original: str) -> str:
     return path.rsplit("/", 1)[-1].casefold()
 
 
+def _deduplication_keys(entry: ArchivePdf) -> tuple[tuple[object, ...], ...]:
+    filename = normalized_filename(entry.original)
+    keys: list[tuple[object, ...]] = [
+        ("host_filename", normalize_host(entry.original), filename),
+    ]
+    if entry.length is not None:
+        keys.append(("filename_length", filename, entry.length))
+    return tuple(keys)
+
+
 def deduplicate_archive_entries(
     entries: tuple[ArchivePdf, ...] | list[ArchivePdf],
 ) -> tuple[list[ArchivePdf], list[dict[str, object]]]:
-    grouped: dict[tuple[str, int], list[ArchivePdf]] = {}
-    for entry in entries:
-        if entry.length is not None:
-            grouped.setdefault((normalized_filename(entry.original), entry.length), []).append(entry)
+    entries_list = list(entries)
+    parent = list(range(len(entries_list)))
 
+    def find(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    def union(first: int, second: int) -> None:
+        first_root, second_root = find(first), find(second)
+        if first_root != second_root:
+            parent[second_root] = first_root
+
+    first_by_key: dict[tuple[object, ...], int] = {}
+    for index, entry in enumerate(entries_list):
+        for key in _deduplication_keys(entry):
+            previous = first_by_key.setdefault(key, index)
+            union(previous, index)
+
+    groups: dict[int, list[int]] = {}
+    for index in range(len(entries_list)):
+        groups.setdefault(find(index), []).append(index)
     winners = {
-        key: max(group, key=lambda item: item.timestamp)
-        for key, group in grouped.items()
-    }
-    duplicate_ids = {
-        id(entry)
-        for key, group in grouped.items()
-        if len(group) > 1
-        for entry in group
-        if entry is not winners[key]
+        root: max(indices, key=lambda index: entries_list[index].timestamp)
+        for root, indices in groups.items()
     }
     result: list[ArchivePdf] = []
     duplicates: list[dict[str, object]] = []
-    for entry in entries:
-        if entry.length is None:
+    for index, entry in enumerate(entries_list):
+        winner_index = winners[find(index)]
+        if index == winner_index:
             result.append(entry)
             continue
-        key = (normalized_filename(entry.original), entry.length)
-        if id(entry) not in duplicate_ids:
-            result.append(entry)
-            continue
-        winner = winners[key]
+        winner = entries_list[winner_index]
+        same_host_filename = (
+            normalize_host(entry.original) == normalize_host(winner.original)
+            and normalized_filename(entry.original) == normalized_filename(winner.original)
+        )
+        reason = (
+            "Dublette: gleicher Host und normalisierter Dateiname"
+            if same_host_filename
+            else "Dublette: gleicher Dateiname und gleiche CDX-Länge"
+        )
         duplicates.append({
             "url": entry.original,
-            "reason": "Dublette: gleicher Dateiname und gleiche CDX-Länge",
+            "reason": reason,
             "discovery": "archive_index",
             "duplicateOf": winner.original,
             "archiveTimestamp": entry.timestamp,
             "archiveLength": entry.length,
-            "normalizedFilename": key[0],
+            "normalizedFilename": normalized_filename(entry.original),
+            "normalizedHost": normalize_host(entry.original),
         })
     return result, duplicates
 
