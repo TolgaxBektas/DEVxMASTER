@@ -11,6 +11,7 @@ def download_pdf(
     url: str,
     *,
     archive_url: str | None = None,
+    archive_length: int | None = None,
     max_redirects: int | None = None,
 ) -> tuple[bytes, dict]:
     max_bytes = settings.max_download_mb * 1024 * 1024
@@ -43,6 +44,7 @@ def download_pdf(
                     return download_pdf(
                         urljoin(candidate_url, location),
                         archive_url=archive_url,
+                        archive_length=archive_length,
                         max_redirects=remaining - 1,
                     )
                 if response.status_code >= 400:
@@ -56,19 +58,29 @@ def download_pdf(
                         raise DownloadError('file_too_large')
                     chunks.append(chunk)
                 data=b''.join(chunks)
+                content_length = response.headers.get("Content-Length")
+                if content_length and content_length.isdigit() and int(content_length) != len(data):
+                    raise DownloadError(
+                        f"download_truncated: content-length {content_length}, received {len(data)}",
+                    )
+                if origin == "archive" and archive_length is not None and archive_length >= 0 and len(data) != archive_length:
+                    raise DownloadError(
+                        f"archive_size_mismatch: expected {archive_length}, received {len(data)}",
+                    )
                 if not data.startswith(b'%PDF-'):
                     raise DownloadError('not_a_real_pdf_signature')
                 digest=hashlib.sha256(data).hexdigest()
                 filename=urlparse(str(response.url)).path.rsplit('/',1)[-1] or f'{digest}.pdf'
                 if not filename.lower().endswith('.pdf'):
                     filename += '.pdf'
+                archive_match = re.search(r"/web/(20\d{12})id_/", candidate_url)
                 metadata = {
                     'sha256': digest,
                     'filename': filename,
                     'size_bytes': len(data),
                     'final_url': str(response.url),
                     'origin': 'source-live' if origin == 'live' else (
-                        f"source-archive-{(re.search(r'/web/(20\d{12})id_/', candidate_url) or [None, 'unknown'])[1]}"
+                        f"source-archive-{archive_match.group(1) if archive_match else 'unknown'}"
                     ),
                 }
                 return data, metadata

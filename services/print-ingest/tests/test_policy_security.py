@@ -174,6 +174,39 @@ def test_archive_fallback_returns_provenance(monkeypatch):
     assert metadata["origin"] == "source-archive-20240102112233"
 
 
+def test_archive_download_rejects_size_mismatch_instead_of_processing_truncated_pdf(monkeypatch):
+    allowed = {"status": "APPROVED", "hostname": "public.example", "address": "93.184.216.34"}
+    monkeypatch.setattr(downloader, "check_url_policy", lambda _url: allowed)
+    monkeypatch.setattr(downloader, "request_checked", lambda *args, **kwargs: FakeResponse(
+        b"%PDF-1.7\ntruncated", "application/pdf", 200,
+        {"Content-Length": "100"},
+    ))
+
+    with pytest.raises(downloader.DownloadError, match="download_truncated"):
+        downloader.download_pdf(
+            "https://public.example/source.pdf",
+            archive_url="https://web.archive.org/web/20240102112233id_/https://public.example/source.pdf",
+            archive_length=12345,
+        )
+
+
+def test_download_rejects_archive_length_mismatch(monkeypatch):
+    allowed = {"status": "APPROVED", "hostname": "public.example", "address": "93.184.216.34"}
+    monkeypatch.setattr(downloader, "check_url_policy", lambda _url: allowed)
+    responses = iter([
+        FakeResponse(b"blocked", "text/html", 403),
+        FakeResponse(b"%PDF-1.7\nbody", "application/pdf", 200),
+    ])
+    monkeypatch.setattr(downloader, "request_checked", lambda *args, **kwargs: next(responses))
+
+    with pytest.raises(downloader.DownloadError, match="archive_size_mismatch"):
+        downloader.download_pdf(
+            "https://public.example/source.pdf",
+            archive_url="https://web.archive.org/web/20240102112233id_/https://public.example/source.pdf",
+            archive_length=999,
+        )
+
+
 def test_cdx_parser_extracts_archive_rows():
     rows = parse_cdx_text(
         "https://public.example/Seniorenwegweiser-2024.pdf 20240102112233 200 12345\n"

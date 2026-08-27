@@ -394,6 +394,41 @@ def test_archive_host_failures_are_isolated(monkeypatch):
     assert results["good.example"].entries == (archive,)
 
 
+def test_archive_domain_evidence_keeps_success_empty_and_failed_hosts(monkeypatch):
+    archive = ArchivePdf(
+        original="https://good.example/Seniorenwegweiser-2026.pdf",
+        timestamp="20260102000000",
+        status_code=200,
+        length=123,
+        archive_url="archive",
+    )
+    monkeypatch.setattr(autodiscovery, "web_search", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(autodiscovery, "discover_pdf_links", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(autodiscovery, "discover_sitemaps", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(ArchiveIndex, "fetch_many", lambda *_args, **_kwargs: {
+        "good.example": ArchiveIndexResult(entries=(archive,), attempts=1, outcome="ok"),
+        "empty.example": ArchiveIndexResult(
+            error="CDX-Antwort leer", attempts=3, outcome="empty",
+        ),
+        "bad.example": ArchiveIndexResult(
+            error="HTTP 503", attempts=3, outcome="error",
+        ),
+    })
+
+    archive_evidence = []
+    autodiscovery.discover_proposals(
+        [], [], area_name="Kreis", rejected=[], archive_domains=[
+            "good.example", "empty.example", "bad.example",
+        ], archive_evidence=archive_evidence,
+    )
+
+    assert archive_evidence == [
+        {"host": "good.example", "status": "ok", "entry_count": 1, "attempts": 1, "error": None},
+        {"host": "empty.example", "status": "empty", "entry_count": 0, "attempts": 3, "error": "CDX-Antwort leer"},
+        {"host": "bad.example", "status": "error", "entry_count": 0, "attempts": 3, "error": "HTTP 503"},
+    ]
+
+
 @pytest.mark.parametrize("url", [
     "https://ksr-breisgau-hochschwarzwald.de/wp-content/uploads/2024/06/ksr-breisgau-hochschwarzwald_seniorenwegweiser.pdf",
     "https://www.ulm.de/-/media/ulm/so/downloads/seniorinnen/internationaler-seniorenwegweiser-deutsch.pdf?rev=a963ec41630b46c0b088f620603b706b",

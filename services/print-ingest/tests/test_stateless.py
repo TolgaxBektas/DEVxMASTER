@@ -1,8 +1,15 @@
 from fastapi.testclient import TestClient
 
 from app.api import stateless
+from app.api import routes
 from app.core.config import settings
 from app.main import app
+
+
+def test_discovery_response_replaces_unencodable_surrogates():
+    response = routes._json_safe({"url": "https://example.test/\udcff.pdf"})
+
+    assert response == {"url": "https://example.test/?.pdf"}
 
 
 def test_company_from_text_prefers_legal_entity_over_slogan():

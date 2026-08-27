@@ -32,6 +32,8 @@ class ArchivePdf:
 class ArchiveIndexResult:
     entries: tuple[ArchivePdf, ...] = ()
     error: str | None = None
+    attempts: int = 0
+    outcome: str = "unknown"
 
 
 def normalize_host(value: str) -> str:
@@ -179,6 +181,7 @@ class ArchiveIndex:
             "output": "text",
         }
         last_error = "CDX-Antwort leer"
+        last_outcome = "empty"
         for attempt in range(len(ARCHIVE_RETRY_DELAYS_SECONDS) + 1):
             try:
                 policy = check_url_policy(
@@ -188,6 +191,7 @@ class ArchiveIndex:
                 )
                 if policy["status"] != "APPROVED":
                     last_error = f"Policy blockiert: {policy.get('reason', 'unbekannt')}"
+                    last_outcome = "policy_blocked"
                 else:
                     response = request_checked(
                         CDX_ENDPOINT,
@@ -200,24 +204,37 @@ class ArchiveIndex:
                     try:
                         if response.status_code >= 400:
                             last_error = f"HTTP {response.status_code}"
+                            last_outcome = "error"
                         else:
                             entries = tuple(parse_cdx_text(
-                                read_limited_response(
+                                response_body := read_limited_response(
                                     response,
                                     settings.max_response_mb * 1024 * 1024,
                                 ).decode("utf-8", errors="replace"),
                             ))
                             if entries:
-                                result = ArchiveIndexResult(entries=entries)
+                                result = ArchiveIndexResult(
+                                    entries=entries,
+                                    attempts=attempt + 1,
+                                    outcome="ok",
+                                )
                                 self._cache[normalized_host] = result
                                 return result
+                            if response_body.strip():
+                                last_error = "CDX-Parsefehler: keine gültigen Zeilen"
+                                last_outcome = "parse_error"
                     finally:
                         close_checked_response(response)
             except (requests.RequestException, RuntimeError, UnicodeError) as error:
                 last_error = str(error)
+                last_outcome = "error"
             if attempt < len(ARCHIVE_RETRY_DELAYS_SECONDS):
                 self._sleep(ARCHIVE_RETRY_DELAYS_SECONDS[attempt])
-        result = ArchiveIndexResult(error=last_error)
+        result = ArchiveIndexResult(
+            error=last_error,
+            attempts=len(ARCHIVE_RETRY_DELAYS_SECONDS) + 1,
+            outcome=last_outcome,
+        )
         self._cache[normalized_host] = result
         return result
 
@@ -231,9 +248,22 @@ class ArchiveIndex:
         for host in dict.fromkeys(hosts):
             normalized = normalize_host(host)
             try:
-                results[normalized] = self.fetch(normalized, budget=budget)
+                # A slow or unavailable host must not consume the shared
+                # discovery deadline and make later domains disappear.
+                host_budget = DiscoveryBudget(
+                    max_requests=10,
+                    max_depth=0,
+                    max_seconds=max(
+                        settings.max_discovery_seconds,
+                        CDX_TIMEOUT_SECONDS * (len(ARCHIVE_RETRY_DELAYS_SECONDS) + 1) + 10,
+                    ),
+                )
+                host_budget.robots_cache = budget.robots_cache
+                results[normalized] = self.fetch(normalized, budget=host_budget)
             except Exception as error:
                 results[normalized] = ArchiveIndexResult(
                     error=f"{type(error).__name__}: {error}",
+                    attempts=0,
+                    outcome="error",
                 )
         return results

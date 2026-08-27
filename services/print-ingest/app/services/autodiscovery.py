@@ -49,8 +49,10 @@ def run_discovery(
     archive_domains: list[str] | None = None,
 ):
     rejected: list[dict] = []
+    archive_evidence: list[dict] = []
     proposals = discover_proposals(
         seed_pages, search_terms, max_results, area_name, rejected, archive_domains,
+        archive_evidence,
     )
     for item in proposals:
         upsert_source(db, item["url"], item["score"], item)
@@ -62,6 +64,7 @@ def run_discovery(
         'rejected': rejected,
         'rejected_count': len(rejected),
         'error_count': sum(1 for item in rejected if item.get('reason') == 'crawl_error'),
+        'archive_domains': archive_evidence,
     }
 
 def discover_proposals(
@@ -71,6 +74,7 @@ def discover_proposals(
     area_name: str | None = None,
     rejected: list[dict] | None = None,
     archive_domains: list[str] | None = None,
+    archive_evidence: list[dict] | None = None,
 ):
     collected=[]
     visited=set()
@@ -148,6 +152,16 @@ def discover_proposals(
     archive = ArchiveIndex()
     archive_results = archive.fetch_many(domains, budget=archive_budget)
     for host, result in archive_results.items():
+        if archive_evidence is not None:
+            archive_evidence.append({
+                "host": host,
+                "status": result.outcome
+                if result.outcome != "unknown"
+                else ("error" if result.error else ("empty" if not result.entries else "ok")),
+                "entry_count": len(result.entries),
+                "attempts": result.attempts,
+                "error": result.error,
+            })
         if result.error:
             _record_error(
                 rejected,

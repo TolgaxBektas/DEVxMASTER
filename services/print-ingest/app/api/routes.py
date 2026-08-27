@@ -1,6 +1,8 @@
+import json
 from urllib.parse import urlparse
 import re
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi.responses import Response
 from fastapi.security import APIKeyHeader
 from app.core.config import settings
 from sqlalchemy.orm import Session
@@ -18,6 +20,21 @@ from app.services.autodiscovery import discover_proposals, run_discovery
 
 router=APIRouter()
 token_header = APIKeyHeader(name='x-service-token', auto_error=False)
+
+def _json_safe(value):
+    if isinstance(value, str):
+        return value.encode("utf-8", errors="replace").decode("utf-8")
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, dict):
+        return {_json_safe(key): _json_safe(item) for key, item in value.items()}
+    return value
+
+def _json_response(value):
+    return Response(
+        content=json.dumps(_json_safe(value), ensure_ascii=True),
+        media_type="application/json",
+    )
 
 def require_service_token(token: str | None = Depends(token_header)):
     if token != settings.service_token:
@@ -48,23 +65,28 @@ def discover(req: DiscoverRequest, db: Session=Depends(get_db), _token: None=Dep
 
 @router.post('/discovery/run')
 def autodiscover(req: AutoDiscoverRequest, db: Session=Depends(get_db), _token: None=Depends(require_service_token)):
-    return run_discovery(
+    return _json_response(run_discovery(
         db,
         [str(x) for x in req.seed_pages],
         req.search_terms,
         req.max_results,
         req.area_name,
         req.archive_domains,
-    )
+    ))
 
 @router.post('/discovery/proposals')
 def proposals(req: AutoDiscoverRequest, _token: None=Depends(require_service_token)):
     rejected: list[dict] = []
+    archive_evidence: list[dict] = []
     items = discover_proposals(
         [str(x) for x in req.seed_pages], req.search_terms, req.max_results,
-        req.area_name, rejected, req.archive_domains,
+        req.area_name, rejected, req.archive_domains, archive_evidence,
     )
-    return {'proposals': items, 'rejected': rejected}
+    return _json_response({
+        'proposals': items,
+        'rejected': rejected,
+        'archive_domains': archive_evidence,
+    })
 
 @router.post('/sources/revisit')
 def revisit(req: RevisitRequest, _token: None=Depends(require_service_token)):
@@ -141,7 +163,7 @@ def review_queue(db: Session=Depends(get_db), _token: None=Depends(require_servi
 
 @router.post('/documents/download')
 def download(req: DownloadRequest, db: Session=Depends(get_db), _token: None=Depends(require_service_token)):
-    try: data,meta=download_pdf(str(req.url))
+    try: data,meta=download_pdf(str(req.url), archive_length=req.archive_length)
     except DownloadError as e: raise HTTPException(400,str(e))
     existing=db.scalar(select(Document).where(Document.sha256==meta['sha256']))
     if existing: return {'document_id':existing.id,'deduplicated':True,'state':existing.state}

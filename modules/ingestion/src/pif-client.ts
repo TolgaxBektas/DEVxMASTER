@@ -31,6 +31,14 @@ export function createPifProcessor(input: {
     }
     if (!response.ok) {
       const body = await response.text();
+      try {
+        const parsed = JSON.parse(body) as { detail?: unknown };
+        if (typeof parsed.detail === "string" && parsed.detail) {
+          throw new Error(parsed.detail);
+        }
+      } catch (error) {
+        if (error instanceof Error && error.message !== body) throw error;
+      }
       throw new Error(body || "PDF-Verarbeitung wurde abgelehnt");
     }
     const result = (await response.json()) as {

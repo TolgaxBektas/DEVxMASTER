@@ -6,6 +6,7 @@ class DiscoverRequest(BaseModel):
 class DownloadRequest(BaseModel):
     url: HttpUrl
     source_id: int | None = None
+    archive_length: int | None = None
 
 class ProcessRequest(BaseModel):
     document_id: int

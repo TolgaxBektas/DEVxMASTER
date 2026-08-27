@@ -259,7 +259,12 @@ export function createIngestionModule(deps: {
     subject?: string;
     creationDate?: string;
   } }>;
-  fetchSource?: (input: { url: string; archiveUrl?: string; archiveTimestamp?: string }) => Promise<{
+  fetchSource?: (input: {
+    url: string;
+    archiveUrl?: string;
+    archiveTimestamp?: string;
+    archiveLength?: number;
+  }) => Promise<{
     bytes: Buffer;
     filename: string;
     origin?: string;
@@ -588,6 +593,9 @@ export function createIngestionModule(deps: {
               ...(typeof metadata.archiveUrl === "string" ? { archiveUrl: metadata.archiveUrl } : {}),
               ...(typeof metadata.archiveTimestamp === "string"
                 ? { archiveTimestamp: metadata.archiveTimestamp }
+                : {}),
+              ...(typeof metadata.archiveLength === "number"
+                ? { archiveLength: metadata.archiveLength }
                 : {}),
             });
             const result = await persistDocumentBytes({

@@ -108,6 +108,7 @@ const ingestion = createIngestionModule({
     const response = await fetch(`${env.PIF_BASE_URL}/api/v1/discovery/proposals`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-service-token": env.PIF_SERVICE_TOKEN },
+      signal: AbortSignal.timeout(1_200_000),
       body: JSON.stringify({
         seed_pages: seedPages,
         archive_domains: archiveDomains ?? [],
@@ -116,20 +117,50 @@ const ingestion = createIngestionModule({
         area_name: areaName,
       }),
     });
-    if (!response.ok) throw new Error(`Quellensuche fehlgeschlagen (${response.status})`);
-    const body = await response.json() as { proposals?: Array<Record<string, unknown>> };
+    if (!response.ok) {
+      const body = await response.text();
+      try {
+        const parsed = JSON.parse(body) as { detail?: unknown };
+        if (typeof parsed.detail === "string" && parsed.detail) throw new Error(parsed.detail);
+      } catch (error) {
+        if (error instanceof Error && error.message !== body) throw error;
+      }
+      throw new Error(body || `Quellensuche fehlgeschlagen (${response.status})`);
+    }
+    const body = await response.json() as {
+      proposals?: Array<Record<string, unknown>>;
+      archive_domains?: Array<Record<string, unknown>>;
+    };
     return (body.proposals ?? []).map((item) => ({
-      url: String(item.url), score: Number(item.score ?? 0), metadata: item,
+      url: String(item.url),
+      score: Number(item.score ?? 0),
+      metadata: {
+        ...item,
+        archiveDomainEvidence: body.archive_domains ?? [],
+      },
     }));
   },
-  fetchSource: async ({ url, archiveUrl }) => {
+  fetchSource: async ({ url, archiveUrl, archiveLength }) => {
     if (!env.PIF_SERVICE_TOKEN) throw new Error("PIF-Service-Token fehlt");
     const response = await fetch(`${env.PIF_BASE_URL}/api/v1/fetch`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-service-token": env.PIF_SERVICE_TOKEN },
-      body: JSON.stringify({ url, ...(archiveUrl ? { archive_url: archiveUrl } : {}) }),
+      body: JSON.stringify({
+        url,
+        ...(archiveUrl ? { archive_url: archiveUrl } : {}),
+        ...(archiveLength !== undefined ? { archive_length: archiveLength } : {}),
+      }),
     });
-    if (!response.ok) throw new Error(`Quellenabruf fehlgeschlagen (${response.status})`);
+    if (!response.ok) {
+      const body = await response.text();
+      try {
+        const parsed = JSON.parse(body) as { detail?: unknown };
+        if (typeof parsed.detail === "string" && parsed.detail) throw new Error(parsed.detail);
+      } catch (error) {
+        if (error instanceof Error && error.message !== body) throw error;
+      }
+      throw new Error(body || `Quellenabruf fehlgeschlagen (${response.status})`);
+    }
     const bytes = Buffer.from(await response.arrayBuffer());
     const disposition = response.headers.get("content-disposition") ?? "";
     const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? "source.pdf";
