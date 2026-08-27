@@ -1,4 +1,5 @@
 import type { Storage } from "@xmaster-center/integrations";
+import { responseErrorMessage } from "@xmaster-center/kernel";
 import type { ProcessedPage } from "./module.js";
 
 export function createPifProcessor(input: {
@@ -31,15 +32,7 @@ export function createPifProcessor(input: {
     }
     if (!response.ok) {
       const body = await response.text();
-      try {
-        const parsed = JSON.parse(body) as { detail?: unknown };
-        if (typeof parsed.detail === "string" && parsed.detail) {
-          throw new Error(parsed.detail);
-        }
-      } catch (error) {
-        if (error instanceof Error && error.message !== body) throw error;
-      }
-      throw new Error(body || "PDF-Verarbeitung wurde abgelehnt");
+      throw new Error(responseErrorMessage(body, response.status));
     }
     const result = (await response.json()) as {
       metadata?: { title?: string; subject?: string; creation_date?: string };

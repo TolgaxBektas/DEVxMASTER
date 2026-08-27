@@ -5,6 +5,7 @@ import {
   createEventBus,
   createRegistry,
   parseEnv,
+  responseErrorMessage,
 } from "@xmaster-center/kernel";
 import { createConfiguredStorage } from "@xmaster-center/integrations";
 import { createPifProcessor } from "@xmaster-center/module-ingestion";
@@ -119,25 +120,15 @@ const ingestion = createIngestionModule({
     });
     if (!response.ok) {
       const body = await response.text();
-      try {
-        const parsed = JSON.parse(body) as { detail?: unknown };
-        if (typeof parsed.detail === "string" && parsed.detail) throw new Error(parsed.detail);
-      } catch (error) {
-        if (error instanceof Error && error.message !== body) throw error;
-      }
-      throw new Error(body || `Quellensuche fehlgeschlagen (${response.status})`);
+      throw new Error(responseErrorMessage(body, response.status));
     }
     const body = await response.json() as {
       proposals?: Array<Record<string, unknown>>;
-      archive_domains?: Array<Record<string, unknown>>;
     };
     return (body.proposals ?? []).map((item) => ({
       url: String(item.url),
       score: Number(item.score ?? 0),
-      metadata: {
-        ...item,
-        archiveDomainEvidence: body.archive_domains ?? [],
-      },
+      metadata: { ...item },
     }));
   },
   fetchSource: async ({ url, archiveUrl, archiveLength }) => {
@@ -153,13 +144,7 @@ const ingestion = createIngestionModule({
     });
     if (!response.ok) {
       const body = await response.text();
-      try {
-        const parsed = JSON.parse(body) as { detail?: unknown };
-        if (typeof parsed.detail === "string" && parsed.detail) throw new Error(parsed.detail);
-      } catch (error) {
-        if (error instanceof Error && error.message !== body) throw error;
-      }
-      throw new Error(body || `Quellenabruf fehlgeschlagen (${response.status})`);
+      throw new Error(responseErrorMessage(body, response.status));
     }
     const bytes = Buffer.from(await response.arrayBuffer());
     const disposition = response.headers.get("content-disposition") ?? "";

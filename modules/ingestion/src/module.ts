@@ -3,6 +3,7 @@ import {
   createDrizzleAuditRepository,
   createDrizzleEventRepository,
   defineModule,
+  NonRetryableError,
   type EventExecutor,
   type ModuleDefinition,
 } from "@xmaster-center/kernel";
@@ -101,6 +102,16 @@ function describeError(error: unknown) {
     return error.message || error.name;
   }
   return typeof error === "string" ? error : "Unbekannter Fehler";
+}
+
+export function isPermanentSourceFetchError(message: string): boolean {
+  return [
+    /\bhttp[_ ]4\d\d\b/i,
+    /\bdownload_truncated\b/i,
+    /\bnot_a_real_pdf_signature\b/i,
+    /\b(?:redirect_limit_exceeded|policy[_ ]blocked|redirect_policy_blocked)\b/i,
+    /\bfile_too_large\b/i,
+  ].some((pattern) => pattern.test(message));
 }
 
 function jobDocumentId(payload: unknown) {
@@ -635,9 +646,11 @@ export function createIngestionModule(deps: {
             const origin = typeof metadata.archiveUrl === "string"
               ? `live_then_archive:${metadata.archiveTimestamp ?? "unknown"}:${metadata.archiveUrl}`
               : "live";
-            const contextualError = new Error(
-              `source_fetch_failed: url=${source.url}; origin=${origin}; ${message}`,
-            );
+            const contextualMessage =
+              `source_fetch_failed: url=${source.url}; origin=${origin}; ${message}`;
+            const contextualError = isPermanentSourceFetchError(message)
+              ? new NonRetryableError(contextualMessage)
+              : new Error(contextualMessage);
             await repository.updateSource(tenantId, sourceId, {
               lastError: contextualError.message,
             });

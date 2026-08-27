@@ -1,8 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { MemoryAuditRepository, MemoryEventRepository } from "@xmaster-center/kernel";
+import {
+  MemoryAuditRepository,
+  MemoryEventRepository,
+  NonRetryableError,
+} from "@xmaster-center/kernel";
 import type { AuthContext } from "@xmaster-center/contracts";
 import { MemoryIngestionRepository } from "./memory-repository.js";
-import { advertisementEventIdempotencyKey, createIngestionModule } from "./module.js";
+import {
+  advertisementEventIdempotencyKey,
+  createIngestionModule,
+  isPermanentSourceFetchError,
+} from "./module.js";
 import { deriveDocumentClassification, selectRegionSource } from "./classification.js";
 import { createDrizzleIngestionRepository } from "./drizzle-repository.js";
 import { classifications, documents, occurrences, pages } from "./schema.js";
@@ -94,11 +102,22 @@ describe("Ingestion-Bestand", () => {
     if (!job) throw new Error("Quellenabrufjob fehlt");
     expect(job.maxAttempts).toBe(10);
     await expect(job.handle({ sourceId: source.id }, context("1", { sourceId: source.id })))
-      .rejects.toThrow("source_fetch_failed: url=https://example.invalid/failed.pdf; origin=live; HTTP 403 durch Bot-Schutz");
+      .rejects.toBeInstanceOf(NonRetryableError);
     expect((await repository.getSource("1", source.id)).lastError).toBe(
       "source_fetch_failed: url=https://example.invalid/failed.pdf; origin=live; HTTP 403 durch Bot-Schutz",
     );
     expect((await repository.listAreas("1"))[0]?.status).toBe("done");
+  });
+
+  it("klassifiziert dauerhafte und vorübergehende Quellenfehler getrennt", () => {
+    expect(isPermanentSourceFetchError("http_404")).toBe(true);
+    expect(isPermanentSourceFetchError("HTTP 400")).toBe(true);
+    expect(isPermanentSourceFetchError("download_truncated: archive warning")).toBe(true);
+    expect(isPermanentSourceFetchError("policy blocked: private network")).toBe(true);
+    expect(isPermanentSourceFetchError("not_a_real_pdf_signature")).toBe(true);
+    expect(isPermanentSourceFetchError("file_too_large")).toBe(true);
+    expect(isPermanentSourceFetchError("HTTPSConnectionPool: Read timed out")).toBe(false);
+    expect(isPermanentSourceFetchError("http_503")).toBe(false);
   });
 
   it("trägt Archivherkunft und einen leeren Abruffehler am Job mit", async () => {
