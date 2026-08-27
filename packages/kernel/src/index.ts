@@ -8,3 +8,5 @@ export * from "./settings.js";
 export * from "./events.js";
 export * from "./module-registry.js";
 export * from "./trpc.js";
+export * from "./errors.js";
+export * from "./http.js";

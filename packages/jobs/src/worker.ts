@@ -1,4 +1,5 @@
 import type { JobHandler } from "./types.js";
+import { NonRetryableError } from "@xmaster-center/kernel";
 import { createJobHandlerContext, LeaseQueue } from "./queue.js";
 
 export type WorkerOptions = {
@@ -45,11 +46,12 @@ export class Worker {
         await this.queue.complete(job);
       } catch (error) {
         const maxAttempts = handler.maxAttempts ?? job.maxAttempts;
-        const terminal = job.attempts >= maxAttempts;
+        const effectiveMaxAttempts = error instanceof NonRetryableError ? 1 : maxAttempts;
+        const terminal = job.attempts >= effectiveMaxAttempts;
         await this.queue.fail(
           job,
           error,
-          maxAttempts,
+          effectiveMaxAttempts,
         );
         if (terminal && handler.onFailure) {
           try {

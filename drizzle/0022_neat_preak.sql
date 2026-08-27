@@ -1,0 +1,1 @@
+ALTER TABLE `ingestion_sources` ADD `revisit_failures` int DEFAULT 0 NOT NULL;

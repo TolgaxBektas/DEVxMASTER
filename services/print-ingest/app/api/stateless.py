@@ -23,18 +23,32 @@ async def fetch_source(payload: dict, _token: None = Depends(require_service_tok
     url = payload.get("url")
     if not isinstance(url, str):
         raise HTTPException(400, "url_required")
+    archive_url = payload.get("archive_url")
+    if not isinstance(archive_url, str):
+        archive_url = None
+    archive_length = payload.get("archive_length")
+    if not isinstance(archive_length, int):
+        archive_length = None
     try:
-        data, metadata = download_pdf(url)
+        data, metadata = download_pdf(
+            url,
+            archive_url=archive_url,
+            archive_length=archive_length,
+        )
     except DownloadError as exc:
         raise HTTPException(400, str(exc)) from exc
+    response_headers = {
+        "X-Source-Url": metadata["final_url"],
+        "X-Source-Sha256": metadata["sha256"],
+        "X-Source-Origin": metadata["origin"],
+        "Content-Disposition": f'attachment; filename="{metadata["filename"]}"',
+    }
+    if "archive_index_length" in metadata:
+        response_headers["X-Archive-Index-Length"] = str(metadata["archive_index_length"])
     return Response(
         content=data,
         media_type="application/pdf",
-        headers={
-            "X-Source-Url": metadata["final_url"],
-            "X-Source-Sha256": metadata["sha256"],
-            "Content-Disposition": f'attachment; filename="{metadata["filename"]}"',
-        },
+        headers=response_headers,
     )
 
 
@@ -51,7 +65,10 @@ async def process_upload(
         raise HTTPException(413, "file_too_large")
     if not data.startswith(b"%PDF-"):
         raise HTTPException(400, "not_a_real_pdf")
-    pages = render_and_extract(data)
+    try:
+        pages = render_and_extract(data)
+    except Exception as error:
+        raise HTTPException(422, f"invalid_pdf: {error}") from error
     pdf_metadata = extract_pdf_metadata(data)
     result = []
     for page in pages:

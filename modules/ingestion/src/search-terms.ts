@@ -12,12 +12,12 @@ export const PUBLICATION_TERMS = [
 
 export function areaSearchTerms(
   name: string,
-  _level: "state" | "district",
+  level: "state" | "district",
   year = new Date().getFullYear(),
   kind?: string,
 ): string[] {
   const area = name.trim();
-  const type = kind?.trim() && !["Kreisfreie Stadt", "Stadtkreis"].includes(kind.trim())
+  const type = level === "district" && kind?.trim() && !["Kreisfreie Stadt", "Stadtkreis"].includes(kind.trim())
     ? `${kind.trim()} `
     : "";
   const values = new Set<string>();

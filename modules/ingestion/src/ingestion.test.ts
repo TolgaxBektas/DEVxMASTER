@@ -1,14 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { MemoryAuditRepository, MemoryEventRepository } from "@xmaster-center/kernel";
+import {
+  MemoryAuditRepository,
+  MemoryEventRepository,
+  NonRetryableError,
+} from "@xmaster-center/kernel";
 import type { AuthContext } from "@xmaster-center/contracts";
 import { MemoryIngestionRepository } from "./memory-repository.js";
-import { advertisementEventIdempotencyKey, createIngestionModule } from "./module.js";
+import {
+  advertisementEventIdempotencyKey,
+  createIngestionModule,
+  isPermanentSourceFetchError,
+} from "./module.js";
 import { deriveDocumentClassification, selectRegionSource } from "./classification.js";
 import { createDrizzleIngestionRepository } from "./drizzle-repository.js";
 import { classifications, documents, occurrences, pages } from "./schema.js";
 import { classificationCorrectionSchema, createIngestionRouter } from "./router.js";
 import { periodIncludesYear } from "./repository.js";
 import { documentActualityStatus } from "./actuality.js";
+import { areaWebsiteSeeds, websiteRegister } from "./website-registry.js";
 
 const context = (tenantId: string | null, payload: unknown) => ({
   job: { tenantId, payload },
@@ -44,6 +53,201 @@ describe("Ingestion-Bestand", () => {
     expect((await repository.listSources("1"))[0]).toMatchObject({ revisitIntervalDays: 90, areaId: 1 });
   });
 
+  it("schließt ein Gebiet trotz einer fehlgeschlagenen Quellenanlage ab", async () => {
+    const repository = new MemoryIngestionRepository();
+    await repository.upsertArea("1", {
+      level: "district", ags: "01001", name: "Alpha", stateName: "Land", orderIndex: 1,
+      kind: "Landkreis", status: "pending", lastRunAt: null, startedAt: null,
+      nextDueAt: null, lastError: null, foundSources: 0,
+    });
+    const originalCreateSource = repository.createSource.bind(repository);
+    repository.createSource = async (tenantId, input) => {
+      if (input.url.includes("broken")) throw new Error("HTTP 503 Quelle nicht erreichbar");
+      return originalCreateSource(tenantId, input);
+    };
+    const module = createIngestionModule({
+      repository, publish: async () => undefined, enqueue: async () => undefined,
+      discoverProposals: async () => [
+        { url: "https://example.invalid/broken.pdf", score: 80, metadata: {} },
+        { url: "https://example.invalid/working.pdf", score: 80, metadata: {} },
+      ],
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.discovery.run");
+    if (!job) throw new Error("Gebietssuchjob fehlt");
+    await job.handle({ limit: 1 }, context("1", {}));
+    const area = (await repository.listAreas("1"))[0];
+    expect(area?.status).toBe("done");
+    expect(area?.foundSources).toBe(1);
+    expect(area?.lastError).toContain("broken.pdf: HTTP 503");
+    expect((await repository.listSources("1"))).toHaveLength(1);
+  });
+
+  it("speichert einen einzelnen Quellenabruf-Fehler an der Quelle", async () => {
+    const repository = new MemoryIngestionRepository();
+    const area = await repository.upsertArea("1", {
+      level: "district", ags: "01001", name: "Alpha", stateName: "Land", orderIndex: 1,
+      kind: "Landkreis", status: "done", lastRunAt: new Date(), startedAt: null,
+      nextDueAt: new Date(Date.now() + 86_400_000), lastError: null, foundSources: 1,
+    });
+    const source = await repository.createSource("1", {
+      url: "https://example.invalid/failed.pdf", score: 80, metadata: {}, areaId: area.id,
+    });
+    await repository.updateSource("1", source.id, { status: "approved" });
+    const module = createIngestionModule({
+      repository,
+      fetchSource: async () => { throw new Error("HTTP 403 durch Bot-Schutz"); },
+      publish: async () => undefined,
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.source.fetch");
+    if (!job) throw new Error("Quellenabrufjob fehlt");
+    expect(job.maxAttempts).toBe(10);
+    await expect(job.handle({ sourceId: source.id }, context("1", { sourceId: source.id })))
+      .rejects.toBeInstanceOf(NonRetryableError);
+    expect((await repository.getSource("1", source.id)).lastError).toBe(
+      "source_fetch_failed: url=https://example.invalid/failed.pdf; origin=live; HTTP 403 durch Bot-Schutz",
+    );
+    expect((await repository.listAreas("1"))[0]?.status).toBe("done");
+  });
+
+  it("klassifiziert dauerhafte und vorübergehende Quellenfehler getrennt", () => {
+    expect(isPermanentSourceFetchError("http_404")).toBe(true);
+    expect(isPermanentSourceFetchError("HTTP 400")).toBe(true);
+    expect(isPermanentSourceFetchError("download_truncated: archive warning")).toBe(true);
+    expect(isPermanentSourceFetchError("policy blocked: private network")).toBe(true);
+    expect(isPermanentSourceFetchError("not_a_real_pdf_signature")).toBe(true);
+    expect(isPermanentSourceFetchError("file_too_large")).toBe(true);
+    expect(isPermanentSourceFetchError("HTTPSConnectionPool: Read timed out")).toBe(false);
+    expect(isPermanentSourceFetchError("http_503")).toBe(false);
+  });
+
+  it("trägt Archivherkunft und einen leeren Abruffehler am Job mit", async () => {
+    const repository = new MemoryIngestionRepository();
+    const source = await repository.createSource("1", {
+      url: "https://example.invalid/archive.pdf",
+      score: 80,
+      metadata: {
+        archiveUrl: "https://web.archive.org/web/20240102112233id_/https://example.invalid/archive.pdf",
+        archiveTimestamp: "20240102112233",
+      },
+      areaId: null,
+    });
+    await repository.updateSource("1", source.id, { status: "approved" });
+    const module = createIngestionModule({
+      repository,
+      fetchSource: async () => { throw ""; },
+      publish: async () => undefined,
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.source.fetch");
+    if (!job) throw new Error("Quellenabrufjob fehlt");
+
+    await expect(job.handle({ sourceId: source.id }, context("1", { sourceId: source.id })))
+      .rejects.toThrow(
+        "source_fetch_failed: url=https://example.invalid/archive.pdf; "
+        + "origin=live_then_archive:20240102112233:"
+        + "https://web.archive.org/web/20240102112233id_/https://example.invalid/archive.pdf; "
+        + "Quellenabruf fehlgeschlagen: unbekannter Fehler",
+      );
+    expect((await repository.getSource("1", source.id)).lastError).toContain(
+      "origin=live_then_archive:20240102112233:",
+    );
+  });
+
+  it("überspringt Bundesländer bei Gebietsläufen", async () => {
+    const repository = new MemoryIngestionRepository();
+    await repository.upsertArea("1", {
+      level: "state", ags: "01", name: "Land", stateName: "Land", kind: "Bundesland", orderIndex: 0,
+      status: "pending", lastRunAt: null, startedAt: null, nextDueAt: null, lastError: null, foundSources: 0,
+    });
+    await repository.upsertArea("1", {
+      level: "district", ags: "01001", name: "Kreis", stateName: "Land", kind: "Landkreis", orderIndex: 1,
+      status: "pending", lastRunAt: null, startedAt: null, nextDueAt: null, lastError: null, foundSources: 0,
+    });
+    const searched: string[] = [];
+    const module = createIngestionModule({
+      repository, publish: async () => undefined, enqueue: async () => undefined,
+      discoverProposals: async ({ searchTerms }) => {
+        searched.push(searchTerms[0] ?? "");
+        return [];
+      },
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.discovery.run");
+    if (!job) throw new Error("Gebietssuchjob fehlt");
+    await job.handle({ limit: 1 }, context("1", {}));
+    expect(searched).toEqual(["Seniorenwegweiser Landkreis Kreis"]);
+    expect((await repository.listAreas("1")).find((area) => area.level === "state")?.status).toBe("pending");
+  });
+
+  it("begrenzt Gemeinde-Seeds und setzt den Fortschrittscursor stabil fort", async () => {
+    const register = websiteRegister().websites;
+    const grouped = new Map<string, typeof register>();
+    for (const website of register) {
+      const current = grouped.get(website.ags) ?? [];
+      current.push(website);
+      grouped.set(website.ags, current);
+    }
+    const ags = [...grouped.entries()].find(([, websites]) =>
+      websites.filter((website) => website.level === "gemeinde").length > 25
+    )?.[0];
+    if (!ags) throw new Error("Kein Gebiet mit genügend Gemeindewebsites");
+    const first = areaWebsiteSeeds(ags, 0);
+    const second = areaWebsiteSeeds(ags, first.nextMunicipalityOffset);
+    expect(first.municipalityCount).toBe(25);
+    expect(second.municipalityCount).toBe(25);
+    expect(new Set(first.seedPages).size).toBe(first.seedPages.length);
+    expect(first.seedPages.slice(-25)).not.toEqual(second.seedPages.slice(-25));
+
+    const repository = new MemoryIngestionRepository();
+    await repository.upsertArea("1", {
+      level: "district", ags, name: "Kreis", stateName: "Land", kind: "Landkreis", orderIndex: 1,
+      status: "pending", lastRunAt: null, startedAt: null, nextDueAt: null, lastError: null, foundSources: 0,
+    });
+    const calls: string[][] = [];
+    const module = createIngestionModule({
+      repository, publish: async () => undefined, enqueue: async () => undefined,
+      discoverProposals: async ({ seedPages }) => { calls.push(seedPages); return []; },
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.discovery.run");
+    if (!job) throw new Error("Gebietssuchjob fehlt");
+    await job.handle({ limit: 1 }, context("1", {}));
+    expect(calls[0]?.slice(-25)).toEqual(first.seedPages.slice(-25));
+    expect((await repository.listAreas("1"))[0]?.municipalityOffset).toBe(25);
+    await repository.updateArea("1", 1, { status: "pending", nextDueAt: new Date(0) });
+    await job.handle({ limit: 1 }, context("1", {}));
+    expect(calls[1]?.slice(-25)).toEqual(second.seedPages.slice(-25));
+    expect((await repository.listAreas("1"))[0]?.municipalityOffset).toBe(50);
+  });
+
+  it("markiert eine Quelle nach drei Fehlern als nicht erreichbar und setzt den Zähler bei Erfolg zurück", async () => {
+    const repository = new MemoryIngestionRepository();
+    const source = await repository.createSource("1", {
+      url: "https://example.invalid/source.pdf", score: 50, metadata: {},
+    });
+    await repository.updateSource("1", source.id, {
+      status: "approved", nextCheckAt: new Date(0),
+    });
+    let attempts = 0;
+    const module = createIngestionModule({
+      repository, publish: async () => undefined, enqueue: async () => undefined,
+      revisitSource: async () => {
+        attempts += 1;
+        if (attempts < 3) return { httpStatus: 404, note: "Zielquelle antwortete mit HTTP 404" };
+        return { httpStatus: 200, changed: false, fingerprint: "ok" };
+      },
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.source.revisit");
+    if (!job) throw new Error("Wiedervorlagejob fehlt");
+    for (let i = 0; i < 2; i += 1) {
+      await repository.updateSource("1", source.id, { nextCheckAt: new Date(0) });
+      await job.handle({}, context("1", {}));
+    }
+    expect((await repository.getSource("1", source.id)).revisitFailures).toBe(2);
+    await repository.updateSource("1", source.id, { nextCheckAt: new Date(0) });
+    await job.handle({}, context("1", {}));
+    expect((await repository.getSource("1", source.id)).revisitFailures).toBe(0);
+    expect((await repository.getSource("1", source.id)).status).toBe("approved");
+    expect(repository.sourceVisits.map((visit) => visit.httpStatus)).toEqual([404, 404, 200]);
+  });
+
   it("greift verwaiste Gebietsläufe nach 24 Stunden wieder auf und bewahrt fremde Gebietszuordnung", async () => {
     const repository = new MemoryIngestionRepository();
     const stale = await repository.upsertArea("1", {
@@ -77,13 +281,20 @@ describe("Ingestion-Bestand", () => {
     await repository.updateSource("1", source.id, {
       status: "approved", nextCheckAt: new Date(0),
     });
+    const knownPdf = await repository.createSource("1", {
+      url: "https://example.invalid:9443/known.pdf", score: 50, metadata: {},
+    });
+    await repository.updateSource("1", knownPdf.id, { status: "approved" });
     const enqueued: unknown[] = [];
     const module = createIngestionModule({
       repository, publish: async () => undefined,
       enqueue: async (item) => { enqueued.push(item); },
       revisitSource: async () => ({
-        httpStatus: 200, newPdfUrls: ["http://example.invalid:9443/new.pdf"],
-        newPdfCount: 1, changed: true, fingerprint: "new",
+        httpStatus: 200, newPdfUrls: [
+          "https://example.invalid:9443/known.pdf",
+          "http://example.invalid:9443/new.pdf",
+        ],
+        newPdfCount: 99, changed: true, fingerprint: "new",
       }),
     });
     const job = module.jobs.find((item) => item.name === "ingestion.source.revisit");
@@ -1223,6 +1434,88 @@ describe("Ingestion-Bestand", () => {
       context("1", { documentId: document.document.id }),
     ))
       .rejects.toThrow("PDF-Verarbeitung ist nicht erreichbar");
+  });
+
+  it("weist Dokumente ohne ausreichende Anzeigen oder Seiten sichtbar zurück", async () => {
+    const repository = new MemoryIngestionRepository();
+    const document = await repository.createUploadedDocument("1", {
+      filename: "themenflyer.pdf",
+      sha256: "q".repeat(64),
+      storageKey: "themenflyer",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "source",
+    });
+    const published: unknown[] = [];
+    const pages = Array.from({ length: 15 }, (_, index) => ({
+      pageNumber: index + 1,
+      text: "Bürgerinformation",
+      imageKey: `page-${index + 1}.png`,
+      classification: "EDITORIAL",
+      adProbability: 0.1,
+      occurrences: index < 2 ? [{
+        bbox: { x: 0, y: 0, width: 1, height: 1, confidence: 0.9 },
+        imageKey: `ad-${index + 1}.png`,
+        confidence: 0.9,
+        evidence: ["test"],
+        company: `Muster ${index + 1}`,
+        preview: "Telefon",
+      }] : [],
+    }));
+    const module = createIngestionModule({
+      repository,
+      repositoryForTransaction: () => repository,
+      transaction: async (callback) => callback({}),
+      processDocument: async () => pages,
+      publish: async (event) => { published.push(event); },
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.processing.run");
+    if (!job) throw new Error("Verarbeitungsjob fehlt");
+    await job.handle({ documentId: document.document.id }, context("1", { documentId: document.document.id }));
+    const rejected = await repository.getDocument("1", document.document.id);
+    expect(rejected.state).toBe("rejected");
+    expect(rejected.error).toContain("2 Anzeigen auf 15 Seiten");
+    expect(await repository.listOccurrences("1")).toHaveLength(0);
+    expect(published).toHaveLength(0);
+  });
+
+  it("lässt ein Wegweiser-Dokument mit drei Anzeigen und 16 Seiten passieren", async () => {
+    const repository = new MemoryIngestionRepository();
+    const document = await repository.createUploadedDocument("1", {
+      filename: "wegweiser.pdf",
+      sha256: "r".repeat(64),
+      storageKey: "wegweiser",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "source-archive-20260827000000",
+    });
+    const pages = Array.from({ length: 16 }, (_, index) => ({
+      pageNumber: index + 1,
+      text: "Seniorenwegweiser",
+      imageKey: `page-${index + 1}.png`,
+      classification: "MIXED_CONTENT",
+      adProbability: index < 3 ? 0.9 : 0.1,
+      occurrences: index < 3 ? [{
+        bbox: { x: 0, y: 0, width: 1, height: 1, confidence: 0.9 },
+        imageKey: `ad-${index + 1}.png`,
+        confidence: 0.9,
+        evidence: ["test"],
+        company: `Muster ${index + 1}`,
+        preview: "Telefon",
+      }] : [],
+    }));
+    const module = createIngestionModule({
+      repository,
+      repositoryForTransaction: () => repository,
+      transaction: async (callback) => callback({}),
+      processDocument: async () => pages,
+      publish: async () => undefined,
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.processing.run");
+    if (!job) throw new Error("Verarbeitungsjob fehlt");
+    await job.handle({ documentId: document.document.id }, context("1", { documentId: document.document.id }));
+    expect((await repository.getDocument("1", document.document.id)).state).toBe("processed");
+    expect(await repository.listOccurrences("1")).toHaveLength(3);
   });
 
   it("verarbeitet ein Dokument des zweiten Mandanten mit dem Job-Mandanten", async () => {

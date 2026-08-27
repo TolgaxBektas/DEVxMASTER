@@ -25,6 +25,7 @@ export type IngestionSource = {
   nextCheckAt: Date | null;
   productive: boolean;
   fingerprint: string | null;
+  revisitFailures: number;
   lastCheckedAt?: Date | null;
   actualityHint?: ActualityStatus | null;
 };
@@ -43,6 +44,7 @@ export type IngestionArea = {
   nextDueAt: Date | null;
   lastError: string | null;
   foundSources: number;
+  municipalityOffset?: number;
   createdAt: Date;
 };
 export type IngestionSourceVisit = {
@@ -161,10 +163,11 @@ export type IngestionRepository = {
     nextCheckAt?: Date | null;
     productive?: boolean;
     fingerprint?: string | null;
+    revisitFailures?: number;
   }): Promise<IngestionSource>;
   listAreas(tenantId: string): Promise<IngestionArea[]>;
   upsertArea(tenantId: string, input: Omit<IngestionArea, "id" | "tenantId" | "createdAt">): Promise<IngestionArea>;
-  updateArea(tenantId: string, areaId: number, input: Partial<Pick<IngestionArea, "status" | "lastRunAt" | "startedAt" | "nextDueAt" | "lastError" | "foundSources">>): Promise<IngestionArea>;
+  updateArea(tenantId: string, areaId: number, input: Partial<Pick<IngestionArea, "status" | "lastRunAt" | "startedAt" | "nextDueAt" | "lastError" | "foundSources" | "municipalityOffset">>): Promise<IngestionArea>;
   createSourceVisit(tenantId: string, input: Omit<IngestionSourceVisit, "id" | "tenantId">): Promise<IngestionSourceVisit>;
   listSourceVisits(tenantId: string, sourceId: number): Promise<IngestionSourceVisit[]>;
   listDocuments(tenantId: string, filters?: DocumentListFilters): Promise<IngestionDocument[]>;
@@ -231,6 +234,7 @@ export type IngestionRepository = {
         } | null;
       }>;
     }>,
+    options?: { includeOccurrences?: boolean },
   ): Promise<IngestionOccurrence[]>;
   setDocumentState(
     tenantId: string,

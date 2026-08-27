@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { NonRetryableError } from "@xmaster-center/kernel";
 import { MemoryQueueRepository } from "./memory-repository.js";
 import { LeaseQueue } from "./queue.js";
 import { retryDelay } from "./backoff.js";
@@ -118,5 +119,64 @@ describe("Lease-Queue", () => {
     expect((await repository.get(second.id))?.status).toBe("completed");
     expect(errorSpy).toHaveBeenCalled();
     errorSpy.mockRestore();
+  });
+
+  it("setzt nicht wiederholbare Fehler sofort auf dead", async () => {
+    const repository = new MemoryQueueRepository();
+    const queue = new LeaseQueue(repository);
+    const created = await queue.enqueue({
+      name: "permanent",
+      payload: {},
+      maxAttempts: 10,
+    });
+    const controller = new AbortController();
+    let worker!: Worker;
+    worker = new Worker(queue, new Map([[
+      "permanent",
+      {
+        name: "permanent",
+        handle: async () => {
+          worker.stop();
+          throw new NonRetryableError("http_404");
+        },
+      },
+    ]]));
+    await worker.run({ workerId: "test", signal: controller.signal });
+    expect(await repository.get(created.id)).toMatchObject({
+      status: "dead",
+      attempts: 1,
+      lastError: "http_404",
+    });
+  });
+
+  it("wiederholt vorübergehende Fehler bis zum Erfolg", async () => {
+    const repository = new MemoryQueueRepository();
+    const queue = new LeaseQueue(repository, {
+      backoff: { baseMs: 0, jitter: 0 },
+    });
+    const created = await queue.enqueue({
+      name: "transient",
+      payload: {},
+      maxAttempts: 3,
+    });
+    const controller = new AbortController();
+    let calls = 0;
+    let worker!: Worker;
+    worker = new Worker(queue, new Map([[
+      "transient",
+      {
+        name: "transient",
+        handle: async () => {
+          calls += 1;
+          if (calls === 1) throw new Error("timeout");
+          worker.stop();
+        },
+      },
+    ]]));
+    await worker.run({ workerId: "test", signal: controller.signal });
+    expect(await repository.get(created.id)).toMatchObject({
+      status: "completed",
+      attempts: 2,
+    });
   });
 });

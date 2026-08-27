@@ -12,7 +12,7 @@ export function AreasPage({ api }: ModulePageProps) {
   const areas = useModuleQuery<Area[]>(api, "modules.ingestion.areas.list");
   const capabilities = useModuleQuery<{ read: boolean; run: boolean }>(api, "modules.ingestion.areas.capabilities");
   const rows = useMemo(() => (areas.data ?? []).filter((area) => {
-    if (filter === "due") return area.status === "pending" || (area.nextDueAt !== null && new Date(area.nextDueAt) <= new Date());
+    if (filter === "due") return area.level === "district" && (area.status === "pending" || (area.nextDueAt !== null && new Date(area.nextDueAt) <= new Date()));
     return filter === "all" || area.status === filter;
   }), [areas.data, filter]);
   if (areas.isLoading || capabilities.isLoading) return <Skeleton />;

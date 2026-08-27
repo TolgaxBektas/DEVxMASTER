@@ -56,6 +56,7 @@ export class MemoryIngestionRepository implements IngestionRepository {
       nextCheckAt: input.nextCheckAt ?? null,
       productive: false,
       fingerprint: null,
+      revisitFailures: 0,
     };
     this.sources.push(source);
     return source;
@@ -70,6 +71,7 @@ export class MemoryIngestionRepository implements IngestionRepository {
     lastFetchedAt?: Date | null; lastError?: string | null;
     areaId?: number | null; revisitIntervalDays?: number; nextCheckAt?: Date | null;
     productive?: boolean; fingerprint?: string | null;
+    revisitFailures?: number;
   }) {
     const source = await this.getSource(tenantId, sourceId);
     Object.assign(source, input);
@@ -85,7 +87,7 @@ export class MemoryIngestionRepository implements IngestionRepository {
     this.areas.push(area);
     return area;
   }
-  async updateArea(tenantId: string, areaId: number, input: Partial<Pick<IngestionArea, "status" | "lastRunAt" | "startedAt" | "nextDueAt" | "lastError" | "foundSources">>) {
+  async updateArea(tenantId: string, areaId: number, input: Partial<Pick<IngestionArea, "status" | "lastRunAt" | "startedAt" | "nextDueAt" | "lastError" | "foundSources" | "municipalityOffset">>) {
     const area = this.areas.find((a) => a.tenantId === tenantId && a.id === areaId);
     if (!area) throw new Error("Gebiet nicht gefunden");
     Object.assign(area, input);
@@ -289,11 +291,13 @@ export class MemoryIngestionRepository implements IngestionRepository {
         city: string | null;
       } | null;
     }>;
-  }>) {
+  }>, options?: { includeOccurrences?: boolean }) {
+    const includeOccurrences = options?.includeOccurrences ?? true;
     const document = await this.getDocument(tenantId, documentId);
     const previous = this.occurrences.filter((item) => item.documentId === document.id);
     this.occurrences = this.occurrences.filter((item) => item.documentId !== document.id);
-    const created = processedPages.flatMap((page) => page.occurrences.map((item) => {
+    const created = includeOccurrences
+      ? processedPages.flatMap((page) => page.occurrences.map((item) => {
       const fingerprint = occurrenceFingerprint({
         pageNumber: page.pageNumber,
         company: item.company,
@@ -316,7 +320,8 @@ export class MemoryIngestionRepository implements IngestionRepository {
       evidence: item.evidence ?? [],
       contacts: item.contacts ?? null,
     };
-    }));
+      }))
+      : [];
     this.occurrences.push(...created);
     document.state = "processed";
     document.error = null;
@@ -335,7 +340,7 @@ export class MemoryIngestionRepository implements IngestionRepository {
       discovered: ["processing", "failed"],
       processing: ["processed", "failed"],
       failed: ["processing"],
-      processed: [],
+      processed: ["rejected"],
     };
     if (!allowed[document.state]?.includes(state))
       throw new Error(`Ungültiger Dokumentzustand: ${document.state} -> ${state}`);

@@ -5,6 +5,7 @@ import {
   createEventBus,
   createRegistry,
   parseEnv,
+  responseErrorMessage,
 } from "@xmaster-center/kernel";
 import { createConfiguredStorage } from "@xmaster-center/integrations";
 import { createPifProcessor } from "@xmaster-center/module-ingestion";
@@ -103,31 +104,57 @@ const ingestion = createIngestionModule({
     });
     return processor(input);
   },
-  discoverProposals: async ({ seedPages, searchTerms, maxResults }) => {
+  discoverProposals: async ({ seedPages, archiveDomains, searchTerms, maxResults, areaName }) => {
     if (!env.PIF_SERVICE_TOKEN) throw new Error("PIF-Service-Token fehlt");
     const response = await fetch(`${env.PIF_BASE_URL}/api/v1/discovery/proposals`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-service-token": env.PIF_SERVICE_TOKEN },
-      body: JSON.stringify({ seed_pages: seedPages, search_terms: searchTerms, max_results: maxResults }),
+      signal: AbortSignal.timeout(1_200_000),
+      body: JSON.stringify({
+        seed_pages: seedPages,
+        archive_domains: archiveDomains ?? [],
+        search_terms: searchTerms,
+        max_results: maxResults,
+        area_name: areaName,
+      }),
     });
-    if (!response.ok) throw new Error(`Quellensuche fehlgeschlagen (${response.status})`);
-    const body = await response.json() as { proposals?: Array<Record<string, unknown>> };
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(responseErrorMessage(body, response.status));
+    }
+    const body = await response.json() as {
+      proposals?: Array<Record<string, unknown>>;
+    };
     return (body.proposals ?? []).map((item) => ({
-      url: String(item.url), score: Number(item.score ?? 0), metadata: item,
+      url: String(item.url),
+      score: Number(item.score ?? 0),
+      metadata: { ...item },
     }));
   },
-  fetchSource: async ({ url }) => {
+  fetchSource: async ({ url, archiveUrl, archiveLength }) => {
     if (!env.PIF_SERVICE_TOKEN) throw new Error("PIF-Service-Token fehlt");
     const response = await fetch(`${env.PIF_BASE_URL}/api/v1/fetch`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-service-token": env.PIF_SERVICE_TOKEN },
-      body: JSON.stringify({ url }),
+      body: JSON.stringify({
+        url,
+        ...(archiveUrl ? { archive_url: archiveUrl } : {}),
+        ...(archiveLength !== undefined ? { archive_length: archiveLength } : {}),
+      }),
     });
-    if (!response.ok) throw new Error(`Quellenabruf fehlgeschlagen (${response.status})`);
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(responseErrorMessage(body, response.status));
+    }
     const bytes = Buffer.from(await response.arrayBuffer());
     const disposition = response.headers.get("content-disposition") ?? "";
     const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? "source.pdf";
-    return { bytes, filename };
+    const origin = response.headers.get("X-Source-Origin");
+    return {
+      bytes,
+      filename,
+      ...(origin ? { origin } : {}),
+    };
   },
   revisitSource: async ({ url, fingerprint }) => {
     if (!env.PIF_SERVICE_TOKEN) throw new Error("PIF-Service-Token fehlt");
@@ -137,9 +164,21 @@ const ingestion = createIngestionModule({
       body: JSON.stringify({ url, fingerprint }),
     });
     if (!response.ok) throw new Error(`Quellenprüfung fehlgeschlagen (${response.status})`);
-    return await response.json() as {
-      httpStatus?: number | null; newPdfUrls?: string[]; newPdfCount?: number;
-      changed?: boolean; fingerprint?: string | null; note?: string | null;
+    const body = await response.json() as {
+      http_status?: number | null;
+      new_pdf_urls?: string[];
+      new_pdf_count?: number;
+      changed?: boolean;
+      fingerprint?: string | null;
+      note?: string | null;
+    };
+    return {
+      httpStatus: body.http_status ?? null,
+      newPdfUrls: body.new_pdf_urls ?? [],
+      newPdfCount: body.new_pdf_count ?? 0,
+      changed: body.changed ?? false,
+      fingerprint: body.fingerprint ?? null,
+      note: body.note ?? null,
     };
   },
   publish: (input) => eventBus.publish(input),

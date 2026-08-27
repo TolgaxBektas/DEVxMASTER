@@ -11,7 +11,11 @@ def discover_sitemaps(base_url: str, *, budget: DiscoveryBudget | None = None, d
     candidates=[urljoin(root,'/sitemap.xml'),urljoin(root,'/sitemap_index.xml')]
     out=[]
     for u in candidates:
-        if check_url_policy(u)['status']!='APPROVED': continue
+        if check_url_policy(
+            u,
+            robots_cache=budget.robots_cache if budget else None,
+            budget=budget,
+        )['status']!='APPROVED': continue
         try:
             r=request_checked(
                 u,
@@ -45,5 +49,9 @@ def extract_pdf_urls_from_sitemap(sitemap_url: str, max_urls: int=5000, *, budge
     locs=[(el.text or '').strip() for el in root.iter() if el.tag.endswith('loc') and el.text]
     return [
         u for u in locs[:max_urls]
-        if '.pdf' in u.lower() and check_url_policy(u)['status'] == 'APPROVED'
+        if '.pdf' in u.lower() and check_url_policy(
+            u,
+            robots_cache=budget.robots_cache if budget else None,
+            budget=budget,
+        )['status'] == 'APPROVED'
     ]

@@ -1,0 +1,1 @@
+ALTER TABLE `ingestion_areas` ADD `municipality_offset` int DEFAULT 0 NOT NULL;
