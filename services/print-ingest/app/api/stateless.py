@@ -37,15 +37,18 @@ async def fetch_source(payload: dict, _token: None = Depends(require_service_tok
         )
     except DownloadError as exc:
         raise HTTPException(400, str(exc)) from exc
+    response_headers = {
+        "X-Source-Url": metadata["final_url"],
+        "X-Source-Sha256": metadata["sha256"],
+        "X-Source-Origin": metadata["origin"],
+        "Content-Disposition": f'attachment; filename="{metadata["filename"]}"',
+    }
+    if "archive_index_length" in metadata:
+        response_headers["X-Archive-Index-Length"] = str(metadata["archive_index_length"])
     return Response(
         content=data,
         media_type="application/pdf",
-        headers={
-            "X-Source-Url": metadata["final_url"],
-            "X-Source-Sha256": metadata["sha256"],
-            "X-Source-Origin": metadata["origin"],
-            "Content-Disposition": f'attachment; filename="{metadata["filename"]}"',
-        },
+        headers=response_headers,
     )
 
 

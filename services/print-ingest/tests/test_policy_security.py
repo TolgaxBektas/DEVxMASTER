@@ -1,4 +1,5 @@
 import pytest
+import requests
 from app.services import archive_index, discovery, downloader, policy, sitemap
 from app.services.archive_index import ArchiveIndex, parse_cdx_text
 from app.services.policy import DiscoveryBudget, RobotsCache, check_url_policy, read_limited_response
@@ -190,7 +191,7 @@ def test_archive_download_rejects_size_mismatch_instead_of_processing_truncated_
         )
 
 
-def test_download_rejects_archive_length_mismatch(monkeypatch):
+def test_download_records_archive_length_without_rejecting_valid_pdf(monkeypatch):
     allowed = {"status": "APPROVED", "hostname": "public.example", "address": "93.184.216.34"}
     monkeypatch.setattr(downloader, "check_url_policy", lambda _url: allowed)
     responses = iter([
@@ -199,11 +200,90 @@ def test_download_rejects_archive_length_mismatch(monkeypatch):
     ])
     monkeypatch.setattr(downloader, "request_checked", lambda *args, **kwargs: next(responses))
 
-    with pytest.raises(downloader.DownloadError, match="archive_size_mismatch"):
+    data, metadata = downloader.download_pdf(
+        "https://public.example/source.pdf",
+        archive_url="https://web.archive.org/web/20240102112233id_/https://public.example/source.pdf",
+        archive_length=999,
+    )
+
+    assert data.startswith(b"%PDF-")
+    assert metadata["archive_index_length"] == 999
+
+
+def test_archive_download_retries_transient_failure(monkeypatch):
+    allowed = {"status": "APPROVED", "hostname": "public.example", "address": "93.184.216.34"}
+    monkeypatch.setattr(downloader, "check_url_policy", lambda _url: allowed)
+    responses = iter([FakeResponse(b"blocked", "text/html", 403), FakeResponse(b"%PDF-1.7\nbody", "application/pdf", 200)])
+    sleeps = []
+    calls = 0
+    timeouts = []
+    def request_checked(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        timeouts.append(kwargs["timeout"])
+        if calls == 2:
+            raise requests.Timeout("timed out")
+        return next(responses)
+    monkeypatch.setattr(downloader, "request_checked", request_checked)
+    monkeypatch.setattr(downloader.time, "sleep", sleeps.append)
+
+    data, _metadata = downloader.download_pdf(
+        "https://public.example/source.pdf",
+        archive_url="https://web.archive.org/web/20240102112233id_/https://public.example/source.pdf",
+    )
+
+    assert data.startswith(b"%PDF-")
+    assert sleeps == [max(
+        downloader.ARCHIVE_REQUEST_DELAY_SECONDS,
+        downloader.ARCHIVE_RETRY_DELAYS_SECONDS[0],
+    )]
+    assert timeouts == [
+        downloader.settings.request_timeout_seconds,
+        downloader.ARCHIVE_DOWNLOAD_TIMEOUT_SECONDS,
+        downloader.ARCHIVE_DOWNLOAD_TIMEOUT_SECONDS,
+    ]
+
+
+def test_archive_redirect_releases_serial_request_lock(monkeypatch):
+    allowed = {"status": "APPROVED", "hostname": "public.example", "address": "93.184.216.34"}
+    monkeypatch.setattr(downloader, "check_url_policy", lambda _url: allowed)
+    responses = iter([
+        FakeResponse(b"blocked", "text/html", 403),
+        FakeResponse(b"", "application/pdf", 302, {"Location": "/redirected.pdf"}),
+        FakeResponse(b"%PDF-1.7\nbody", "application/pdf", 200),
+    ])
+    monkeypatch.setattr(downloader, "request_checked", lambda *args, **kwargs: next(responses))
+
+    data, _metadata = downloader.download_pdf(
+        "https://public.example/source.pdf",
+        archive_url="https://web.archive.org/web/20240102112233id_/https://public.example/source.pdf",
+    )
+
+    assert data.startswith(b"%PDF-")
+
+
+def test_archive_download_rejects_wayback_truncated_response(monkeypatch):
+    allowed = {"status": "APPROVED", "hostname": "public.example", "address": "93.184.216.34"}
+    monkeypatch.setattr(downloader, "check_url_policy", lambda _url: allowed)
+    responses = iter([
+        FakeResponse(b"blocked", "text/html", 403),
+        FakeResponse(
+            b"%PDF-1.7\ntruncated",
+            "application/pdf",
+            200,
+            {
+                "Content-Length": "1048576",
+                "Warning": '299 wayback content truncated by "length"',
+                "X-Archive-Orig-X-Crawler-Content-Length": "4339746",
+            },
+        ),
+    ])
+    monkeypatch.setattr(downloader, "request_checked", lambda *args, **kwargs: next(responses))
+
+    with pytest.raises(downloader.DownloadError, match="download_truncated"):
         downloader.download_pdf(
             "https://public.example/source.pdf",
             archive_url="https://web.archive.org/web/20240102112233id_/https://public.example/source.pdf",
-            archive_length=999,
         )
 
 

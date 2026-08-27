@@ -92,10 +92,45 @@ describe("Ingestion-Bestand", () => {
     });
     const job = module.jobs.find((item) => item.name === "ingestion.source.fetch");
     if (!job) throw new Error("Quellenabrufjob fehlt");
+    expect(job.maxAttempts).toBe(10);
     await expect(job.handle({ sourceId: source.id }, context("1", { sourceId: source.id })))
-      .rejects.toThrow("HTTP 403 durch Bot-Schutz");
-    expect((await repository.getSource("1", source.id)).lastError).toBe("HTTP 403 durch Bot-Schutz");
+      .rejects.toThrow("source_fetch_failed: url=https://example.invalid/failed.pdf; origin=live; HTTP 403 durch Bot-Schutz");
+    expect((await repository.getSource("1", source.id)).lastError).toBe(
+      "source_fetch_failed: url=https://example.invalid/failed.pdf; origin=live; HTTP 403 durch Bot-Schutz",
+    );
     expect((await repository.listAreas("1"))[0]?.status).toBe("done");
+  });
+
+  it("trägt Archivherkunft und einen leeren Abruffehler am Job mit", async () => {
+    const repository = new MemoryIngestionRepository();
+    const source = await repository.createSource("1", {
+      url: "https://example.invalid/archive.pdf",
+      score: 80,
+      metadata: {
+        archiveUrl: "https://web.archive.org/web/20240102112233id_/https://example.invalid/archive.pdf",
+        archiveTimestamp: "20240102112233",
+      },
+      areaId: null,
+    });
+    await repository.updateSource("1", source.id, { status: "approved" });
+    const module = createIngestionModule({
+      repository,
+      fetchSource: async () => { throw ""; },
+      publish: async () => undefined,
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.source.fetch");
+    if (!job) throw new Error("Quellenabrufjob fehlt");
+
+    await expect(job.handle({ sourceId: source.id }, context("1", { sourceId: source.id })))
+      .rejects.toThrow(
+        "source_fetch_failed: url=https://example.invalid/archive.pdf; "
+        + "origin=live_then_archive:20240102112233:"
+        + "https://web.archive.org/web/20240102112233id_/https://example.invalid/archive.pdf; "
+        + "Quellenabruf fehlgeschlagen: unbekannter Fehler",
+      );
+    expect((await repository.getSource("1", source.id)).lastError).toContain(
+      "origin=live_then_archive:20240102112233:",
+    );
   });
 
   it("überspringt Bundesländer bei Gebietsläufen", async () => {

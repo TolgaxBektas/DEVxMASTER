@@ -579,6 +579,7 @@ export function createIngestionModule(deps: {
       {
         name: "ingestion.source.fetch",
         schedule: "daily",
+        maxAttempts: 10,
         handle: async (payload, context) => {
           const tenantId = jobTenantId(context);
           const sourceId = (payload as { sourceId?: unknown }).sourceId;
@@ -586,8 +587,8 @@ export function createIngestionModule(deps: {
           const source = await repository.getSource(tenantId, sourceId);
           if (source.status !== "approved") throw new Error("Quelle ist nicht freigegeben");
           if (!deps.fetchSource) throw new Error("Quellenabruf ist nicht konfiguriert");
+          const metadata = source.metadata ?? {};
           try {
-            const metadata = source.metadata ?? {};
             const fetched = await deps.fetchSource({
               url: source.url,
               ...(typeof metadata.archiveUrl === "string" ? { archiveUrl: metadata.archiveUrl } : {}),
@@ -628,10 +629,19 @@ export function createIngestionModule(deps: {
               await deps.enqueue!({ name: "ingestion.processing.run", tenantId, payload: { documentId: result.document.id } });
             }
           } catch (error) {
+            const message = error instanceof Error && error.message
+              ? error.message
+              : "Quellenabruf fehlgeschlagen: unbekannter Fehler";
+            const origin = typeof metadata.archiveUrl === "string"
+              ? `live_then_archive:${metadata.archiveTimestamp ?? "unknown"}:${metadata.archiveUrl}`
+              : "live";
+            const contextualError = new Error(
+              `source_fetch_failed: url=${source.url}; origin=${origin}; ${message}`,
+            );
             await repository.updateSource(tenantId, sourceId, {
-              lastError: error instanceof Error ? error.message : "Quellenabruf fehlgeschlagen",
+              lastError: contextualError.message,
             });
-            throw error;
+            throw contextualError;
           }
         },
       },
