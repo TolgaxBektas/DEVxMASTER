@@ -295,7 +295,16 @@ export function createIngestionModule(deps: {
     areaName?: string;
   }) => Promise<Array<{
     url: string; score: number; metadata: Record<string, unknown>;
-  }>>;
+  }> | {
+    proposals: Array<{ url: string; score: number; metadata: Record<string, unknown> }>;
+    domainEvidence?: Array<{
+      host: string;
+      status?: string;
+      entry_count?: number;
+      attempts?: number;
+      error?: string | null;
+    }>;
+  }>;
   revisitSource?: (input: { url: string; fingerprint?: string | null }) => Promise<{
     httpStatus?: number | null;
     newPdfUrls?: string[];
@@ -417,9 +426,9 @@ export function createIngestionModule(deps: {
               const heartbeat = heartbeatFn
                 ? setInterval(() => { void heartbeatFn(); }, 30_000)
                 : null;
-              let proposals: Awaited<ReturnType<NonNullable<typeof deps.discoverProposals>>>;
+              let discovery: Awaited<ReturnType<NonNullable<typeof deps.discoverProposals>>>;
               try {
-                proposals = await deps.discoverProposals({
+                discovery = await deps.discoverProposals({
                   seedPages: [
                     ...PUBLISHER_SEED_PAGES,
                     ...websiteSelection.seedPages,
@@ -432,6 +441,11 @@ export function createIngestionModule(deps: {
               } finally {
                 if (heartbeat) clearInterval(heartbeat);
               }
+              const proposals = Array.isArray(discovery) ? discovery : discovery.proposals;
+              const domainEvidence = Array.isArray(discovery) ? undefined : discovery.domainEvidence;
+              const incompleteHosts = domainEvidence?.filter((item) =>
+                item.status !== "ok" && item.status !== "empty",
+              ) ?? [];
               let foundSources = 0;
               const sourceErrors: string[] = [];
               for (const proposal of proposals) {
@@ -453,14 +467,35 @@ export function createIngestionModule(deps: {
                   );
                 }
               }
+              const nextIncompleteRuns = incompleteHosts.length > 0
+                ? (area.incompleteRuns ?? 0) + 1
+                : 0;
+              const retryNormally = incompleteHosts.length > 0 && nextIncompleteRuns >= 5;
+              const incompleteDetails = incompleteHosts.map((item) =>
+                `${item.host}: ${(item.error || item.status || "unbekannt").replace(/\s+/g, " ").slice(0, 200)}`,
+              );
+              const visibleIncompleteDetails = incompleteDetails.slice(0, 10).join(", ");
+              const omittedIncompleteHosts = incompleteDetails.length - 10;
+              const incompleteError = incompleteHosts.length > 0
+                ? `discovery_incomplete: ${incompleteHosts.length} Hosts unbeantwortet (${
+                    visibleIncompleteDetails
+                  }${omittedIncompleteHosts > 0 ? `, … +${omittedIncompleteHosts} weitere` : ""})`
+                : null;
               await repository.updateArea(tenantId, area.id, {
                 status: "done",
                 lastRunAt: now,
                 startedAt: null,
-                nextDueAt: new Date(now.getTime() + 180 * 86_400_000),
+                nextDueAt: new Date(now.getTime() + (
+                  retryNormally || incompleteHosts.length === 0
+                    ? 180
+                    : 1
+                ) * 86_400_000),
                 foundSources,
-                municipalityOffset: websiteSelection.nextMunicipalityOffset,
-                lastError: sourceErrors.length > 0 ? sourceErrors.join("\n") : null,
+                ...(retryNormally || incompleteHosts.length === 0
+                  ? { municipalityOffset: websiteSelection.nextMunicipalityOffset }
+                  : {}),
+                incompleteRuns: nextIncompleteRuns,
+                lastError: [incompleteError, ...sourceErrors].filter(Boolean).join("\n") || null,
               });
             } catch (error) {
               await repository.updateArea(tenantId, area.id, {

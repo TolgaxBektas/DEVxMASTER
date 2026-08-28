@@ -47,7 +47,10 @@ export function createIngestionRouter(
   enqueue?: (input: { name: string; tenantId?: string | null; payload: unknown }) => Promise<unknown>,
   discover?: (input: { seedPages: string[]; searchTerms: string[]; maxResults: number }) => Promise<Array<{
     url: string; score: number; metadata: Record<string, unknown>;
-  }>>,
+  }> | {
+    proposals: Array<{ url: string; score: number; metadata: Record<string, unknown> }>;
+    domainEvidence?: Array<Record<string, unknown>>;
+  }>,
   reviewClientOrAudit?: PifReviewClient | AuditRepository,
   reviewTenantId?: string,
   audit?: AuditRepository,
@@ -81,11 +84,12 @@ export function createIngestionRouter(
             code: "PRECONDITION_FAILED",
             message: "Quellensuche ist nicht konfiguriert.",
           });
-          const proposals = await discover({
+          const discovery = await discover({
             seedPages: input.seedPages,
             searchTerms: input.searchTerms,
             maxResults: input.maxResults,
           });
+          const proposals = Array.isArray(discovery) ? discovery : discovery.proposals;
           return Promise.all(proposals.map((proposal) => repository.createSource(ctx.auth.tenantId, proposal)));
         }),
       approve: permissionProcedure("ingestion.source.approve")

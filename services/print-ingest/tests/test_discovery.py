@@ -1,3 +1,4 @@
+import json
 import pytest
 
 from app.services import autodiscovery, discovery
@@ -15,6 +16,9 @@ from app.services.discovery import (
     score_candidate,
 )
 from app.services.policy import DiscoveryBudget
+from app.api import routes
+from app.schemas.api import AutoDiscoverRequest
+from app.core.config import settings
 
 
 def test_discovery_follows_bounded_second_level_publication_links(monkeypatch):
@@ -461,6 +465,35 @@ def test_archive_domain_evidence_keeps_success_empty_and_failed_hosts(monkeypatc
         {"host": "empty.example", "status": "empty", "entry_count": 0, "attempts": 3, "error": "CDX-Antwort leer"},
         {"host": "bad.example", "status": "error", "entry_count": 0, "attempts": 3, "error": "HTTP 503"},
     ]
+
+
+def test_proposals_response_includes_domain_evidence(monkeypatch):
+    monkeypatch.setattr(
+        routes,
+        "discover_proposals",
+        lambda *args, **kwargs: (
+            args[6].extend([{
+                "host": "good.example",
+                "status": "ok",
+                "entry_count": 1,
+                "attempts": 1,
+                "error": None,
+            }])
+            or [{"url": "https://good.example/2026.pdf", "score": 80}]
+        ),
+    )
+    response = routes.proposals(
+        AutoDiscoverRequest(),
+        settings.service_token,
+    )
+    body = json.loads(response.body)
+    assert body["domain_evidence"] == [{
+        "host": "good.example",
+        "status": "ok",
+        "entry_count": 1,
+        "attempts": 1,
+        "error": None,
+    }]
 
 
 @pytest.mark.parametrize("url", [

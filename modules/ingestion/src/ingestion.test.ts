@@ -53,6 +53,92 @@ describe("Ingestion-Bestand", () => {
     expect((await repository.listSources("1"))[0]).toMatchObject({ revisitIntervalDays: 90, areaId: 1 });
   });
 
+  it("behandelt einen vollständigen Lauf mit erfolgreicher leerer Host-Abfrage normal", async () => {
+    const repository = new MemoryIngestionRepository();
+    await repository.upsertArea("1", {
+      level: "district", ags: "01001", name: "Alpha", stateName: "Land", orderIndex: 1,
+      kind: "Landkreis", status: "pending", lastRunAt: null, startedAt: null, nextDueAt: null,
+      lastError: null, foundSources: 0, municipalityOffset: 0,
+    });
+    const module = createIngestionModule({
+      repository, publish: async () => undefined, enqueue: async () => undefined,
+      discoverProposals: async () => ({
+        proposals: [],
+        domainEvidence: [{
+          host: "alpha.example",
+          status: "empty",
+          entry_count: 0,
+          attempts: 1,
+          error: "CDX-Antwort leer",
+        }],
+      }),
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.discovery.run");
+    if (!job) throw new Error("Gebietssuchjob fehlt");
+    await job.handle({ limit: 1 }, context("1", {}));
+    const area = (await repository.listAreas("1"))[0];
+    expect(area).toMatchObject({ status: "done", incompleteRuns: 0, municipalityOffset: 1, lastError: null });
+    expect(area?.nextDueAt?.getTime()).toBeGreaterThan(Date.now() + 179 * 86_400_000);
+  });
+
+  it("stellt unvollständige Läufe einen Tag zurück und bewahrt den Fortschritt", async () => {
+    const repository = new MemoryIngestionRepository();
+    await repository.upsertArea("1", {
+      level: "district", ags: "01001", name: "Alpha", stateName: "Land", orderIndex: 1,
+      kind: "Landkreis", status: "pending", lastRunAt: null, startedAt: null, nextDueAt: null,
+      lastError: "alter Fehler", foundSources: 0, municipalityOffset: 7,
+    });
+    const module = createIngestionModule({
+      repository, publish: async () => undefined, enqueue: async () => undefined,
+      discoverProposals: async () => ({
+        proposals: [],
+        domainEvidence: [{
+          host: "alpha.example", status: "error", entry_count: 0, attempts: 3,
+          error: "CDX-Verbindung abgebrochen",
+        }],
+      }),
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.discovery.run");
+    if (!job) throw new Error("Gebietssuchjob fehlt");
+    await job.handle({ limit: 1 }, context("1", {}));
+    const area = (await repository.listAreas("1"))[0];
+    expect(area).toMatchObject({ status: "done", incompleteRuns: 1, municipalityOffset: 7 });
+    expect(area?.lastError).toBe(
+      "discovery_incomplete: 1 Hosts unbeantwortet (alpha.example: CDX-Verbindung abgebrochen)",
+    );
+    expect(area?.nextDueAt?.getTime()).toBeGreaterThan(Date.now() + 86_000_000);
+    expect(area?.nextDueAt?.getTime()).toBeLessThan(Date.now() + 2 * 86_400_000);
+  });
+
+  it("setzt nach fünf unvollständigen Läufen die normale Fälligkeit fort", async () => {
+    const repository = new MemoryIngestionRepository();
+    const ags = [...new Set(websiteRegister().websites.map((website) => website.ags))].find((candidate) =>
+      areaWebsiteSeeds(candidate, 0).municipalityCount > 0,
+    );
+    if (!ags) throw new Error("Kein Gebiet mit genügend Gemeindewebsites");
+    await repository.upsertArea("1", {
+      level: "district", ags, name: "Alpha", stateName: "Land", orderIndex: 1,
+      kind: "Landkreis", status: "pending", lastRunAt: null, startedAt: null, nextDueAt: null,
+      lastError: null, foundSources: 0, municipalityOffset: 0, incompleteRuns: 4,
+    });
+    const module = createIngestionModule({
+      repository, publish: async () => undefined, enqueue: async () => undefined,
+      discoverProposals: async () => ({
+        proposals: [],
+        domainEvidence: [{ host: "alpha.example", status: "error", error: "Zeitbudget überschritten" }],
+      }),
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.discovery.run");
+    if (!job) throw new Error("Gebietssuchjob fehlt");
+    await job.handle({ limit: 1 }, context("1", {}));
+    const area = (await repository.listAreas("1"))[0];
+    expect(area?.incompleteRuns).toBe(5);
+    expect(area?.municipalityOffset).toBe(areaWebsiteSeeds(ags, 0).nextMunicipalityOffset);
+    expect(area?.municipalityOffset).toBeGreaterThan(0);
+    expect(area?.nextDueAt?.getTime()).toBeGreaterThan(Date.now() + 179 * 86_400_000);
+    expect(area?.lastError).toContain("discovery_incomplete: 1 Hosts unbeantwortet");
+  });
+
   it("schließt ein Gebiet trotz einer fehlgeschlagenen Quellenanlage ab", async () => {
     const repository = new MemoryIngestionRepository();
     await repository.upsertArea("1", {
