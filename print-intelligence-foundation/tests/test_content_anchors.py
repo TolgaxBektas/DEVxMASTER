@@ -1,4 +1,5 @@
 from PIL import Image
+import pytest
 import types
 
 import app.services.content_anchors as anchors_module
@@ -160,6 +161,17 @@ def test_anchor_extraction_keeps_text_and_is_safe_without_qr(monkeypatch):
         "www.example.de",
     ]
     assert anchors["phones"] == ["040123456"]
+
+
+def test_qr_decoder_dependency_is_active_or_skips():
+    try:
+        import pyzbar.pyzbar  # noqa: F401
+    except ImportError:
+        pytest.skip("pyzbar/libzbar0 unavailable")
+    values, finding, region = _decode_qr(Image.new("RGB", (64, 64), "white"))
+    assert values == []
+    assert finding is None
+    assert region is None
 
 
 def test_qr_decoder_region_accounts_for_tile_offset(monkeypatch):
