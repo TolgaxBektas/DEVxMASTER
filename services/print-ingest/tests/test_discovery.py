@@ -202,6 +202,40 @@ def test_archive_timestamp_is_age_fallback_without_url_year(monkeypatch):
     assert proposals == []
     assert rejected[0]["reason"].startswith("Jahreszahl älter als")
 
+
+def test_archive_proposal_retains_alternate_captures_for_same_original(monkeypatch):
+    latest = ArchivePdf(
+        original="https://kreis.example/Seniorenwegweiser.pdf",
+        timestamp="20260102112233",
+        status_code=200,
+        length=200,
+        archive_url="https://web.archive.org/web/20260102112233id_/https://kreis.example/Seniorenwegweiser.pdf",
+    )
+    older = ArchivePdf(
+        original="https://kreis.example/Seniorenwegweiser.pdf",
+        timestamp="20250102112233",
+        status_code=200,
+        length=100,
+        archive_url="https://web.archive.org/web/20250102112233id_/https://kreis.example/Seniorenwegweiser.pdf",
+    )
+    monkeypatch.setattr(ArchiveIndex, "fetch_many", lambda *_args, **_kwargs: {
+        "kreis.example": ArchiveIndexResult(entries=(older, latest)),
+    })
+    monkeypatch.setattr(autodiscovery, "web_search", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(autodiscovery, "discover_pdf_links", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(autodiscovery, "discover_sitemaps", lambda *_args, **_kwargs: [])
+
+    proposals = autodiscovery.discover_proposals(
+        [], [], area_name="Kreis", rejected=[], archive_domains=["kreis.example"],
+    )
+
+    assert len(proposals) == 1
+    assert [capture["timestamp"] for capture in proposals[0]["archiveCaptures"]] == [
+        "20260102112233",
+        "20250102112233",
+    ]
+
+
 def test_pdf_publication_scores_high():
     assert score_candidate('https://example.org/Seniorenwegweiser-2026.pdf') >= 50
 

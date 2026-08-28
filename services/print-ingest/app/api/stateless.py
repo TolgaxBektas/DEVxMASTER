@@ -29,11 +29,15 @@ async def fetch_source(payload: dict, _token: None = Depends(require_service_tok
     archive_length = payload.get("archive_length")
     if not isinstance(archive_length, int):
         archive_length = None
+    archive_captures = payload.get("archive_captures")
+    if not isinstance(archive_captures, list):
+        archive_captures = None
     try:
         data, metadata = download_pdf(
             url,
             archive_url=archive_url,
             archive_length=archive_length,
+            archive_captures=archive_captures,
         )
     except DownloadError as exc:
         raise HTTPException(400, str(exc)) from exc

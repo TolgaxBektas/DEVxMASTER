@@ -66,6 +66,14 @@ MAX_CROP_PIXELS = 18_000_000
 MAX_OCR_REGIONS_PER_PAGE = 12
 
 
+def sanitize_extracted_text(text: str) -> str:
+    return "".join(
+        character
+        for character in text
+        if character != "\x00" and not 0xD800 <= ord(character) <= 0xDFFF
+    )
+
+
 def _layout_for_page(page):
     blocks = []
     for block in page.get_text("dict").get("blocks", []):
@@ -74,7 +82,9 @@ def _layout_for_page(page):
         lines = []
         for line in block.get("lines", []):
             spans = [span for span in line.get("spans", []) if str(span.get("text", "")).strip()]
-            line_text = " ".join(str(span.get("text", "")).strip() for span in spans).strip()
+            line_text = sanitize_extracted_text(
+                " ".join(str(span.get("text", "")).strip() for span in spans).strip(),
+            )
             if line_text:
                 lines.append({
                     "bbox": tuple(float(value) for value in line["bbox"]),
@@ -125,12 +135,14 @@ def render_and_extract(pdf_bytes: bytes, dpi: int = 180):
     zoom=dpi/72
     mat=fitz.Matrix(zoom,zoom)
     for idx,page in enumerate(doc):
-        text=page.get_text('text') or ''
+        text=sanitize_extracted_text(page.get_text('text') or '')
         title_candidates = []
         for block in page.get_text('dict').get('blocks', []):
             for line in block.get('lines', []):
                 spans = line.get('spans', [])
-                line_text = ' '.join(str(span.get('text', '')).strip() for span in spans).strip()
+                line_text = sanitize_extracted_text(
+                    ' '.join(str(span.get('text', '')).strip() for span in spans).strip(),
+                )
                 if line_text:
                     title_candidates.append({
                         'text': line_text,
@@ -140,7 +152,11 @@ def render_and_extract(pdf_bytes: bytes, dpi: int = 180):
         img_bytes=pix.tobytes('png')
         if len(text.strip()) < 20:
             try:
-                text=pytesseract.image_to_string(Image.open(io.BytesIO(img_bytes)), lang='deu+eng')
+                text=sanitize_extracted_text(
+                    pytesseract.image_to_string(
+                        Image.open(io.BytesIO(img_bytes)), lang='deu+eng',
+                    ),
+                )
             except Exception:
                 text=text or ''
         signals=len(AD_SIGNALS.findall(text))

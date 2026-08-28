@@ -9,6 +9,7 @@ from app.services.processor import (
     heuristic_ad_regions,
     render_ad_crop,
     render_and_extract,
+    sanitize_extracted_text,
 )
 
 def make_pdf():
@@ -92,6 +93,11 @@ def test_render_extract():
     assert len(pages)==1
     assert 'Beispiel GmbH' in pages[0]['text']
     assert pages[0]['ad_probability'] > 0.3
+
+
+def test_sanitize_extracted_text_removes_surrogates_and_nuls():
+    text = "Vorher\ud800Mitte\x00Nachher"
+    assert sanitize_extracted_text(text) == "VorherMitteNachher"
 
 def test_extracts_pdf_metadata_and_title_typography():
     d = fitz.open()

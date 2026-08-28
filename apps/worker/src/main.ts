@@ -131,7 +131,7 @@ const ingestion = createIngestionModule({
       metadata: { ...item },
     }));
   },
-  fetchSource: async ({ url, archiveUrl, archiveLength }) => {
+  fetchSource: async ({ url, archiveUrl, archiveLength, archiveCaptures }) => {
     if (!env.PIF_SERVICE_TOKEN) throw new Error("PIF-Service-Token fehlt");
     const response = await fetch(`${env.PIF_BASE_URL}/api/v1/fetch`, {
       method: "POST",
@@ -140,6 +140,7 @@ const ingestion = createIngestionModule({
         url,
         ...(archiveUrl ? { archive_url: archiveUrl } : {}),
         ...(archiveLength !== undefined ? { archive_length: archiveLength } : {}),
+        ...(archiveCaptures ? { archive_captures: archiveCaptures } : {}),
       }),
     });
     if (!response.ok) {

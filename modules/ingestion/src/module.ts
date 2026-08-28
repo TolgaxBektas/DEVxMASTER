@@ -108,6 +108,7 @@ export function isPermanentSourceFetchError(message: string): boolean {
   return [
     /\bhttp[_ ]4\d\d\b/i,
     /\bdownload_truncated\b/i,
+    /\barchive_captures_exhausted\b/i,
     /\bnot_a_real_pdf_signature\b/i,
     /\b(?:redirect_limit_exceeded|policy[_ ]blocked|redirect_policy_blocked)\b/i,
     /\bfile_too_large\b/i,
@@ -275,6 +276,12 @@ export function createIngestionModule(deps: {
     archiveUrl?: string;
     archiveTimestamp?: string;
     archiveLength?: number;
+    archiveCaptures?: Array<{
+      url: string;
+      timestamp?: string;
+      statusCode?: number;
+      length?: number | null;
+    }>;
   }) => Promise<{
     bytes: Buffer;
     filename: string;
@@ -609,6 +616,22 @@ export function createIngestionModule(deps: {
               ...(typeof metadata.archiveLength === "number"
                 ? { archiveLength: metadata.archiveLength }
                 : {}),
+              ...(Array.isArray(metadata.archiveCaptures)
+                ? {
+                    archiveCaptures: metadata.archiveCaptures.filter(
+                      (item): item is {
+                        url: string;
+                        timestamp?: string;
+                        statusCode?: number;
+                        length?: number | null;
+                      } => Boolean(
+                        item
+                        && typeof item === "object"
+                        && typeof (item as { url?: unknown }).url === "string",
+                      ),
+                    ),
+                  }
+                : {}),
             });
             const result = await persistDocumentBytes({
               db: deps.db,
@@ -803,7 +826,9 @@ export function createIngestionModule(deps: {
             } catch (error) {
               const message = error instanceof Error ? error.message : "Verarbeitung fehlgeschlagen";
               await repository.setDocumentState(tenantId, document.id, "failed", message);
-              throw error;
+              if (typeof documentId === "number") {
+                throw error;
+              }
             }
           }
         },
