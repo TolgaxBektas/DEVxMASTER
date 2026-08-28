@@ -1,3 +1,4 @@
+import json
 import re
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -13,7 +14,7 @@ from app.services.processor import (
 )
 from app.services.storage import storage
 from app.services.downloader import download_pdf, DownloadError
-from app.api.routes import require_service_token
+from app.api.routes import _json_safe, require_service_token
 
 router = APIRouter()
 
@@ -113,7 +114,13 @@ async def process_upload(
                 "title_candidates": page.get("title_candidates", []),
             }
         )
-    return {"metadata": pdf_metadata, "pages": result}
+    return Response(
+        content=json.dumps(
+            _json_safe({"metadata": pdf_metadata, "pages": result}),
+            ensure_ascii=True,
+        ),
+        media_type="application/json",
+    )
 
 
 def _company_from_text(text: str) -> str:

@@ -84,6 +84,34 @@ def test_process_returns_pages_without_document_rows(monkeypatch):
     assert "tenants/1/processed/hash/page-0001.png" in storage.objects
 
 
+def test_process_response_replaces_unencodable_surrogates(monkeypatch):
+    monkeypatch.setattr(stateless, "storage", FakeStorage())
+    monkeypatch.setattr(
+        stateless,
+        "render_and_extract",
+        lambda _data: [{
+            "page_number": 1,
+            "text": "Muster\udcff",
+            "image_bytes": b"png",
+            "classification": "MIXED_CONTENT",
+            "ad_probability": 0.48,
+            "title_candidates": [{"text": "Titel\udcff", "size": 12}],
+        }],
+    )
+    monkeypatch.setattr(stateless, "heuristic_ad_regions", lambda *_args: [])
+
+    response = TestClient(app).post(
+        "/api/v1/process",
+        headers={"x-service-token": settings.service_token},
+        files={"file": ("document.pdf", b"%PDF-1.7", "application/pdf")},
+        data={"output_prefix": "tenants/1/processed/hash"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["pages"][0]["text"] == "Muster?"
+    assert response.json()["pages"][0]["title_candidates"][0]["text"] == "Titel?"
+
+
 def test_process_keeps_distinct_ad_keys_and_region_text(monkeypatch):
     storage = FakeStorage()
     monkeypatch.setattr(stateless, "storage", storage)
