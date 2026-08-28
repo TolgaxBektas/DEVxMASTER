@@ -86,6 +86,7 @@ def proposals(req: AutoDiscoverRequest, _token: None=Depends(require_service_tok
         'proposals': items,
         'rejected': rejected,
         'archive_domains': archive_evidence,
+        'domain_evidence': archive_evidence,
     })
 
 @router.post('/sources/revisit')

@@ -63,6 +63,7 @@ export const areas = mysqlTable("ingestion_areas", {
   lastError: text("last_error"),
   foundSources: int("found_sources").default(0).notNull(),
   municipalityOffset: int("municipality_offset").default(0).notNull(),
+  incompleteRuns: int("incomplete_runs").default(0).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   tenantAgs: uniqueIndex("ingestion_areas_tenant_ags_uq").on(table.tenantId, table.ags),

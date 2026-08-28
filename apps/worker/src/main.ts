@@ -124,12 +124,22 @@ const ingestion = createIngestionModule({
     }
     const body = await response.json() as {
       proposals?: Array<Record<string, unknown>>;
+      domain_evidence?: Array<{
+        host: string;
+        status?: string;
+        entry_count?: number;
+        attempts?: number;
+        error?: string | null;
+      }>;
     };
-    return (body.proposals ?? []).map((item) => ({
-      url: String(item.url),
-      score: Number(item.score ?? 0),
-      metadata: { ...item },
-    }));
+    return {
+      proposals: (body.proposals ?? []).map((item) => ({
+        url: String(item.url),
+        score: Number(item.score ?? 0),
+        metadata: { ...item },
+      })),
+      ...(body.domain_evidence ? { domainEvidence: body.domain_evidence } : {}),
+    };
   },
   fetchSource: async ({ url, archiveUrl, archiveLength, archiveCaptures }) => {
     if (!env.PIF_SERVICE_TOKEN) throw new Error("PIF-Service-Token fehlt");

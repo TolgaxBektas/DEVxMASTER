@@ -128,12 +128,24 @@ const ingestion = createIngestionModule({
       }),
     });
     if (!response.ok) throw new Error(`Quellensuche fehlgeschlagen (${response.status})`);
-    const body = await response.json() as { proposals?: Array<Record<string, unknown>> };
-    return (body.proposals ?? []).map((item) => ({
-      url: String(item.url),
-      score: Number(item.score ?? 0),
-      metadata: item,
-    }));
+    const body = await response.json() as {
+      proposals?: Array<Record<string, unknown>>;
+      domain_evidence?: Array<{
+        host: string;
+        status?: string;
+        entry_count?: number;
+        attempts?: number;
+        error?: string | null;
+      }>;
+    };
+    return {
+      proposals: (body.proposals ?? []).map((item) => ({
+        url: String(item.url),
+        score: Number(item.score ?? 0),
+        metadata: item,
+      })),
+      ...(body.domain_evidence ? { domainEvidence: body.domain_evidence } : {}),
+    };
   },
 });
 const assistant = createAssistantModule({

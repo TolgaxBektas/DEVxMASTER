@@ -1,0 +1,1 @@
+ALTER TABLE `ingestion_areas` ADD `incomplete_runs` int DEFAULT 0 NOT NULL;

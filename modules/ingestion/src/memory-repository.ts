@@ -4,6 +4,7 @@ import type {
   IngestionRepository,
   IngestionSource,
   IngestionArea,
+  IngestionAreaInput,
   IngestionSourceVisit,
   OccurrenceReviewResult,
 } from "./repository.js";
@@ -80,14 +81,17 @@ export class MemoryIngestionRepository implements IngestionRepository {
   async listAreas(tenantId: string) {
     return this.areas.filter((area) => area.tenantId === tenantId).sort((a, b) => a.orderIndex - b.orderIndex);
   }
-  async upsertArea(tenantId: string, input: Omit<IngestionArea, "id" | "tenantId" | "createdAt">) {
+  async upsertArea(tenantId: string, input: IngestionAreaInput) {
     const existing = this.areas.find((a) => a.tenantId === tenantId && a.ags === input.ags);
-    if (existing) { Object.assign(existing, input); return existing; }
-    const area = { ...input, id: ++this.areaId, tenantId, createdAt: new Date() };
+    if (existing) {
+      Object.assign(existing, input);
+      return existing;
+    }
+    const area = { ...input, incompleteRuns: input.incompleteRuns ?? 0, id: ++this.areaId, tenantId, createdAt: new Date() };
     this.areas.push(area);
     return area;
   }
-  async updateArea(tenantId: string, areaId: number, input: Partial<Pick<IngestionArea, "status" | "lastRunAt" | "startedAt" | "nextDueAt" | "lastError" | "foundSources" | "municipalityOffset">>) {
+  async updateArea(tenantId: string, areaId: number, input: Partial<Pick<IngestionArea, "status" | "lastRunAt" | "startedAt" | "nextDueAt" | "lastError" | "foundSources" | "municipalityOffset" | "incompleteRuns">>) {
     const area = this.areas.find((a) => a.tenantId === tenantId && a.id === areaId);
     if (!area) throw new Error("Gebiet nicht gefunden");
     Object.assign(area, input);
