@@ -123,6 +123,10 @@ describe("Ingestion-Bestand", () => {
     expect(isPermanentSourceFetchError(
       "archive_fetch_failed: HTTPSConnectionPool: Read timed out",
     )).toBe(false);
+    expect(isPermanentSourceFetchError(
+      "archive_fetch_failed: download_truncated: archive warning; "
+        + "last_retryable_error: live_fetch_failed: connection refused",
+    )).toBe(false);
     expect(isPermanentSourceFetchError("http_503")).toBe(false);
   });
 

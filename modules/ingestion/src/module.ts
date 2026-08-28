@@ -105,6 +105,7 @@ function describeError(error: unknown) {
 }
 
 export function isPermanentSourceFetchError(message: string): boolean {
+  if (/\blast_retryable_error\b/i.test(message)) return false;
   return [
     /\bhttp[_ ]4\d\d\b/i,
     /\bdownload_truncated\b/i,
