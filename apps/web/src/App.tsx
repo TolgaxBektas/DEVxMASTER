@@ -10,6 +10,7 @@ import { crmPages, CrmPage } from "@xmaster-center/module-crm/ui";
 import { systemPages, SystemPage } from "@xmaster-center/module-system/ui";
 import { billingPages, BillingPage } from "@xmaster-center/module-billing/ui";
 import {
+  AreasPage,
   ingestionPages,
   IngestionPage,
   OccurrencesPage,
@@ -68,6 +69,8 @@ const pages: Page[] = [
           ? ReviewPage
           : path === "/ingestion/sources"
           ? SourcesPage
+          : path === "/ingestion/areas"
+          ? AreasPage
           : IngestionPage,
   })),
   ...assistantPages.map(([id, title, path, permission]) => ({
