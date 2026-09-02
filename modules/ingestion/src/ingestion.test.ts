@@ -1646,7 +1646,7 @@ describe("Ingestion-Bestand", () => {
     expect((await repository.getDocument("1", second.document.id)).state).toBe("processed");
   });
 
-  it("weist Dokumente ohne ausreichende Anzeigen oder Seiten sichtbar zurück", async () => {
+  it("weist Dokumente ohne ausreichende Anzeigen sichtbar zurück", async () => {
     const repository = new MemoryIngestionRepository();
     const document = await repository.createUploadedDocument("1", {
       filename: "themenflyer.pdf",
@@ -1684,7 +1684,8 @@ describe("Ingestion-Bestand", () => {
     await job.handle({ documentId: document.document.id }, context("1", { documentId: document.document.id }));
     const rejected = await repository.getDocument("1", document.document.id);
     expect(rejected.state).toBe("rejected");
-    expect(rejected.error).toContain("2 Anzeigen auf 15 Seiten");
+    expect(rejected.error).toContain("2 Anzeigen");
+    expect(rejected.error).toContain("mindestens 3 Anzeigen");
     expect(await repository.listOccurrences("1")).toHaveLength(0);
     expect(published).toHaveLength(0);
   });
@@ -1726,6 +1727,83 @@ describe("Ingestion-Bestand", () => {
     await job.handle({ documentId: document.document.id }, context("1", { documentId: document.document.id }));
     expect((await repository.getDocument("1", document.document.id)).state).toBe("processed");
     expect(await repository.listOccurrences("1")).toHaveLength(3);
+  });
+
+  it("lässt ein zwölfseitiges Mitteilungsblatt mit vier Anzeigen passieren", async () => {
+    const repository = new MemoryIngestionRepository();
+    const document = await repository.createUploadedDocument("1", {
+      filename: "mitteilungsblatt.pdf",
+      sha256: "s".repeat(64),
+      storageKey: "mitteilungsblatt",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "source",
+    });
+    const pages = Array.from({ length: 12 }, (_, index) => ({
+      pageNumber: index + 1,
+      text: "Mitteilungsblatt",
+      imageKey: `page-${index + 1}.png`,
+      classification: "MIXED_CONTENT",
+      adProbability: index < 4 ? 0.9 : 0.1,
+      occurrences: index < 4 ? [{
+        bbox: { x: 0, y: 0, width: 1, height: 1, confidence: 0.9 },
+        imageKey: `ad-${index + 1}.png`,
+        confidence: 0.9,
+        evidence: ["test"],
+        company: `Muster ${index + 1}`,
+        preview: "Telefon",
+      }] : [],
+    }));
+    const module = createIngestionModule({
+      repository,
+      repositoryForTransaction: () => repository,
+      transaction: async (callback) => callback({}),
+      processDocument: async () => pages,
+      publish: async () => undefined,
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.processing.run");
+    if (!job) throw new Error("Verarbeitungsjob fehlt");
+    await job.handle({ documentId: document.document.id }, context("1", { documentId: document.document.id }));
+    expect((await repository.getDocument("1", document.document.id)).state).toBe("processed");
+    expect(await repository.listOccurrences("1")).toHaveLength(4);
+  });
+
+  it("weist ein zwölfseitiges Blatt mit zwei Anzeigen weiterhin zurück", async () => {
+    const repository = new MemoryIngestionRepository();
+    const document = await repository.createUploadedDocument("1", {
+      filename: "kurzes-blatt.pdf",
+      sha256: "t".repeat(64),
+      storageKey: "kurzes-blatt",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "source",
+    });
+    const pages = Array.from({ length: 12 }, (_, index) => ({
+      pageNumber: index + 1,
+      text: "Mitteilungsblatt",
+      imageKey: `page-${index + 1}.png`,
+      classification: "MIXED_CONTENT",
+      adProbability: index < 2 ? 0.9 : 0.1,
+      occurrences: index < 2 ? [{
+        bbox: { x: 0, y: 0, width: 1, height: 1, confidence: 0.9 },
+        imageKey: `ad-${index + 1}.png`,
+        confidence: 0.9,
+        evidence: ["test"],
+        company: `Muster ${index + 1}`,
+        preview: "Telefon",
+      }] : [],
+    }));
+    const module = createIngestionModule({
+      repository,
+      repositoryForTransaction: () => repository,
+      transaction: async (callback) => callback({}),
+      processDocument: async () => pages,
+      publish: async () => undefined,
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.processing.run");
+    if (!job) throw new Error("Verarbeitungsjob fehlt");
+    await job.handle({ documentId: document.document.id }, context("1", { documentId: document.document.id }));
+    expect((await repository.getDocument("1", document.document.id)).state).toBe("rejected");
   });
 
   it("verarbeitet ein Dokument des zweiten Mandanten mit dem Job-Mandanten", async () => {

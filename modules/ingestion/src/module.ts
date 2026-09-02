@@ -28,7 +28,6 @@ import { PUBLISHER_SEED_PAGES } from "./publishers.js";
 import { areaWebsiteSeeds } from "./website-registry.js";
 
 export const MIN_DOCUMENT_ADVERTISEMENTS = 3;
-export const MIN_DOCUMENT_PAGES = 16;
 
 function sameSourceHost(firstUrl: string, secondUrl: string): boolean {
   try {
@@ -804,9 +803,8 @@ export function createIngestionModule(deps: {
                 0,
               );
               const documentGateError = (document.origin === "source" || document.origin.startsWith("source-"))
-                && (pages.length < MIN_DOCUMENT_PAGES
-                || advertisementCount < MIN_DOCUMENT_ADVERTISEMENTS)
-                ? `Dokumenttor abgewiesen: ${advertisementCount} Anzeigen auf ${pages.length} Seiten; erforderlich sind mindestens ${MIN_DOCUMENT_ADVERTISEMENTS} Anzeigen und ${MIN_DOCUMENT_PAGES} Seiten.`
+                && advertisementCount < MIN_DOCUMENT_ADVERTISEMENTS
+                ? `Dokumenttor abgewiesen: ${advertisementCount} Anzeigen auf ${pages.length} Seiten; erforderlich sind mindestens ${MIN_DOCUMENT_ADVERTISEMENTS} Anzeigen.`
                 : null;
               await deps.transaction(async (db) => {
                 const txRepository = deps.repositoryForTransaction?.(db)
