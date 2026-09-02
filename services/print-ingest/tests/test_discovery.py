@@ -252,6 +252,17 @@ def test_publication_requirement_and_threshold():
     assert score_candidate("https://example.org/Seniorenwegweiser.pdf") >= MIN_CANDIDATE_SCORE
 
 
+def test_amtsblatt_and_publisher_signals_satisfy_publication_requirement():
+    assert candidate_rejection_reason("https://stadt.example/amtsblatt.pdf") is None
+    assert candidate_rejection_reason("https://stadt.example/amtsblatt-satzung.pdf").startswith(
+        "Ausschlusssignal: satzung"
+    )
+    rejection = candidate_rejection_reason("https://total-lokal.de/download/broschuere.pdf")
+    assert rejection is not None
+    assert "Kein Publikationsbegriff" not in rejection
+    assert rejection.startswith("Bewertung ")
+
+
 @pytest.mark.parametrize("signal", [
     "satzung", "geschäftsordnung", "ehrungsordnung", "datenschutz",
     "nutzungsbedingungen", "impressum", "formular", "antrag",

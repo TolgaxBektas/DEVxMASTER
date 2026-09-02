@@ -27,6 +27,7 @@ export const MAX_MUNICIPALITY_SEEDS_PER_RUN = 25;
 export function areaWebsiteSeeds(
   ags: string,
   municipalityOffset = 0,
+  seedLimit = MAX_MUNICIPALITY_SEEDS_PER_RUN,
 ): {
   seedPages: string[];
   archiveDomains: string[];
@@ -39,7 +40,10 @@ export function areaWebsiteSeeds(
     .map((website) => website.url);
   const municipalities = websites.filter((website) => website.level === "gemeinde");
   const start = Math.max(0, Math.floor(municipalityOffset));
-  const selected = municipalities.slice(start, start + MAX_MUNICIPALITY_SEEDS_PER_RUN);
+  const limit = seedLimit > 0
+    ? Math.max(1, Math.floor(seedLimit))
+    : MAX_MUNICIPALITY_SEEDS_PER_RUN;
+  const selected = municipalities.slice(start, start + limit);
   return {
     seedPages: [...circlePages, ...selected.map((website) => website.url)],
     archiveDomains: [...circlePages, ...selected.map((website) => website.url)]

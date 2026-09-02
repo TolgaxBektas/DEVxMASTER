@@ -13,7 +13,22 @@ PUBLICATION_TERMS = {
  'gastgeberverzeichnis','vereinsmagazin','festschrift','messekatalog','ausstellerverzeichnis',
  'wegweiser','ratgeber','pflegewegweiser','familienwegweiser',
  'klinikführer','klinikfuehrer','gewerbeverzeichnis','firmenverzeichnis',
+ 'bürgerinformationsbroschüre','buergerinformationsbroschuere',
+ 'informationsbroschüre','informationsbroschuere',
+ 'infobroschüre','infobroschuere','bürgerinfo','buergerinfo',
+ 'bürgerhandbuch','buergerhandbuch','gemeindebroschüre','gemeindebroschuere',
+ 'stadtbroschüre','stadtbroschuere','neubürgerbroschüre','neubuergerbroschuere',
+ 'standortbroschüre','standortbroschuere','wirtschaftsbroschüre','wirtschaftsbroschuere',
+ 'einkaufsführer','einkaufsfuehrer','branchenverzeichnis',
+ 'gästeführer','gaestefuehrer','gästejournal','gaestejournal',
+ 'urlaubsmagazin','freizeitführer','freizeitfuehrer','ortsplan','seniorenkompass',
+ 'pflegeratgeber','familienratgeber','familienbroschüre','familienbroschuere',
+ 'hochzeitsmagazin','amtsblatt','mitteilungsblatt','gemeindeblatt',
 }
+
+PUBLISHER_SIGNALS = (
+    "total-lokal", "mediaprint", "inixmedia", "weka-info", "wekaverlag", "kommunalverlag",
+)
 
 MIN_CANDIDATE_SCORE = 50
 VETO_SIGNALS = (
@@ -87,7 +102,8 @@ def candidate_rejection_reason(
 ) -> str | None:
     text = _match_text(unquote(url) + " " + anchor_text)
     publication_terms = _publication_terms_in(text)
-    if not publication_terms:
+    publisher_signal = any(signal in text for signal in PUBLISHER_SIGNALS)
+    if not publication_terms and not publisher_signal:
         return "Kein Publikationsbegriff in URL oder Ankertext"
     for signal in VETO_SIGNALS:
         if _match_text(signal) in text:
