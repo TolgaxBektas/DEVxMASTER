@@ -405,24 +405,50 @@ export function createIngestionModule(deps: {
         handle: async (payload, context) => {
           const tenantId = jobTenantId(context);
           const now = new Date();
-          const configuredLimit = (payload as { limit?: unknown }).limit;
+          const typedPayload = payload as {
+            limit?: unknown;
+            areaAgs?: unknown;
+            municipalitySeedLimit?: unknown;
+            intensive?: unknown;
+            maxResults?: unknown;
+          };
+          const configuredLimit = typedPayload.limit;
           const limit = typeof configuredLimit === "number" && configuredLimit > 0 ? Math.floor(configuredLimit) : 3;
-          const areas = (await repository.listAreas(tenantId))
-            .filter((area) =>
-              area.level === "district"
-              && (area.status === "pending"
-              || (area.nextDueAt !== null && area.nextDueAt <= now)
-              || (area.status === "running"
+          const requestedAreaAgs = Array.isArray(typedPayload.areaAgs)
+            && typedPayload.areaAgs.length > 0
+            && typedPayload.areaAgs.every((ags): ags is string => typeof ags === "string")
+            ? typedPayload.areaAgs
+            : null;
+          const allDistricts = (await repository.listAreas(tenantId))
+            .filter((area) => area.level === "district");
+          const sortedAreas = (requestedAreaAgs
+            ? allDistricts.filter((area) => requestedAreaAgs.includes(area.ags))
+            : allDistricts.filter((area) => {
+              if (area.status === "pending") return true;
+              if (area.nextDueAt !== null && area.nextDueAt <= now) return true;
+              return area.status === "running"
                 && (area.startedAt === null
-                  || area.startedAt.getTime() <= now.getTime() - 24 * 86_400_000))),
-            )
-            .sort((a, b) => a.orderIndex - b.orderIndex)
-            .slice(0, limit);
+                  || area.startedAt.getTime() <= now.getTime() - 24 * 86_400_000);
+            }))
+            .sort((a, b) => a.orderIndex - b.orderIndex);
+          const areas = requestedAreaAgs ? sortedAreas : sortedAreas.slice(0, limit);
+          const configuredSeedLimit = typedPayload.municipalitySeedLimit;
+          const municipalitySeedLimit = typeof configuredSeedLimit === "number"
+            ? configuredSeedLimit
+            : undefined;
+          const configuredMaxResults = typedPayload.maxResults;
+          const maxResults = typeof configuredMaxResults === "number" && configuredMaxResults > 0
+            ? Math.floor(configuredMaxResults)
+            : 40;
           for (const area of areas) {
             await repository.updateArea(tenantId, area.id, { status: "running", startedAt: now, lastError: null });
             try {
               if (!deps.discoverProposals) throw new Error("Quellensuche ist nicht konfiguriert");
-              const websiteSelection = areaWebsiteSeeds(area.ags, area.municipalityOffset ?? 0);
+              const websiteSelection = areaWebsiteSeeds(
+                area.ags,
+                area.municipalityOffset ?? 0,
+                municipalitySeedLimit,
+              );
               const heartbeatFn = (context as { heartbeat?: () => Promise<boolean> }).heartbeat;
               const heartbeat = heartbeatFn
                 ? setInterval(() => { void heartbeatFn(); }, 30_000)
@@ -435,8 +461,14 @@ export function createIngestionModule(deps: {
                     ...websiteSelection.seedPages,
                   ],
                   archiveDomains: websiteSelection.archiveDomains,
-                  searchTerms: areaSearchTerms(area.name, area.level, undefined, area.kind),
-                  maxResults: 40,
+                  searchTerms: areaSearchTerms(
+                    area.name,
+                    area.level,
+                    undefined,
+                    area.kind,
+                    { intensive: typedPayload.intensive === true },
+                  ),
+                  maxResults,
                   areaName: area.name,
                 });
               } finally {

@@ -24,4 +24,19 @@ describe("Gebietssuchbegriffe", () => {
     expect(areaSearchTerms("Berlin", "state", 2026, "Bundesland"))
       .not.toContain("Seniorenwegweiser Bundesland Berlin");
   });
+
+  it("erweitert die Suchbegriffe im intensiven Modus", () => {
+    const terms = areaSearchTerms(
+      "Kitzingen",
+      "district",
+      2026,
+      "Landkreis",
+      { intensive: true },
+    );
+    expect(terms).toContain("Bürgerinformationsbroschüre Landkreis Kitzingen");
+    expect(terms).toContain("mit freundlicher Unterstützung der Inserenten Kitzingen");
+    expect(terms.length).toBeGreaterThan(24);
+    expect(terms.length).toBeLessThanOrEqual(96);
+    expect(new Set(terms).size).toBe(terms.length);
+  });
 });

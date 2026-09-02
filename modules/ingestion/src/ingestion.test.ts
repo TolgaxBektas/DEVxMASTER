@@ -313,6 +313,70 @@ describe("Ingestion-Bestand", () => {
     expect((await repository.listAreas("1"))[0]?.municipalityOffset).toBe(50);
   });
 
+  it("erlaubt für die Intensivsuche ein größeres Gemeinde-Seed-Limit", () => {
+    const register = websiteRegister().websites;
+    const grouped = new Map<string, typeof register>();
+    for (const website of register) {
+      const current = grouped.get(website.ags) ?? [];
+      current.push(website);
+      grouped.set(website.ags, current);
+    }
+    const ags = [...grouped.entries()].find(([, websites]) =>
+      websites.filter((website) => website.level === "gemeinde").length > 25
+    )?.[0];
+    if (!ags) throw new Error("Kein Gebiet mit genügend Gemeindewebsites");
+
+    expect(areaWebsiteSeeds(ags, 0, 500).municipalityCount).toBeGreaterThan(25);
+    expect(areaWebsiteSeeds(ags, 0).seedPages).toEqual(areaWebsiteSeeds(ags, 0, 25).seedPages);
+    expect(areaWebsiteSeeds(ags, 0, 0).seedPages).toEqual(areaWebsiteSeeds(ags, 0).seedPages);
+  });
+
+  it("führt mit areaAgs genau die angeforderten Gebiete unabhängig von ihrer Fälligkeit aus", async () => {
+    const repository = new MemoryIngestionRepository();
+    await repository.upsertArea("1", {
+      level: "district", ags: "09675", name: "Kitzingen", stateName: "Bayern",
+      kind: "Landkreis", orderIndex: 1, status: "done", lastRunAt: new Date(),
+      startedAt: null, nextDueAt: new Date(Date.now() + 86_400_000), lastError: null, foundSources: 0,
+    });
+    await repository.upsertArea("1", {
+      level: "district", ags: "01001", name: "Nicht angefordert", stateName: "Bayern",
+      kind: "Landkreis", orderIndex: 2, status: "pending", lastRunAt: null,
+      startedAt: null, nextDueAt: null, lastError: null, foundSources: 0,
+    });
+    const searched: string[] = [];
+    let receivedTerms: string[] = [];
+    let receivedMaxResults = 0;
+    const module = createIngestionModule({
+      repository,
+      publish: async () => undefined,
+      enqueue: async () => undefined,
+      discoverProposals: async ({ areaName, searchTerms, maxResults }) => {
+        searched.push(areaName ?? "");
+        receivedTerms = searchTerms;
+        receivedMaxResults = maxResults;
+        return [];
+      },
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.discovery.run");
+    if (!job) throw new Error("Gebietssuchjob fehlt");
+
+    await job.handle({
+      areaAgs: ["09675"],
+      limit: 1,
+      municipalitySeedLimit: 500,
+      intensive: true,
+      maxResults: 17,
+    }, context("1", {}));
+
+    expect(searched).toEqual(["Kitzingen"]);
+    expect(receivedTerms).toContain("Bürgerinformationsbroschüre Landkreis Kitzingen");
+    expect(receivedMaxResults).toBe(17);
+    expect((await repository.listAreas("1")).find((area) => area.ags === "09675")?.status)
+      .toBe("done");
+    expect((await repository.listAreas("1")).find((area) => area.ags === "01001")?.status)
+      .toBe("pending");
+  });
+
   it("markiert eine Quelle nach drei Fehlern als nicht erreichbar und setzt den Zähler bei Erfolg zurück", async () => {
     const repository = new MemoryIngestionRepository();
     const source = await repository.createSource("1", {
