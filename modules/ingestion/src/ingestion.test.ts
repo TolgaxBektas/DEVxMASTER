@@ -377,6 +377,124 @@ describe("Ingestion-Bestand", () => {
       .toBe("pending");
   });
 
+  it("gibt Quellen des Kommunalregisters automatisch frei und ruft sie ab", async () => {
+    const repository = new MemoryIngestionRepository();
+    const website = websiteRegister().websites.find((item) => item.level === "kreis");
+    if (!website) throw new Error("Keine Kreiswebsite im Register");
+    const host = new URL(website.url).hostname.replace(/^www\./, "");
+    const area = await repository.upsertArea("1", {
+      level: "district", ags: website.ags, name: website.name, stateName: "Testland",
+      kind: "Landkreis", orderIndex: 1, status: "pending", lastRunAt: null,
+      startedAt: null, nextDueAt: null, lastError: null, foundSources: 0,
+    });
+    const registeredUrl = new URL("/broschuere.pdf", website.url).toString();
+    const subdomainUrl = `https://tourismus.${host}/heft.pdf`;
+    const foreignUrl = "https://fremd.invalid/heft.pdf";
+    const enqueued: Array<{ name: string; payload: unknown }> = [];
+    const module = createIngestionModule({
+      repository,
+      publish: async () => undefined,
+      enqueue: async (item) => { enqueued.push(item); },
+      discoverProposals: async () => [
+        { url: registeredUrl, score: 80, metadata: {} },
+        { url: subdomainUrl, score: 80, metadata: {} },
+        { url: foreignUrl, score: 80, metadata: {} },
+      ],
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.discovery.run");
+    if (!job) throw new Error("Gebietssuchjob fehlt");
+
+    await job.handle({ areaAgs: [area.ags] }, context("1", {}));
+
+    const sources = await repository.listSources("1");
+    const registeredSources = sources.filter((source) => source.url !== foreignUrl);
+    expect(registeredSources).toHaveLength(2);
+    for (const source of registeredSources) {
+      expect(source).toMatchObject({ status: "approved", approvedBy: "Ingestion-Register" });
+    }
+    expect((await repository.getSource("1", sources.find((source) => source.url === foreignUrl)!.id)))
+      .toMatchObject({ status: "proposed", approvedBy: null });
+    const fetchJobs = enqueued.filter((item) => item.name === "ingestion.source.fetch");
+    expect(fetchJobs).toHaveLength(2);
+    expect(fetchJobs.map((item) => (item.payload as { sourceId: number }).sourceId).sort())
+      .toEqual(registeredSources.map((source) => source.id).sort());
+  });
+
+  it("gibt bestehende Registervorschläge eines Gebiets automatisch frei", async () => {
+    const repository = new MemoryIngestionRepository();
+    const website = websiteRegister().websites.find((item) => item.level === "kreis");
+    if (!website) throw new Error("Keine Kreiswebsite im Register");
+    const host = new URL(website.url).hostname.replace(/^www\./, "");
+    const area = await repository.upsertArea("1", {
+      level: "district", ags: website.ags, name: website.name, stateName: "Testland",
+      kind: "Landkreis", orderIndex: 1, status: "pending", lastRunAt: null,
+      startedAt: null, nextDueAt: null, lastError: null, foundSources: 0,
+    });
+    const registeredSource = await repository.createSource("1", {
+      url: `https://${host}/alt.pdf`, score: 80, metadata: {}, areaId: area.id,
+    });
+    const foreignSource = await repository.createSource("1", {
+      url: "https://fremd.invalid/alt.pdf", score: 80, metadata: {}, areaId: area.id,
+    });
+    const enqueued: Array<{ name: string; payload: unknown }> = [];
+    const module = createIngestionModule({
+      repository,
+      publish: async () => undefined,
+      enqueue: async (item) => { enqueued.push(item); },
+      discoverProposals: async () => [],
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.discovery.run");
+    if (!job) throw new Error("Gebietssuchjob fehlt");
+
+    await job.handle({ areaAgs: [area.ags] }, context("1", {}));
+
+    expect(await repository.getSource("1", registeredSource.id)).toMatchObject({
+      status: "approved",
+      approvedBy: "Ingestion-Register",
+    });
+    expect(await repository.getSource("1", foreignSource.id)).toMatchObject({
+      status: "proposed",
+      approvedBy: null,
+    });
+    expect(enqueued.filter((item) => item.name === "ingestion.source.fetch")).toEqual([
+      { name: "ingestion.source.fetch", tenantId: "1", payload: { sourceId: registeredSource.id } },
+    ]);
+  });
+
+  it("reiht bereits freigegebene Quellen bei einem erneuten Lauf nicht erneut ein", async () => {
+    const repository = new MemoryIngestionRepository();
+    const website = websiteRegister().websites.find((item) => item.level === "kreis");
+    if (!website) throw new Error("Keine Kreiswebsite im Register");
+    const area = await repository.upsertArea("1", {
+      level: "district", ags: website.ags, name: website.name, stateName: "Testland",
+      kind: "Landkreis", orderIndex: 1, status: "pending", lastRunAt: null,
+      startedAt: null, nextDueAt: null, lastError: null, foundSources: 0,
+    });
+    const source = await repository.createSource("1", {
+      url: new URL("/bereits-freigegeben.pdf", website.url).toString(),
+      score: 80,
+      metadata: {},
+      areaId: area.id,
+    });
+    await repository.updateSource("1", source.id, {
+      status: "approved",
+      approvedBy: "Ingestion-Register",
+    });
+    const enqueued: Array<{ name: string; payload: unknown }> = [];
+    const module = createIngestionModule({
+      repository,
+      publish: async () => undefined,
+      enqueue: async (item) => { enqueued.push(item); },
+      discoverProposals: async () => [],
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.discovery.run");
+    if (!job) throw new Error("Gebietssuchjob fehlt");
+
+    await job.handle({ areaAgs: [area.ags] }, context("1", {}));
+
+    expect(enqueued.filter((item) => item.name === "ingestion.source.fetch")).toHaveLength(0);
+  });
+
   it("markiert eine Quelle nach drei Fehlern als nicht erreichbar und setzt den Zähler bei Erfolg zurück", async () => {
     const repository = new MemoryIngestionRepository();
     const source = await repository.createSource("1", {

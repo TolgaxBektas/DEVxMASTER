@@ -24,6 +24,30 @@ const register = JSON.parse(readFileSync(
 
 export const MAX_MUNICIPALITY_SEEDS_PER_RUN = 25;
 
+function registryHost(url: string): string | null {
+  try {
+    return new URL(url).hostname.toLocaleLowerCase("de-DE").replace(/^www\./, "");
+  } catch {
+    return null;
+  }
+}
+
+const registeredHosts = new Set(
+  register.websites
+    .map((website) => registryHost(website.url))
+    .filter((host): host is string => host !== null),
+);
+
+export function isRegisteredMunicipalUrl(url: string): boolean {
+  const host = registryHost(url);
+  if (host === null) return false;
+  if (registeredHosts.has(host)) return true;
+  for (const known of registeredHosts) {
+    if (host.endsWith(`.${known}`)) return true;
+  }
+  return false;
+}
+
 export function areaWebsiteSeeds(
   ags: string,
   municipalityOffset = 0,
@@ -47,13 +71,7 @@ export function areaWebsiteSeeds(
   return {
     seedPages: [...circlePages, ...selected.map((website) => website.url)],
     archiveDomains: [...circlePages, ...selected.map((website) => website.url)]
-      .map((url) => {
-        try {
-          return new URL(url).hostname.toLocaleLowerCase("de-DE").replace(/^www\./, "");
-        } catch {
-          return null;
-        }
-      })
+      .map((url) => registryHost(url))
       .filter((host): host is string => host !== null),
     municipalityCount: selected.length,
     nextMunicipalityOffset: start + selected.length,
