@@ -1,5 +1,6 @@
 import { unzipSync } from "fflate";
 import ExcelJS from "exceljs";
+import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { NoopStorage } from "@xmaster-center/integrations";
 import { MemoryIngestionRepository } from "./memory-repository.js";
@@ -8,6 +9,7 @@ import {
   createOccurrenceExportZip,
   occurrenceExportHeaders,
   attachOccurrenceExportImages,
+  writeOccurrenceExportZip,
 } from "./rest.js";
 
 function seedRepository() {
@@ -199,5 +201,33 @@ describe("Fundstellen-Export", () => {
     ]);
     expect(sheet?.getRow(2).getCell(1).value).toBe("Muster GmbH");
     expect(sheet?.getRow(2).getCell(occurrenceExportHeaders.indexOf("Fundstelle-ID") + 1).value).toBe(11);
+  });
+
+  it("streamt den ZIP-Export und behält die Buffer-API bei", async () => {
+    const rows = await buildOccurrenceExportRows(seedRepository(), "1", { status: "detected" });
+    const storage = new NoopStorage();
+    await storage.put("tenants/1/ad.png", Buffer.from("bild"));
+    const streamed = new PassThrough();
+    const chunks: Buffer[] = [];
+    streamed.on("data", (chunk: Buffer) => chunks.push(chunk));
+    const streamFinished = new Promise<void>((resolve, reject) => {
+      streamed.once("end", resolve);
+      streamed.once("error", reject);
+    });
+
+    const bufferArchive = await createOccurrenceExportZip(rows, storage);
+    await writeOccurrenceExportZip(rows, storage, streamed);
+    await streamFinished;
+
+    const streamedFiles = unzipSync(Buffer.concat(chunks));
+    const bufferFiles = unzipSync(bufferArchive);
+    expect(Object.keys(streamedFiles).sort()).toEqual([
+      "anzeigen.xlsx",
+      "bilder/11-Muster_GmbH.png",
+    ]);
+    expect(Object.keys(bufferFiles).sort()).toEqual(Object.keys(streamedFiles).sort());
+    for (const name of Object.keys(streamedFiles)) {
+      expect(streamedFiles[name]).toEqual(bufferFiles[name]);
+    }
   });
 });
