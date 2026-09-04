@@ -291,24 +291,6 @@ export async function writeOccurrenceExportZip(
 ): Promise<void> {
   const imagePathIndex = occurrenceExportHeaders.indexOf("Bilddatei");
   if (imagePathIndex < 0) throw new Error("Exportspalte Bilddatei fehlt");
-  const availableImages = new Set<string>();
-  for (const row of rows) {
-    if (!row.imageKey) continue;
-    const occurrenceImage = row.sourceImageKey
-      ? await storage.get(row.sourceImageKey)
-      : null;
-    if (!occurrenceImage) {
-      row.values[imagePathIndex] = "";
-      continue;
-    }
-    availableImages.add(row.imageKey);
-  }
-
-  const workbook = new ExcelJS.Workbook();
-  const sheet = workbook.addWorksheet("Anzeigen");
-  sheet.addRow([...occurrenceExportHeaders]);
-  for (const row of rows) sheet.addRow(row.values);
-  const workbookBytes = Buffer.from(await workbook.xlsx.writeBuffer());
   const archive = archiver("zip", { zlib: { level: 9 } });
   const finished = new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -326,14 +308,21 @@ export async function writeOccurrenceExportZip(
     });
   });
   archive.pipe(destination);
-  archive.append(workbookBytes, { name: "anzeigen.xlsx" });
   for (const row of rows) {
-    if (!row.imageKey || !availableImages.has(row.imageKey) || !row.sourceImageKey) continue;
+    if (!row.imageKey || !row.sourceImageKey) continue;
     const occurrenceImage = await storage.get(row.sourceImageKey);
     if (occurrenceImage) {
       archive.append(Buffer.from(occurrenceImage), { name: row.imageKey });
+    } else {
+      row.values[imagePathIndex] = "";
     }
   }
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Anzeigen");
+  sheet.addRow([...occurrenceExportHeaders]);
+  for (const row of rows) sheet.addRow(row.values);
+  const workbookBytes = Buffer.from(await workbook.xlsx.writeBuffer());
+  archive.append(workbookBytes, { name: "anzeigen.xlsx" });
   await archive.finalize();
   await finished;
 }
