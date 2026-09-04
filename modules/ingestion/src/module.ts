@@ -14,7 +14,7 @@ import { ingestionSchema } from "./schema.js";
 import { createIngestionRouter } from "./router.js";
 import { MemoryIngestionRepository } from "./memory-repository.js";
 import { createDrizzleIngestionRepository } from "./drizzle-repository.js";
-import { occurrenceFingerprint, type IngestionRepository } from "./repository.js";
+import { occurrenceFingerprint, type IngestionRepository, type IngestionSource } from "./repository.js";
 import { registerReviewImageRoutes, registerUploadRoute } from "./rest.js";
 import { persistDocumentBytes } from "./rest.js";
 import { deriveDocumentClassification } from "./classification.js";
@@ -442,6 +442,24 @@ export function createIngestionModule(deps: {
           for (const area of areas) {
             await repository.updateArea(tenantId, area.id, { status: "running", startedAt: now, lastError: null });
             try {
+              const approveRegisteredSource = async (source: IngestionSource): Promise<boolean> => {
+                if (source.status === "approved" || !isRegisteredMunicipalUrl(source.url)) return false;
+                await repository.updateSource(tenantId, source.id, {
+                  status: "approved",
+                  approvedBy: "Ingestion-Register",
+                  approvedAt: now,
+                  nextCheckAt: new Date(now.getTime() + 90 * 86_400_000),
+                  lastError: null,
+                });
+                if (deps.enqueue) {
+                  await deps.enqueue({
+                    name: "ingestion.source.fetch",
+                    tenantId,
+                    payload: { sourceId: source.id },
+                  });
+                }
+                return true;
+              };
               if (!deps.discoverProposals) throw new Error("Quellensuche ist nicht konfiguriert");
               const websiteSelection = areaWebsiteSeeds(
                 area.ags,
@@ -493,26 +511,23 @@ export function createIngestionModule(deps: {
                     await repository.updateSource(tenantId, source.id, { areaId: area.id });
                     foundSources += 1;
                   }
-                  if (source.status !== "approved" && isRegisteredMunicipalUrl(source.url)) {
-                    await repository.updateSource(tenantId, source.id, {
-                      status: "approved",
-                      approvedBy: "Ingestion-Register",
-                      approvedAt: now,
-                      nextCheckAt: new Date(now.getTime() + 90 * 86_400_000),
-                      lastError: null,
-                    });
-                    if (deps.enqueue) {
-                      await deps.enqueue({
-                        name: "ingestion.source.fetch",
-                        tenantId,
-                        payload: { sourceId: source.id },
-                      });
-                    }
-                  }
+                  await approveRegisteredSource(source);
                 } catch (error) {
                   sourceErrors.push(
                     `${proposal.url}: ${describeError(error)}`,
                   );
+                }
+              }
+              const existingSources = await repository.listSources(tenantId);
+              for (const source of existingSources) {
+                if (source.areaId === area.id && source.status === "proposed") {
+                  try {
+                    await approveRegisteredSource(source);
+                  } catch (error) {
+                    sourceErrors.push(
+                      `${source.url}: ${describeError(error)}`,
+                    );
+                  }
                 }
               }
               const nextIncompleteRuns = incompleteHosts.length > 0
