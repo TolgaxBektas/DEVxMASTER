@@ -6,7 +6,7 @@ from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel
-from sqlalchemy import or_, select
+from sqlalchemy import and_, case, func, or_, select
 
 from app.api.auth import require_compat_auth
 from app.api.dependencies import session_dependency, storage_dependency
@@ -52,6 +52,24 @@ def _item_query():
         )
         .outerjoin(Document, Page.document_id == Document.id)
         .outerjoin(Company, AdOccurrence.company_id == Company.id)
+    )
+
+
+def _restoration_order():
+    has_manifest = and_(
+        AdOccurrence.restoration_manifest_json.is_not(None),
+        func.trim(AdOccurrence.restoration_manifest_json) != "",
+        func.trim(AdOccurrence.restoration_manifest_json) != "{}",
+    )
+    return case(
+        (
+            or_(
+                AdOccurrence.restoration_path.is_not(None),
+                has_manifest,
+            ),
+            0,
+        ),
+        else_=1,
     )
 
 
@@ -276,7 +294,7 @@ def open_reviews(
     query = (
         _item_query()
         .where(ReviewItem.status == "pending")
-        .order_by(ReviewItem.id)
+        .order_by(_restoration_order(), ReviewItem.id)
     )
     if data_source is not None:
         query = query.where(_source_clause(data_source))
@@ -341,7 +359,7 @@ def decide_review(
         _item_query()
         .where(ReviewItem.status == "pending", ReviewItem.id != item.id)
         .where(_source_clause(current_source))
-        .order_by(ReviewItem.id)
+        .order_by(_restoration_order(), ReviewItem.id)
     )
     next_row = session.execute(next_query).first()
     next_item = next_row[0].id if next_row else None
