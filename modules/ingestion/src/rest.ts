@@ -1,7 +1,7 @@
 import type { Express, Request, Response } from "express";
 import Busboy from "busboy";
 import { createHash } from "node:crypto";
-import { PassThrough } from "node:stream";
+import { PassThrough, type Writable } from "node:stream";
 import archiver from "archiver";
 import ExcelJS from "exceljs";
 import type { Storage } from "@xmaster-center/integrations";
@@ -273,12 +273,6 @@ export async function createOccurrenceExportZip(
   rows: OccurrenceExportRow[],
   storage: Storage,
 ) {
-  const imageEntries = await attachOccurrenceExportImages(rows, storage);
-  const workbook = new ExcelJS.Workbook();
-  const sheet = workbook.addWorksheet("Anzeigen");
-  sheet.addRow([...occurrenceExportHeaders]);
-  for (const row of rows) sheet.addRow(row.values);
-  const workbookBytes = Buffer.from(await workbook.xlsx.writeBuffer());
   const stream = new PassThrough();
   const chunks: Buffer[] = [];
   const result = new Promise<Buffer>((resolve, reject) => {
@@ -286,19 +280,51 @@ export async function createOccurrenceExportZip(
     stream.on("end", () => resolve(Buffer.concat(chunks)));
     stream.on("error", reject);
   });
-  const archive = archiver("zip", { zlib: { level: 9 } });
-  archive.on("error", rejectArchive);
-  archive.pipe(stream);
-  archive.append(workbookBytes, { name: "anzeigen.xlsx" });
-  for (const image of imageEntries) {
-    archive.append(Buffer.from(image.bytes), { name: image.name });
-  }
-  await archive.finalize();
+  await writeOccurrenceExportZip(rows, storage, stream);
   return result;
+}
 
-  function rejectArchive(error: Error) {
-    stream.destroy(error);
+export async function writeOccurrenceExportZip(
+  rows: OccurrenceExportRow[],
+  storage: Storage,
+  destination: Writable,
+): Promise<void> {
+  const imagePathIndex = occurrenceExportHeaders.indexOf("Bilddatei");
+  if (imagePathIndex < 0) throw new Error("Exportspalte Bilddatei fehlt");
+  const archive = archiver("zip", { zlib: { level: 9 } });
+  const finished = new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+    archive.once("error", fail);
+    destination.once("error", fail);
+    destination.once("finish", () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    });
+  });
+  archive.pipe(destination);
+  for (const row of rows) {
+    if (!row.imageKey || !row.sourceImageKey) continue;
+    const occurrenceImage = await storage.get(row.sourceImageKey);
+    if (occurrenceImage) {
+      archive.append(Buffer.from(occurrenceImage), { name: row.imageKey });
+    } else {
+      row.values[imagePathIndex] = "";
+    }
   }
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Anzeigen");
+  sheet.addRow([...occurrenceExportHeaders]);
+  for (const row of rows) sheet.addRow(row.values);
+  const workbookBytes = Buffer.from(await workbook.xlsx.writeBuffer());
+  archive.append(workbookBytes, { name: "anzeigen.xlsx" });
+  await archive.finalize();
+  await finished;
 }
 
 export async function attachOccurrenceExportImages(
@@ -351,13 +377,16 @@ async function handleOccurrenceExport(
       ...(documentId === undefined ? {} : { documentId }),
       ...(status === undefined ? {} : { status }),
     });
-    const archive = await createOccurrenceExportZip(rows, deps.storage);
     response.setHeader("Content-Type", "application/zip");
     response.setHeader("Content-Disposition", 'attachment; filename="anzeigen.zip"');
-    response.send(archive);
+    await writeOccurrenceExportZip(rows, deps.storage, response);
   } catch (error) {
     console.error("[ingestion] occurrence export failed", error);
-    response.status(500).json({ code: "INTERNAL_ERROR", message: "Export konnte nicht erstellt werden" });
+    if (response.headersSent || response.writableEnded) {
+      response.destroy(error instanceof Error ? error : new Error(String(error)));
+    } else {
+      response.status(500).json({ code: "INTERNAL_ERROR", message: "Export konnte nicht erstellt werden" });
+    }
   }
 }
 

@@ -1,13 +1,16 @@
 import { unzipSync } from "fflate";
 import ExcelJS from "exceljs";
+import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { NoopStorage } from "@xmaster-center/integrations";
+import type { Storage } from "@xmaster-center/integrations";
 import { MemoryIngestionRepository } from "./memory-repository.js";
 import {
   buildOccurrenceExportRows,
   createOccurrenceExportZip,
   occurrenceExportHeaders,
   attachOccurrenceExportImages,
+  writeOccurrenceExportZip,
 } from "./rest.js";
 
 function seedRepository() {
@@ -199,5 +202,61 @@ describe("Fundstellen-Export", () => {
     ]);
     expect(sheet?.getRow(2).getCell(1).value).toBe("Muster GmbH");
     expect(sheet?.getRow(2).getCell(occurrenceExportHeaders.indexOf("Fundstelle-ID") + 1).value).toBe(11);
+  });
+
+  it("streamt den ZIP-Export, behandelt fehlende Bilder und behält die Buffer-API bei", async () => {
+    const rows = await buildOccurrenceExportRows(seedRepository(), "1");
+    const missingRow = rows[1];
+    if (!missingRow) throw new Error("Testfundstelle fehlt");
+    missingRow.imageKey = "bilder/12-Ohne_Bild.png";
+    missingRow.sourceImageKey = "tenants/1/missing.png";
+    missingRow.values[occurrenceExportHeaders.indexOf("Bilddatei")] = missingRow.imageKey;
+
+    const storage = new NoopStorage();
+    await storage.put("tenants/1/ad.png", Buffer.from("bild"));
+    const getCalls = new Map<string, number>();
+    const get = storage.get.bind(storage);
+    const countedStorage: Storage = {
+      put: storage.put.bind(storage),
+      get: async (key) => {
+        getCalls.set(key, (getCalls.get(key) ?? 0) + 1);
+        return get(key);
+      },
+      presignGet: storage.presignGet.bind(storage),
+    };
+    const streamed = new PassThrough();
+    const chunks: Buffer[] = [];
+    streamed.on("data", (chunk: Buffer) => chunks.push(chunk));
+    const streamFinished = new Promise<void>((resolve, reject) => {
+      streamed.once("end", resolve);
+      streamed.once("error", reject);
+    });
+
+    const bufferArchive = await createOccurrenceExportZip(rows, storage);
+    getCalls.clear();
+    await writeOccurrenceExportZip(rows, countedStorage, streamed);
+    await streamFinished;
+
+    const streamedFiles = unzipSync(Buffer.concat(chunks));
+    const bufferFiles = unzipSync(bufferArchive);
+    expect(Object.keys(streamedFiles).sort()).toEqual([
+      "anzeigen.xlsx",
+      "bilder/11-Muster_GmbH.png",
+    ]);
+    expect(getCalls).toEqual(new Map([
+      ["tenants/1/ad.png", 1],
+      ["tenants/1/missing.png", 1],
+    ]));
+    const workbook = new ExcelJS.Workbook();
+    const streamedWorkbook = streamedFiles["anzeigen.xlsx"];
+    if (!streamedWorkbook) throw new Error("anzeigen.xlsx fehlt im Streaming-Export");
+    await workbook.xlsx.load(streamedWorkbook as unknown as Parameters<typeof workbook.xlsx.load>[0]);
+    expect(workbook.getWorksheet("Anzeigen")?.getRow(3).getCell(
+      occurrenceExportHeaders.indexOf("Bilddatei") + 1,
+    ).value).toBe("");
+    expect(Object.keys(bufferFiles).sort()).toEqual(Object.keys(streamedFiles).sort());
+    for (const name of Object.keys(streamedFiles)) {
+      expect(streamedFiles[name]).toEqual(bufferFiles[name]);
+    }
   });
 });
