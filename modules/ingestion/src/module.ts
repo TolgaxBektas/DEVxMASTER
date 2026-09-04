@@ -452,11 +452,21 @@ export function createIngestionModule(deps: {
                   lastError: null,
                 });
                 if (deps.enqueue) {
-                  await deps.enqueue({
-                    name: "ingestion.source.fetch",
-                    tenantId,
-                    payload: { sourceId: source.id },
-                  });
+                  try {
+                    await deps.enqueue({
+                      name: "ingestion.source.fetch",
+                      tenantId,
+                      payload: { sourceId: source.id },
+                    });
+                  } catch (error) {
+                    await repository.updateSource(tenantId, source.id, {
+                      status: source.status,
+                      approvedBy: source.approvedBy,
+                      approvedAt: source.approvedAt,
+                      nextCheckAt: source.nextCheckAt,
+                    });
+                    throw error;
+                  }
                 }
                 return true;
               };
