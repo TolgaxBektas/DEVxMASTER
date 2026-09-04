@@ -25,7 +25,7 @@ import type { PifReviewClient } from "./review-client.js";
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { areaSearchTerms } from "./search-terms.js";
 import { PUBLISHER_SEED_PAGES } from "./publishers.js";
-import { areaWebsiteSeeds } from "./website-registry.js";
+import { areaWebsiteSeeds, isRegisteredMunicipalUrl } from "./website-registry.js";
 
 export const MIN_DOCUMENT_ADVERTISEMENTS = 3;
 
@@ -492,6 +492,22 @@ export function createIngestionModule(deps: {
                   else if (source.areaId === null) {
                     await repository.updateSource(tenantId, source.id, { areaId: area.id });
                     foundSources += 1;
+                  }
+                  if (source.status !== "approved" && isRegisteredMunicipalUrl(source.url)) {
+                    await repository.updateSource(tenantId, source.id, {
+                      status: "approved",
+                      approvedBy: "Ingestion-Register",
+                      approvedAt: now,
+                      nextCheckAt: new Date(now.getTime() + 90 * 86_400_000),
+                      lastError: null,
+                    });
+                    if (deps.enqueue) {
+                      await deps.enqueue({
+                        name: "ingestion.source.fetch",
+                        tenantId,
+                        payload: { sourceId: source.id },
+                      });
+                    }
                   }
                 } catch (error) {
                   sourceErrors.push(
