@@ -495,6 +495,119 @@ describe("Ingestion-Bestand", () => {
     expect(enqueued.filter((item) => item.name === "ingestion.source.fetch")).toHaveLength(0);
   });
 
+  it("stellt die Registerquelle bei einem fehlgeschlagenen Abrufjob zurück", async () => {
+    const repository = new MemoryIngestionRepository();
+    const website = websiteRegister().websites.find((item) => item.level === "kreis");
+    if (!website) throw new Error("Keine Kreiswebsite im Register");
+    const area = await repository.upsertArea("1", {
+      level: "district", ags: website.ags, name: website.name, stateName: "Testland",
+      kind: "Landkreis", orderIndex: 1, status: "pending", lastRunAt: null,
+      startedAt: null, nextDueAt: null, lastError: null, foundSources: 0,
+    });
+    const source = await repository.createSource("1", {
+      url: new URL("/enqueue-fehler.pdf", website.url).toString(),
+      score: 80,
+      metadata: {},
+      areaId: area.id,
+    });
+    await repository.updateSource("1", source.id, { lastError: "http_404" });
+    const enqueued: Array<{ name: string; payload: unknown }> = [];
+    let failFetch = true;
+    const module = createIngestionModule({
+      repository,
+      publish: async () => undefined,
+      enqueue: async (item) => {
+        if (item.name === "ingestion.source.fetch" && failFetch) {
+          failFetch = false;
+          throw new Error("Abrufjob konnte nicht eingereiht werden");
+        }
+        enqueued.push(item);
+      },
+      discoverProposals: async () => [],
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.discovery.run");
+    if (!job) throw new Error("Gebietssuchjob fehlt");
+
+    await job.handle({ areaAgs: [area.ags] }, context("1", {}));
+
+    expect((await repository.listAreas("1"))[0]).toMatchObject({ status: "done" });
+    expect(await repository.getSource("1", source.id)).toMatchObject({
+      status: "proposed",
+      approvedBy: null,
+      lastError: "http_404",
+    });
+
+    await job.handle({ areaAgs: [area.ags] }, context("1", {}));
+
+    expect(await repository.getSource("1", source.id)).toMatchObject({
+      status: "approved",
+      approvedBy: "Ingestion-Register",
+    });
+    expect(enqueued.filter((item) => item.name === "ingestion.source.fetch")).toEqual([
+      { name: "ingestion.source.fetch", tenantId: "1", payload: { sourceId: source.id } },
+    ]);
+  });
+
+  it("reiht verwaiste Registerfreigaben nach 24 Stunden erneut ein", async () => {
+    const repository = new MemoryIngestionRepository();
+    const website = websiteRegister().websites.find((item) => item.level === "kreis");
+    if (!website) throw new Error("Keine Kreiswebsite im Register");
+    const area = await repository.upsertArea("1", {
+      level: "district", ags: website.ags, name: website.name, stateName: "Testland",
+      kind: "Landkreis", orderIndex: 1, status: "pending", lastRunAt: null,
+      startedAt: null, nextDueAt: null, lastError: null, foundSources: 0,
+    });
+    const staleSource = await repository.createSource("1", {
+      url: new URL("/verwaist.pdf", website.url).toString(),
+      score: 80,
+      metadata: {},
+      areaId: area.id,
+    });
+    const recentSource = await repository.createSource("1", {
+      url: new URL("/frisch-freigegeben.pdf", website.url).toString(),
+      score: 80,
+      metadata: {},
+      areaId: area.id,
+    });
+    await repository.updateSource("1", staleSource.id, {
+      status: "approved",
+      approvedBy: "Ingestion-Register",
+      approvedAt: new Date(Date.now() - 2 * 86_400_000),
+      lastFetchedAt: null,
+      lastError: null,
+    });
+    await repository.updateSource("1", recentSource.id, {
+      status: "approved",
+      approvedBy: "Ingestion-Register",
+      approvedAt: new Date(Date.now() - 60 * 60_000),
+      lastFetchedAt: null,
+      lastError: null,
+    });
+    const enqueued: Array<{ name: string; payload: unknown }> = [];
+    const module = createIngestionModule({
+      repository,
+      publish: async () => undefined,
+      enqueue: async (item) => { enqueued.push(item); },
+      discoverProposals: async () => [],
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.discovery.run");
+    if (!job) throw new Error("Gebietssuchjob fehlt");
+
+    await job.handle({ areaAgs: [area.ags] }, context("1", {}));
+
+    expect(enqueued.filter((item) => item.name === "ingestion.source.fetch")).toEqual([
+      { name: "ingestion.source.fetch", tenantId: "1", payload: { sourceId: staleSource.id } },
+    ]);
+    expect(await repository.getSource("1", staleSource.id)).toMatchObject({
+      status: "approved",
+      approvedBy: "Ingestion-Register",
+    });
+    expect(await repository.getSource("1", recentSource.id)).toMatchObject({
+      status: "approved",
+      approvedBy: "Ingestion-Register",
+    });
+  });
+
   it("markiert eine Quelle nach drei Fehlern als nicht erreichbar und setzt den Zähler bei Erfolg zurück", async () => {
     const repository = new MemoryIngestionRepository();
     const source = await repository.createSource("1", {

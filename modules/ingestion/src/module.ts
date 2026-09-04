@@ -444,6 +444,13 @@ export function createIngestionModule(deps: {
             try {
               const approveRegisteredSource = async (source: IngestionSource): Promise<boolean> => {
                 if (source.status === "approved" || !isRegisteredMunicipalUrl(source.url)) return false;
+                const previous = {
+                  status: source.status,
+                  approvedBy: source.approvedBy,
+                  approvedAt: source.approvedAt,
+                  nextCheckAt: source.nextCheckAt,
+                  lastError: source.lastError,
+                };
                 await repository.updateSource(tenantId, source.id, {
                   status: "approved",
                   approvedBy: "Ingestion-Register",
@@ -452,11 +459,16 @@ export function createIngestionModule(deps: {
                   lastError: null,
                 });
                 if (deps.enqueue) {
-                  await deps.enqueue({
-                    name: "ingestion.source.fetch",
-                    tenantId,
-                    payload: { sourceId: source.id },
-                  });
+                  try {
+                    await deps.enqueue({
+                      name: "ingestion.source.fetch",
+                      tenantId,
+                      payload: { sourceId: source.id },
+                    });
+                  } catch (error) {
+                    await repository.updateSource(tenantId, source.id, previous);
+                    throw error;
+                  }
                 }
                 return true;
               };
@@ -520,14 +532,27 @@ export function createIngestionModule(deps: {
               }
               const existingSources = await repository.listSources(tenantId);
               for (const source of existingSources) {
-                if (source.areaId === area.id && source.status === "proposed") {
-                  try {
+                if (source.areaId !== area.id) continue;
+                try {
+                  if (source.status === "proposed") {
                     await approveRegisteredSource(source);
-                  } catch (error) {
-                    sourceErrors.push(
-                      `${source.url}: ${describeError(error)}`,
-                    );
+                  } else if (
+                    source.status === "approved"
+                    && source.approvedBy === "Ingestion-Register"
+                    && source.lastFetchedAt === null
+                    && source.lastError === null
+                    && source.approvedAt !== null
+                    && source.approvedAt.getTime() <= now.getTime() - 24 * 60 * 60_000
+                    && deps.enqueue
+                  ) {
+                    await deps.enqueue({
+                      name: "ingestion.source.fetch",
+                      tenantId,
+                      payload: { sourceId: source.id },
+                    });
                   }
+                } catch (error) {
+                  sourceErrors.push(`${source.url}: ${describeError(error)}`);
                 }
               }
               const nextIncompleteRuns = incompleteHosts.length > 0
