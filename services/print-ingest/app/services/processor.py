@@ -68,6 +68,18 @@ DIRECTORY_SIGNALS = re.compile(
 MAX_ADS_PER_PAGE = 24
 MAX_CROP_PIXELS = 18_000_000
 MAX_OCR_REGIONS_PER_PAGE = 12
+
+
+def _fold_industry(value):
+    return (
+        value.casefold()
+        .replace("ä", "ae")
+        .replace("ö", "oe")
+        .replace("ü", "ue")
+        .replace("ß", "ss")
+    )
+
+
 COMMERCIAL_INDUSTRIES = (
     "Bäckerei", "Konditorei", "Metzgerei", "Gärtnerei", "Baumschule", "Hofladen",
     "Weingut", "Winzer", "Restaurant", "Gasthof", "Gaststätte", "Café", "Pension",
@@ -85,12 +97,30 @@ COMMERCIAL_INDUSTRIES = (
     "Heizungsbau", "Bauunternehmen", "Getränkemarkt", "Hörakustik", "Zahntechnik", "Bauträger",
     "Garten- und Landschaftsbau", "Steuerberater", "Rechtsanwalt", "Notar", "Versicherung", "Sparkasse",
     "Volksbank", "Raiffeisenbank", "Stadtwerke", "Energieversorger", "Immobilien",
-    "Reisedienst", "Busunternehmen", "Fahrschule", "Werbeagentur", "Druckerei",
+    "Reisedienst", "Reisebüro", "Busreisen", "Busunternehmen", "Fahrschule", "Werbeagentur", "Druckerei",
     "Schlüsseldienst", "Kunstschmiede", "Meisterbetrieb", "Fachhandel", "Fachbetrieb",
-    "Taxi", "Taxiunternehmen", "Mietwagen", "Autovermietung", "Reisen", "Rundfahrten",
+    "Taxi", "Taxiunternehmen", "Mietwagen", "Autovermietung", "Rundfahrten",
     "Tours", "Omnibus", "Bäcker", "Metzger", "Gärtner", "Raumausstatter", "Polsterei",
     "Glaserei", "Schlosserei", "Landmaschinen", "Baustoffe", "Zahnarzt", "Tierarzt",
     "Heilpraktiker",
+)
+_COMPOUND_HEAD_INDUSTRIES = frozenset(
+    _fold_industry(value)
+    for value in (
+        "Bäckerei", "Konditorei", "Metzgerei", "Gärtnerei", "Spenglerei", "Bauspenglerei",
+        "Flaschnerei", "Schreinerei", "Zimmerei", "Glaserei", "Schlosserei", "Polsterei",
+        "Druckerei", "Brauerei", "Kunstschmiede", "Naturstein", "Steinmetz", "Autohaus",
+        "Schuhhaus", "Sanitätshaus", "Pflegedienst", "Pflegeheim", "Tagespflege",
+        "Seniorenzentrum", "Küchenstudio", "Malerbetrieb", "Meisterbetrieb", "Fachbetrieb",
+        "Fachhandel", "Getränkemarkt", "Bauunternehmen", "Busunternehmen", "Taxiunternehmen",
+        "Energieversorger", "Energietechnik", "Elektrotechnik", "Werbeagentur", "Fahrschule",
+        "Photovoltaik", "Bestattung", "Grabmal", "Grabmale", "Grabdenkmäler", "Physiotherapie",
+        "Fußpflege", "Podologie", "Hörakustik", "Hörgeräte", "Zahntechnik", "Raumausstatter",
+        "Landmaschinen", "Baustoffe", "Immobilien", "Steuerberater", "Rechtsanwalt", "Tierarzt",
+        "Zahnarzt", "Heilpraktiker", "Gartenbau", "Gartengestaltung", "Landschaftsbau",
+        "Heizungsbau", "Rundfahrten", "Tours", "Schlüsseldienst", "Stromspeicher", "Wallbox",
+        "Getränke", "Omnibus",
+    )
 )
 _LEGAL_FORM_PATTERN = re.compile(
     r"\b(?:GmbH|AG|KG|OHG|GbR|mbH|e\.K\.|UG)\b|&\s*Co\b",
@@ -694,14 +724,32 @@ def _has_commercial_sender(text):
 
 def _industry_match(text):
     normalized = _normalize_spaced_letters(text)
-    tokens = [token.casefold() for token in normalized.split()]
+    def split_token(token):
+        return [
+            _fold_industry(part.lstrip(".,:;!?…()[]{}'\"„“‚‘«»"))
+            for part in re.split(r"[.@_ -]+", token)
+            if part.lstrip(".,:;!?…()[]{}'\"„“‚‘«»")
+        ]
+
+    def matches(term, token_parts):
+        term = _fold_industry(term)
+        return any(
+            segment.startswith(term)
+            or (term in _COMPOUND_HEAD_INDUSTRIES and segment.endswith(term))
+            for segment in token_parts
+        )
+
+    token_parts = [split_token(token) for token in normalized.split()]
     for industry in COMMERCIAL_INDUSTRIES:
-        parts = industry.casefold().split()
-        if len(parts) == 1 and any(parts[0] in token for token in tokens):
+        industry_parts = industry.split()
+        if len(industry_parts) == 1 and any(matches(industry, token) for token in token_parts):
             return True
-        if len(parts) > 1:
-            for index in range(len(tokens) - len(parts) + 1):
-                if all(part in tokens[index + offset] for offset, part in enumerate(parts)):
+        if len(industry_parts) > 1:
+            for index in range(len(token_parts) - len(industry_parts) + 1):
+                if all(
+                    matches(term, token_parts[index + offset])
+                    for offset, term in enumerate(industry_parts)
+                ):
                     return True
     return False
 

@@ -143,6 +143,36 @@ def test_industry_word_in_domain_is_commercial_sender():
     assert "positiv:p1b" in result["reasons"]
 
 
+def test_ordinary_word_preis_does_not_match_reisen():
+    result = classify("Wir liefern zu fairen Preisen Telefon 01234 567890")
+    assert result["classification"] == "non_commercial"
+    assert "fehlend:absender" in result["reasons"]
+
+
+def test_ordinary_word_begreifen_does_not_match_reifen():
+    result = classify("Das lässt sich leicht begreifen Telefon 01234 567890")
+    assert result["classification"] == "non_commercial"
+    assert "fehlend:absender" in result["reasons"]
+
+
+def test_industry_prefix_matches_reifenservice():
+    result = classify("Reifenservice Huber Telefon 01234 567890")
+    assert result["classification"] == "company_ad"
+    assert "positiv:p1b" in result["reasons"]
+
+
+def test_compound_head_matches_meisterbetrieb():
+    result = classify("Kfz-Meisterbetrieb Huber Telefon 01234 567890")
+    assert result["classification"] == "company_ad"
+    assert "positiv:p1b" in result["reasons"]
+
+
+def test_industry_head_matches_domain_subtoken():
+    result = classify("info@frankenaturstein.de Telefon 01234 567890")
+    assert result["classification"] == "company_ad"
+    assert "positiv:p1b" in result["reasons"]
+
+
 def test_logo_commercial_ad_with_seventy_words_is_not_editorial():
     text = (
         "Naturstein Muster Telefon 01234 567890 "
