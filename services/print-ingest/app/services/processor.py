@@ -75,21 +75,22 @@ COMMERCIAL_INDUSTRIES = (
     "Maler", "Verputzer", "Stuckateur", "Elektro", "Sanitär", "Heizung", "Küchen",
     "Möbel", "Autohaus", "Kfz", "Reifen", "Tiefbau", "Erdbau", "Transporte",
     "Kiesgrube", "Entsorgung", "Naturstein", "Steinmetz", "Grabmal", "Grabmale", "Grabdenkmäler", "Bestattung",
+    "Sanitätshaus",
     "Floristik", "Florist", "Blumen", "Pflanzen", "Gartenbau", "Gartengestaltung",
-    "Photovoltaik", "Solar", "Speicher", "Wallbox", "Energie", "Elektrotechnik",
-    "Getränke", "Brunnen", "Brauerei", "Pflegedienst", "Pflege", "Pflege zu Hause",
+    "Photovoltaik", "Solar", "Stromspeicher", "Wallbox", "Elektrotechnik", "Energietechnik",
+    "Getränke", "Brunnen", "Brauerei", "Pflegedienst", "Pflege zu Hause",
     "Seniorenbetreuung", "Tagespflege", "Pflegeheim", "Seniorenzentrum", "Physiotherapie", "Fußpflege",
     "Podologie", "Kosmetik", "Friseur", "Apotheke", "Optiker", "Hörgeräte",
-    "Schuhhaus", "Schuh", "Orthopädie", "Direktvertrieb", "Küchenstudio", "Malerbetrieb",
+    "Schuhhaus", "Orthopädie", "Direktvertrieb", "Küchenstudio", "Malerbetrieb",
     "Heizungsbau", "Bauunternehmen", "Getränkemarkt", "Hörakustik", "Zahntechnik", "Bauträger",
     "Garten- und Landschaftsbau", "Steuerberater", "Rechtsanwalt", "Notar", "Versicherung", "Sparkasse",
     "Volksbank", "Raiffeisenbank", "Stadtwerke", "Energieversorger", "Immobilien",
     "Reisedienst", "Busunternehmen", "Fahrschule", "Werbeagentur", "Druckerei",
     "Schlüsseldienst", "Kunstschmiede", "Meisterbetrieb", "Fachhandel", "Fachbetrieb",
-)
-_COMMERCIAL_INDUSTRY_PATTERN = re.compile(
-    r"\b(?:" + "|".join(re.escape(value) for value in COMMERCIAL_INDUSTRIES) + r")\b",
-    re.I,
+    "Taxi", "Taxiunternehmen", "Mietwagen", "Autovermietung", "Reisen", "Rundfahrten",
+    "Tours", "Omnibus", "Bäcker", "Metzger", "Gärtner", "Raumausstatter", "Polsterei",
+    "Glaserei", "Schlosserei", "Landmaschinen", "Baustoffe", "Zahnarzt", "Tierarzt",
+    "Heilpraktiker",
 )
 _LEGAL_FORM_PATTERN = re.compile(
     r"\b(?:GmbH|AG|KG|OHG|GbR|mbH|e\.K\.|UG)\b|&\s*Co\b",
@@ -111,8 +112,8 @@ _CHURCH_SENDER_PATTERN = re.compile(
     re.I,
 )
 _ASSOCIATION_PATTERN = re.compile(
-    r"\b(?:e\.V\.|verein|fanclub|gesangverein|mgv|schützenverein|turnverein|sportverein|"
-    r"fc|tsv|sv|djk|landfrauen|kolping|vdk|jugendtreff)\b",
+    r"\b(?:e\.V\.|verein|fanclub|gesangverein|schützenverein|turnverein|sportverein|"
+    r"(?-i:FC|TSV|SV|DJK|MGV)|landfrauen|kolping|vdk|jugendtreff)\b",
     re.I,
 )
 _PUBLISHER_PROMOTION_PATTERN = re.compile(
@@ -513,7 +514,7 @@ def _looks_directory_or_overview(text, blocks, page_dominant=False, logo=False):
     return numbered_overview
 
 
-def _looks_editorial(text, blocks, page_dominant=False):
+def _looks_editorial(text, blocks):
     if EDITORIAL_SIGNALS.search(text):
         return True
     words = text.split()
@@ -523,7 +524,7 @@ def _looks_editorial(text, blocks, page_dominant=False):
     hyphenated = any(block["text"].rstrip().endswith(("-", "­")) for block in blocks)
     if len(words) > 130 and len(lines) >= 5:
         return True
-    return len(words) > 130 and len(lines) >= 5 and uniform and hyphenated
+    return len(words) > 80 and len(lines) >= 6 and uniform and hyphenated
 
 
 def _material_geometry(layout, width, height):
@@ -693,12 +694,15 @@ def _has_commercial_sender(text):
 
 def _industry_match(text):
     normalized = _normalize_spaced_letters(text)
+    tokens = [token.casefold() for token in normalized.split()]
     for industry in COMMERCIAL_INDUSTRIES:
-        pattern = rf"(?<![\wÄÖÜäöüß]){re.escape(industry)}(?![\wÄÖÜäöüß])"
-        if re.search(pattern, normalized, re.I):
+        parts = industry.casefold().split()
+        if len(parts) == 1 and any(parts[0] in token for token in tokens):
             return True
-        if re.search(r"[.@]", normalized) and industry.casefold() in normalized.casefold():
-            return True
+        if len(parts) > 1:
+            for index in range(len(tokens) - len(parts) + 1):
+                if all(part in tokens[index + offset] for offset, part in enumerate(parts)):
+                    return True
     return False
 
 
@@ -765,7 +769,26 @@ def _directory_blocks(blocks):
     )
 
 
-def _distinct_sender_count(blocks, page_blocks=None):
+def _domain_root(value):
+    labels = value.casefold().strip(".").split(".")
+    return ".".join(labels[-2:]) if len(labels) >= 2 else value.casefold()
+
+
+def _sender_key(text, blocks, page_blocks=None):
+    sender = _prominent_sender_text(text, blocks, page_blocks)
+    sender = re.sub(
+        r"(?:https?://)?(?:www\.)?[\w.-]+\.[a-z]{2,}",
+        "",
+        sender,
+        flags=re.I,
+    )
+    sender = re.split(r"\b(?:telefon|tel\.?|fax|fon|mobil|www\.)\b", sender, maxsplit=1, flags=re.I)[0]
+    return " ".join(sender.split()).casefold()
+
+
+def _distinct_sender_count(blocks, page_blocks=None, candidate_text=""):
+    if re.search(r"\b(?:unternehmensverbund|unternehmensgruppe|firmenverbund|verbund)\b", candidate_text, re.I):
+        return 1
     senders = set()
     for block in blocks:
         text = _normalize_spaced_letters(block.get("text", ""))
@@ -779,7 +802,11 @@ def _distinct_sender_count(blocks, page_blocks=None):
             text,
             re.I,
         )
-        sender = domains[0] if domains else _prominent_sender_text(text, [block], page_blocks)
+        sender = (
+            _domain_root(domains[0])
+            if domains
+            else _sender_key(text, [block], page_blocks)
+        )
         sender = re.sub(r"\b(?:telefon|tel\.?|fax|fon|www\.)\b.*$", "", sender, flags=re.I)
         sender = " ".join(sender.split()).casefold()
         if sender:
@@ -856,14 +883,14 @@ def _classification_reasons(
         return "non_commercial", ["veto:kirche"]
     if association_sender and not (p1 and p2):
         return "non_commercial", ["veto:verein"]
-    distinct_senders = _distinct_sender_count(blocks, page_blocks)
+    distinct_senders = _distinct_sender_count(blocks, page_blocks, normalized_text)
     if distinct_senders >= 3 or (
         _label_line_count(blocks, normalized_text) >= 3
         and not p1a_or_b
     ):
         return "non_commercial", ["veto:verzeichnis"]
     hard_editorial = bool(EDITORIAL_SIGNALS.search(normalized_text))
-    prose_editorial = _looks_editorial(normalized_text, blocks, page_dominant)
+    prose_editorial = _looks_editorial(normalized_text, blocks)
     if hard_editorial or (
         prose_editorial
         and not (
@@ -936,6 +963,19 @@ def _blocks_are_clustered(first, second, max_gap=8):
 
 def _sender_clusters(box, blocks, page_blocks=None):
     if len(blocks) < 2:
+        return []
+    all_text = _normalize_spaced_letters(" ".join(block.get("text", "") for block in blocks))
+    if re.search(r"\b(?:unternehmensverbund|unternehmensgruppe|firmenverbund|verbund)\b", all_text, re.I):
+        return []
+    domains = [
+        _domain_root(domain)
+        for domain in re.findall(
+            r"(?:https?://)?(?:www\.)?([\w.-]+\.[a-z]{2,})",
+            all_text,
+            re.I,
+        )
+    ]
+    if domains and len(set(domains)) == 1:
         return []
     groups = []
     remaining = set(range(len(blocks)))

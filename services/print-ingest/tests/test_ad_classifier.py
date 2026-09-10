@@ -55,6 +55,13 @@ def test_association_with_commercial_signals_is_unclear():
     assert "unclear:verein" in result["reasons"]
 
 
+def test_association_abbreviations_require_uppercase():
+    uppercase = classify("SV Service GmbH Telefon 01234 567890 Angebot")
+    lowercase = classify("sv Service GmbH Telefon 01234 567890 Angebot")
+    assert "unclear:verein" in uppercase["reasons"]
+    assert "veto:verein" not in lowercase["reasons"]
+
+
 def test_publisher_self_promotion_is_non_commercial():
     result = classify("Anzeigenauftrag und Anzeigenschluss Telefon 01234 567890")
     assert result["classification"] == "non_commercial"
@@ -63,9 +70,9 @@ def test_publisher_self_promotion_is_non_commercial():
 
 def test_three_contact_name_blocks_are_directory_content():
     blocks = [
-        block(100, 100, 900, 140, "Alpha Pflege Telefon 01234 111111"),
-        block(100, 150, 900, 190, "Beta Pflege Telefon 01234 222222"),
-        block(100, 200, 900, 240, "Gamma Pflege Telefon 01234 333333"),
+        block(100, 100, 900, 140, "Alpha Pflegedienst Telefon 01234 111111"),
+        block(100, 150, 900, 190, "Beta Pflegedienst Telefon 01234 222222"),
+        block(100, 200, 900, 240, "Gamma Pflegedienst Telefon 01234 333333"),
     ]
     result = classify(" ".join(item["text"] for item in blocks), blocks)
     assert result["classification"] == "non_commercial"
@@ -111,8 +118,8 @@ def test_missing_positive_conditions_are_reported():
 
 def test_weak_prominent_sender_requires_ad_intent():
     result = classify(
-        "PFLANZENOASE Telefon 01234 567890",
-        [block(100, 100, 900, 140, "PFLANZENOASE", (10, 20))],
+        "KREATIVWERK Telefon 01234 567890",
+        [block(100, 100, 900, 140, "KREATIVWERK", (10, 20))],
         page_blocks=[block(0, 0, 1000, 1000, "Grundtext", (10,))],
     )
     assert result["classification"] == "non_commercial"
