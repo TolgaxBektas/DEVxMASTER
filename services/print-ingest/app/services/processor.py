@@ -68,6 +68,7 @@ DIRECTORY_SIGNALS = re.compile(
 MAX_ADS_PER_PAGE = 24
 MAX_CROP_PIXELS = 18_000_000
 MAX_OCR_REGIONS_PER_PAGE = 12
+_CLUSTER_MAX_GAP = 8
 
 
 def _fold_industry(value):
@@ -996,7 +997,7 @@ def classify_ad_candidate(
     return {"classification": classification, "reasons": reasons}
 
 
-def _blocks_are_clustered(first, second, max_gap=8):
+def _blocks_are_clustered(first, second, max_gap=_CLUSTER_MAX_GAP):
     a, b = first["bbox"], second["bbox"]
     horizontal_overlap = min(a[2], b[2]) - max(a[0], b[0])
     vertical_overlap = min(a[3], b[3]) - max(a[1], b[1])
@@ -1039,8 +1040,12 @@ def _sender_clusters(box, blocks, page_blocks=None):
         if first_root != second_root:
             parent[second_root] = first_root
 
-    for first in range(len(blocks)):
-        for second in range(first + 1, len(blocks)):
+    ordered_indices = sorted(range(len(blocks)), key=lambda index: blocks[index]["bbox"][1])
+    for position, first in enumerate(ordered_indices):
+        limit = blocks[first]["bbox"][3] + _CLUSTER_MAX_GAP
+        for second in ordered_indices[position + 1:]:
+            if blocks[second]["bbox"][1] > limit:
+                break
             if _blocks_are_clustered(blocks[first], blocks[second]):
                 union(first, second)
 

@@ -1,6 +1,12 @@
+import random
 import time
 
-from app.services.processor import _sender_clusters, classify_ad_candidate, heuristic_ad_regions
+from app.services.processor import (
+    _blocks_are_clustered,
+    _sender_clusters,
+    classify_ad_candidate,
+    heuristic_ad_regions,
+)
 
 
 def block(x0, y0, x1, y1, text, sizes=(10,)):
@@ -81,38 +87,74 @@ def test_three_contact_name_blocks_are_directory_content():
     assert "veto:verzeichnis" in result["reasons"]
 
 
-def test_sender_clusters_use_linear_component_growth_for_large_raster():
+def test_sender_clusters_use_y_window_for_large_ocr_raster():
     blocks = []
-    for x_offset in (0, 2000):
-        path = []
-        for row in range(10):
-            columns = range(20) if row % 2 == 0 else range(19, -1, -1)
-            path.extend((x_offset + column * 40, row * 40) for column in columns)
-        for position in [path[0], *reversed(path[1:])]:
-            x0, y0 = position
-            blocks.append(
-                block(
-                    x0,
-                    y0,
-                    x0 + 35,
-                    y0 + 35,
-                    "Taxi Huber Telefon 01234 567890",
-                )
-            )
+    for row in range(60):
+        for column in range(58):
+            x0, y0 = column * 18, row * 24
+            blocks.append(block(x0, y0, x0 + 12, y0 + 10, "Taxi Huber Telefon 01234 567890"))
 
     started = time.perf_counter()
-    result = _sender_clusters((0, 0, 3000, 500), blocks)
+    result = _sender_clusters((0, 0, 1100, 1500), blocks)
     elapsed = time.perf_counter() - started
     block_indexes = {id(item): index for index, item in enumerate(blocks)}
 
-    assert len(result) == 2
-    assert [len(grouped_blocks) for _, grouped_blocks in result] == [200, 200]
+    assert len(blocks) == 3480
+    assert len(result) == 60
+    assert all(len(grouped_blocks) == 58 for _, grouped_blocks in result)
     assert all(
         [block_indexes[id(item)] for item in grouped_blocks]
         == sorted(block_indexes[id(item)] for item in grouped_blocks)
         for _, grouped_blocks in result
     )
     assert elapsed < 2
+
+
+def test_sender_clusters_match_all_pair_reference():
+    rng = random.Random(1907)
+    blocks = []
+    for index in range(300):
+        row, column = divmod(index, 20)
+        x0 = column * 60 + rng.randint(-5, 5)
+        y0 = row * 45 + rng.randint(-5, 5)
+        width = rng.randint(25, 70)
+        height = rng.randint(20, 55)
+        blocks.append(block(x0, y0, x0 + width, y0 + height, "Taxi Huber Telefon 01234 567890"))
+
+    assert any(
+        _blocks_are_clustered(blocks[first], blocks[second])
+        for first in range(len(blocks))
+        for second in range(first + 1, len(blocks))
+    )
+    assert any(
+        not _blocks_are_clustered(blocks[first], blocks[second])
+        for first in range(len(blocks))
+        for second in range(first + 1, len(blocks))
+    )
+
+    parent = list(range(len(blocks)))
+
+    def find(index):
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    for first in range(len(blocks)):
+        for second in range(first + 1, len(blocks)):
+            if _blocks_are_clustered(blocks[first], blocks[second]):
+                parent[find(second)] = find(first)
+
+    expected = {}
+    for index in range(len(blocks)):
+        expected.setdefault(find(index), set()).add(index)
+
+    actual = []
+    block_indexes = {id(item): index for index, item in enumerate(blocks)}
+    for _, grouped_blocks in _sender_clusters((0, 0, 1300, 800), blocks):
+        actual.append({block_indexes[id(item)] for item in grouped_blocks})
+
+    assert actual == list(expected.values())
 
 
 def test_three_label_lines_are_directory_content():
