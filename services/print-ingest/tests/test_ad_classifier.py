@@ -3,7 +3,9 @@ import time
 
 from app.services.processor import (
     _blocks_are_clustered,
+    _p1_reason,
     _sender_clusters,
+    _typography_satisfies,
     classify_ad_candidate,
     heuristic_ad_regions,
 )
@@ -85,6 +87,26 @@ def test_three_contact_name_blocks_are_directory_content():
     result = classify(" ".join(item["text"] for item in blocks), blocks)
     assert result["classification"] == "non_commercial"
     assert "veto:verzeichnis" in result["reasons"]
+
+
+def test_font_size_stats_cache_is_identity_safe():
+    candidate = block(100, 100, 900, 140, "KREATIVWERK", (20,))
+    small_page = [block(0, 0, 1000, 1000, "Grundtext", (10,))]
+    large_page = [block(0, 0, 1000, 1000, "Grundtext", (20,))]
+    same_length_different_sizes = [block(0, 0, 1000, 1000, "Grundtext", (100,))]
+
+    assert _p1_reason("KREATIVWERK Telefon 01234 567890", [candidate], small_page) == "p1c"
+    assert _p1_reason("KREATIVWERK Telefon 01234 567890", [candidate], large_page) is None
+    assert _typography_satisfies([block(100, 100, 900, 140, "KREATIVWERK", (20, 27))], small_page)
+    assert not _typography_satisfies(
+        [block(100, 100, 900, 140, "KREATIVWERK", (20, 27))],
+        large_page,
+    )
+    assert _p1_reason(
+        "KREATIVWERK Telefon 01234 567890",
+        [candidate],
+        same_length_different_sizes,
+    ) is None
 
 
 def test_sender_clusters_use_y_window_for_large_ocr_raster():

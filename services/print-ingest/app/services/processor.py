@@ -1,7 +1,7 @@
 import io
 import math
 import re
-from collections import Counter
+from collections import Counter, OrderedDict
 from statistics import median
 import fitz
 from PIL import Image
@@ -679,13 +679,34 @@ def _normalize_spaced_letters(text):
     return pattern.sub(lambda match: re.sub(r"\s+", "", match.group(0)), str(text))
 
 
-def _prominent_sender_text(text, blocks, page_blocks=None):
-    all_sizes = [
+_FONT_SIZE_STATS_CACHE = OrderedDict()
+
+
+def _font_size_stats(blocks):
+    key = id(blocks)
+    cached = _FONT_SIZE_STATS_CACHE.get(key)
+    if cached is not None:
+        cached_blocks, cached_length, sizes_present, median_value = cached
+        if cached_blocks is blocks and cached_length == len(blocks):
+            _FONT_SIZE_STATS_CACHE.move_to_end(key)
+            return sizes_present, median_value
+    sizes = [
         size
-        for block in (page_blocks or blocks)
+        for block in blocks
         for size in block.get("font_sizes", [])
         if size > 0
     ]
+    sizes_present = bool(sizes)
+    median_value = median(sizes) if sizes_present else None
+    _FONT_SIZE_STATS_CACHE[key] = (blocks, len(blocks), sizes_present, median_value)
+    _FONT_SIZE_STATS_CACHE.move_to_end(key)
+    if len(_FONT_SIZE_STATS_CACHE) > 8:
+        _FONT_SIZE_STATS_CACHE.popitem(last=False)
+    return sizes_present, median_value
+
+
+def _prominent_sender_text(text, blocks, page_blocks=None):
+    all_sizes_present, all_sizes_median = _font_size_stats(page_blocks or blocks)
     candidate_sizes = [
         size
         for block in blocks
@@ -694,13 +715,13 @@ def _prominent_sender_text(text, blocks, page_blocks=None):
     ]
     if not candidate_sizes:
         return _normalize_spaced_letters(text)
-    if not all_sizes:
+    if not all_sizes_present:
         return _normalize_spaced_letters(" ".join(
             block.get("text", "")
             for block in blocks
             if max(block.get("font_sizes", [0])) >= 1.2 * median(candidate_sizes)
         ) or text)
-    threshold = 1.2 * median(all_sizes)
+    threshold = 1.2 * all_sizes_median
     prominent = " ".join(
         block.get("text", "")
         for block in blocks
@@ -764,13 +785,8 @@ def _p1_reason(text, blocks, page_blocks=None):
         return "p1b"
     if not blocks:
         return None
-    page_sizes = [
-        size
-        for block in (page_blocks or blocks)
-        for size in block.get("font_sizes", [])
-        if size > 0
-    ]
-    if not page_sizes:
+    page_sizes_present, page_sizes_median = _font_size_stats(page_blocks or blocks)
+    if not page_sizes_present:
         return None
     largest = max(
         blocks,
@@ -792,7 +808,7 @@ def _p1_reason(text, blocks, page_blocks=None):
         or _CHARITY_PATTERN.search(sender)
     )
     if (
-        largest_size >= 1.4 * median(page_sizes)
+        largest_size >= 1.4 * page_sizes_median
         and 1 <= len(words) <= 6
         and not veto_text
         and not PHONE_SIGNALS.search(sender)
@@ -876,17 +892,12 @@ def _phone_count(text):
 
 def _typography_satisfies(blocks, page_blocks=None):
     sizes = [size for block in blocks for size in block.get("font_sizes", []) if size > 0]
-    page_sizes = [
-        size
-        for block in (page_blocks or blocks)
-        for size in block.get("font_sizes", [])
-        if size > 0
-    ]
+    page_sizes_present, page_sizes_median = _font_size_stats(page_blocks or blocks)
     return (
         len({round(size, 1) for size in sizes}) >= 2
         and bool(sizes)
-        and bool(page_sizes)
-        and max(sizes) >= 1.4 * median(page_sizes)
+        and page_sizes_present
+        and max(sizes) >= 1.4 * page_sizes_median
     )
 
 
