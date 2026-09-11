@@ -1025,19 +1025,31 @@ def _sender_clusters(box, blocks, page_blocks=None):
     ]
     if domains and len(set(domains)) == 1:
         return []
+    parent = list(range(len(blocks)))
+
+    def find(index):
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    def union(first, second):
+        first_root = find(first)
+        second_root = find(second)
+        if first_root != second_root:
+            parent[second_root] = first_root
+
+    for first in range(len(blocks)):
+        for second in range(first + 1, len(blocks)):
+            if _blocks_are_clustered(blocks[first], blocks[second]):
+                union(first, second)
+
+    components = {}
+    for index in range(len(blocks)):
+        components.setdefault(find(index), []).append(index)
+
     groups = []
-    remaining = set(range(len(blocks)))
-    while remaining:
-        index = remaining.pop()
-        group = {index}
-        changed = True
-        while changed:
-            changed = False
-            for other in list(remaining):
-                if any(_blocks_are_clustered(blocks[member], blocks[other]) for member in group):
-                    group.add(other)
-                    remaining.remove(other)
-                    changed = True
+    for group in components.values():
         grouped_blocks = [blocks[index] for index in sorted(group)]
         grouped_text = " ".join(block.get("text", "") for block in grouped_blocks)
         prominent = _prominent_sender_text(grouped_text, grouped_blocks, page_blocks)

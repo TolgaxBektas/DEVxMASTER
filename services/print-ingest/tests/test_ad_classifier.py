@@ -1,4 +1,6 @@
-from app.services.processor import classify_ad_candidate, heuristic_ad_regions
+import time
+
+from app.services.processor import _sender_clusters, classify_ad_candidate, heuristic_ad_regions
 
 
 def block(x0, y0, x1, y1, text, sizes=(10,)):
@@ -77,6 +79,40 @@ def test_three_contact_name_blocks_are_directory_content():
     result = classify(" ".join(item["text"] for item in blocks), blocks)
     assert result["classification"] == "non_commercial"
     assert "veto:verzeichnis" in result["reasons"]
+
+
+def test_sender_clusters_use_linear_component_growth_for_large_raster():
+    blocks = []
+    for x_offset in (0, 2000):
+        path = []
+        for row in range(10):
+            columns = range(20) if row % 2 == 0 else range(19, -1, -1)
+            path.extend((x_offset + column * 40, row * 40) for column in columns)
+        for position in [path[0], *reversed(path[1:])]:
+            x0, y0 = position
+            blocks.append(
+                block(
+                    x0,
+                    y0,
+                    x0 + 35,
+                    y0 + 35,
+                    "Taxi Huber Telefon 01234 567890",
+                )
+            )
+
+    started = time.perf_counter()
+    result = _sender_clusters((0, 0, 3000, 500), blocks)
+    elapsed = time.perf_counter() - started
+    block_indexes = {id(item): index for index, item in enumerate(blocks)}
+
+    assert len(result) == 2
+    assert [len(grouped_blocks) for _, grouped_blocks in result] == [200, 200]
+    assert all(
+        [block_indexes[id(item)] for item in grouped_blocks]
+        == sorted(block_indexes[id(item)] for item in grouped_blocks)
+        for _, grouped_blocks in result
+    )
+    assert elapsed < 2
 
 
 def test_three_label_lines_are_directory_content():
