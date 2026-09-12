@@ -5,6 +5,7 @@ import {
   appendAudit,
   createDbFactory,
   createDrizzleAuditRepository,
+  isRetryableAuditWriteError,
   parseEnv,
 } from "../packages/kernel/src/index.ts";
 import { occurrences } from "../modules/ingestion/src/schema.ts";
@@ -14,14 +15,21 @@ import {
   parseVerdictFile,
   plannedRejection,
   rejectionEvidence,
+  retryableTransactionAttempt,
   updatedRowCount,
 } from "../modules/ingestion/src/inserenten-test-verdicts.ts";
+
+const TRANSACTION_ATTEMPTS = 8;
 
 type Summary = {
   changed: number;
   protected: number;
   unknown: number;
 };
+
+function sleep(milliseconds: number): Promise<void> {
+  return new Promise((resolveSleep) => setTimeout(resolveSleep, milliseconds));
+}
 
 function argumentValue(args: string[], name: string): string | undefined {
   const index = args.indexOf(name);
@@ -86,39 +94,53 @@ async function main() {
       const reasons = rejectionEvidence(verdict.reason);
       const evidence = Array.isArray(row.evidence) ? row.evidence as string[] : null;
       if (apply) {
-        const changed = await db.transaction(async (transaction) => {
-          const result = await transaction.update(occurrences)
-            .set({
-              status: "rejected",
-              evidence: mergeEvidence(evidence, reasons),
-            })
-            .where(and(
-              eq(occurrences.id, verdict.occurrenceId),
-              eq(occurrences.tenantId, row.tenantId),
-              eq(occurrences.status, "detected"),
-            ));
-          if (updatedRowCount(result) === 0) return false;
-          const transactionAudit = createDrizzleAuditRepository({
-            select: transaction.select.bind(transaction),
-            insert: transaction.insert.bind(transaction),
-            update: transaction.update.bind(transaction),
-          });
-          await appendAudit(transactionAudit, {
-            tenantId: String(row.tenantId),
-            action: "ingestion.occurrence.rejected",
-            entityType: "ingestion_occurrence",
-            entityId: row.id,
-            actorId: null,
-            actorName: "Inserenten-Test (System)",
-            detailsJson: JSON.stringify({
-              status: "rejected",
-              reasons,
-              verdictSource: "inserenten-test",
-              verdictFile: basename(verdictPath),
-            }),
-          });
-          return true;
-        });
+        let changed = false;
+        for (let attempt = 0; attempt < TRANSACTION_ATTEMPTS; attempt += 1) {
+          try {
+            changed = await db.transaction(async (transaction) => {
+              const result = await transaction.update(occurrences)
+                .set({
+                  status: "rejected",
+                  evidence: mergeEvidence(evidence, reasons),
+                })
+                .where(and(
+                  eq(occurrences.id, verdict.occurrenceId),
+                  eq(occurrences.tenantId, row.tenantId),
+                  eq(occurrences.status, "detected"),
+                ));
+              if (updatedRowCount(result) === 0) return false;
+              const transactionAudit = createDrizzleAuditRepository({
+                select: transaction.select.bind(transaction),
+                insert: transaction.insert.bind(transaction),
+                update: transaction.update.bind(transaction),
+              });
+              await appendAudit(transactionAudit, {
+                tenantId: String(row.tenantId),
+                action: "ingestion.occurrence.rejected",
+                entityType: "ingestion_occurrence",
+                entityId: row.id,
+                actorId: null,
+                actorName: "Inserenten-Test (System)",
+                detailsJson: JSON.stringify({
+                  status: "rejected",
+                  reasons,
+                  verdictSource: "inserenten-test",
+                  verdictFile: basename(verdictPath),
+                }),
+              }, { maxAttempts: 1 });
+              return true;
+            });
+            break;
+          } catch (error) {
+            if (!retryableTransactionAttempt(
+              error,
+              attempt,
+              TRANSACTION_ATTEMPTS,
+              isRetryableAuditWriteError,
+            )) throw error;
+            await sleep(25 + Math.floor(Math.random() * 150) * (attempt + 1));
+          }
+        }
         if (!changed) {
           summary.protected += 1;
           totalProtected += 1;

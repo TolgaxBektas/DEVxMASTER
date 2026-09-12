@@ -114,3 +114,12 @@ export function updatedRowCount(result: unknown): number {
   const affectedRows = Number((candidate as { affectedRows?: unknown }).affectedRows ?? 0);
   return Number.isFinite(affectedRows) && affectedRows > 0 ? affectedRows : 0;
 }
+
+export function retryableTransactionAttempt(
+  error: unknown,
+  attempt: number,
+  maxAttempts: number,
+  isRetryable: (error: unknown) => boolean,
+): boolean {
+  return attempt < maxAttempts - 1 && isRetryable(error);
+}
