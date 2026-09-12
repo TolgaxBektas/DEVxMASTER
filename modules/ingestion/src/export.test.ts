@@ -10,6 +10,7 @@ import {
   createOccurrenceExportZip,
   occurrenceExportHeaders,
   attachOccurrenceExportImages,
+  occurrenceExportStatusFilter,
   writeOccurrenceExportZip,
 } from "./rest.js";
 
@@ -134,6 +135,29 @@ function seedRepository() {
 }
 
 describe("Fundstellen-Export", () => {
+  it("blendet abgelehnte Fundstellen standardmäßig aus und kennt den Alles-Filter", async () => {
+    const repository = seedRepository();
+    repository.occurrences.push({
+      id: 13,
+      documentId: 1,
+      dataSource: "xdata_germany",
+      pageNumber: 5,
+      company: "Abgelehnt GmbH",
+      preview: "Keine Anzeige",
+      status: "rejected",
+      imageKey: null,
+      confidence: 0.1,
+      evidence: ["veto:falscher-ausschnitt"],
+      contacts: null,
+    });
+    expect(occurrenceExportStatusFilter(undefined)).toBeUndefined();
+    expect(occurrenceExportStatusFilter("all")).toBe("all");
+    expect(occurrenceExportStatusFilter("rejected")).toBe("rejected");
+    expect((await buildOccurrenceExportRows(repository, "1")).map((row) => row.values[15])).not.toContain(13);
+    expect((await buildOccurrenceExportRows(repository, "1", { status: "all" })).map((row) => row.values[15])).toContain(13);
+    expect((await buildOccurrenceExportRows(repository, "1", { status: "rejected" })).map((row) => row.values[15])).toEqual([13]);
+  });
+
   it("liefert die Spalten und Zeilen nur für den authentifizierten Mandanten", async () => {
     const rows = await buildOccurrenceExportRows(seedRepository(), "1");
     expect(occurrenceExportHeaders).toEqual([

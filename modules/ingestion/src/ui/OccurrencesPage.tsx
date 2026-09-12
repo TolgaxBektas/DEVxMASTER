@@ -122,6 +122,13 @@ type ImageState = "loading" | "loaded" | "missing";
 export function occurrenceImageFallbackVisible(state: ImageState): boolean {
   return state === "missing";
 }
+
+export function visibleOccurrences(rows: Occurrence[], status: string): Occurrence[] {
+  if (status === "all") return rows;
+  if (!status) return rows.filter((occurrence) => occurrence.status !== "rejected");
+  return rows.filter((occurrence) => occurrence.status === status);
+}
+
 export function occurrenceExportPath(status: string): string {
   const query = status ? `?status=${encodeURIComponent(status)}` : "";
   return `/api/ingestion/occurrences/export${query}`;
@@ -174,8 +181,9 @@ export function OccurrencesPage({ api }: ModulePageProps) {
   if (occurrences.error || capabilities.error) {
     return <EmptyState title="Fundstellen konnten nicht geladen werden" description="Bitte Anmeldung und Berechtigung prüfen." />;
   }
-  const rows = applyOccurrenceReviewStatuses(occurrences.data ?? [], reviewStatuses).filter((item) =>
-    status ? item.status === status : true,
+  const rows = visibleOccurrences(
+    applyOccurrenceReviewStatuses(occurrences.data ?? [], reviewStatuses),
+    status,
   );
   const review = async (id: number, decision: OccurrenceReviewDecision) => {
     setMessage("");
@@ -210,7 +218,8 @@ export function OccurrencesPage({ api }: ModulePageProps) {
       <Card>
         <label>Status
           <Select value={status} onChange={(event) => setStatus(event.target.value)}>
-            <option value="">Alle Fundstellen</option>
+            <option value="">Nur Anzeigen (ohne abgelehnte)</option>
+            <option value="all">Alle Fundstellen (mit abgelehnten)</option>
             <option value="detected">Offen</option>
             <option value="approved">Freigegeben</option>
             <option value="rejected">Abgelehnt</option>

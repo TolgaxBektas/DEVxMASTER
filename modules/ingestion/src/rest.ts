@@ -204,6 +204,10 @@ export type OccurrenceExportRow = {
   sourceImageKey: string | null;
 };
 
+export function occurrenceExportStatusFilter(raw: unknown): string | undefined {
+  return typeof raw === "string" && raw.length > 0 ? raw : undefined;
+}
+
 function exportCompanyName(company: string) {
   const cleaned = company.normalize("NFKC").trim()
     .replace(/[^\p{L}\p{N}._-]+/gu, "_")
@@ -231,9 +235,16 @@ export async function buildOccurrenceExportRows(
     repository.listDocuments(tenantId),
   ]);
   const documentById = new Map(documents.map((document) => [document.id, document]));
+  const status = occurrenceExportStatusFilter(filters.status);
   return occurrences
     .filter((occurrence) => filters.documentId === undefined || occurrence.documentId === filters.documentId)
-    .filter((occurrence) => !filters.status || occurrence.status === filters.status)
+    .filter((occurrence) =>
+      status === "all"
+        ? true
+        : status
+          ? occurrence.status === status
+          : occurrence.status !== "rejected",
+    )
     .flatMap((occurrence) => {
       const document = documentById.get(occurrence.documentId);
       if (!document) return [];
@@ -371,7 +382,7 @@ async function handleOccurrenceExport(
     response.status(400).json({ code: "BAD_REQUEST", message: "Ungültige Dokumentkennung" });
     return;
   }
-  const status = typeof rawStatus === "string" ? rawStatus : undefined;
+  const status = occurrenceExportStatusFilter(rawStatus);
   try {
     const rows = await buildOccurrenceExportRows(deps.repository, auth.tenantId, {
       ...(documentId === undefined ? {} : { documentId }),
