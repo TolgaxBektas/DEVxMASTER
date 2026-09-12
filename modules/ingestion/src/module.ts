@@ -367,6 +367,15 @@ export function createIngestionModule(deps: {
       { id: "ingestion.areas", label: "Gebiete", href: "/ingestion/areas", permission: "ingestion.area.read", order: 6 },
       { id: "ingestion.documents", label: "Dokumente", href: "/ingestion", permission: "ingestion.document.read", order: 10 },
       { id: "ingestion.occurrences", label: "Fundstellen", href: "/ingestion/occurrences", permission: "ingestion.occurrence.read", order: 20 },
+      ...(deps.reviewClient && deps.reviewTenantId
+        ? [{
+            id: "ingestion.review",
+            label: "Prüfung",
+            href: "/ingestion/review",
+            permission: "ingestion.review.read",
+            order: 25,
+          }]
+        : []),
     ],
     pages: ingestionPages.map(([id, title, path, permission]) => ({
       id,

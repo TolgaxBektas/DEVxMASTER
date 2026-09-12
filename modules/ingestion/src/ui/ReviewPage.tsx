@@ -91,6 +91,16 @@ const FIELD_LABELS: Record<string, string> = {
   social_channels: "Social-Kanäle",
 };
 
+export function resolveSelectedReviewId(
+  items: readonly Pick<Review, "id">[],
+  preferredId: number | null,
+): number | null {
+  if (preferredId !== null && items.some((item) => item.id === preferredId)) {
+    return preferredId;
+  }
+  return items[0]?.id ?? null;
+}
+
 function displayValue(value: unknown): string {
   if (Array.isArray(value)) return value.join(", ");
   if (value && typeof value === "object") {
@@ -198,7 +208,11 @@ export function ReviewPage({ api }: ModulePageProps) {
     { data_source: "xdata_germany" },
   );
   const queue = activeSource === "xdata_nb_high_quality" ? highQualityQueue : germanyQueue;
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Partial<Record<DataSource, number | null>>>({});
+  const selectedId = resolveSelectedReviewId(
+    queue.data?.items ?? [],
+    selectedIds[activeSource] ?? null,
+  );
   const [note, setNote] = useState("");
   const [decisionError, setDecisionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -214,14 +228,6 @@ export function ReviewPage({ api }: ModulePageProps) {
   );
 
   useEffect(() => {
-    if (selectedId === null && queue.data?.items[0]) setSelectedId(queue.data.items[0].id);
-    if (selectedId !== null && queue.data && !queue.data.items.some((item) => item.id === selectedId)) {
-      setSelectedId(queue.data.items[0]?.id ?? null);
-    }
-  }, [queue.data, selectedId]);
-
-  useEffect(() => {
-    setSelectedId(null);
     setNote("");
     setDecisionError(null);
   }, [activeSource]);
@@ -238,21 +244,24 @@ export function ReviewPage({ api }: ModulePageProps) {
       });
       setNote("");
       await api.invalidate?.("modules.ingestion.review.list");
-      setSelectedId(result.next_open_id);
+      setSelectedIds((current) => ({ ...current, [activeSource]: result.next_open_id }));
     } catch {
       setDecisionError("Die Entscheidung konnte nicht gespeichert werden. Die Notiz wurde nicht verändert.");
     } finally {
       setBusy(false);
     }
-  }, [api, busy, note, selectedId]);
+  }, [activeSource, api, busy, note, selectedId]);
 
   const next = useCallback(() => {
     const items = queue.data?.items ?? [];
     if (!items.length) return;
     const first = items[0];
     if (!first) return;
-    setSelectedId(items[(selectedIndex + 1) % items.length]?.id ?? first.id);
-  }, [queue.data?.items, selectedIndex]);
+    setSelectedIds((current) => ({
+      ...current,
+      [activeSource]: items[(selectedIndex + 1) % items.length]?.id ?? first.id,
+    }));
+  }, [activeSource, queue.data?.items, selectedIndex]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -338,7 +347,7 @@ export function ReviewPage({ api }: ModulePageProps) {
                 className={item.id === review.id ? "list-row active" : "list-row"}
                 key={item.id}
                 type="button"
-                onClick={() => setSelectedId(item.id)}
+                onClick={() => setSelectedIds((current) => ({ ...current, [activeSource]: item.id }))}
               >
                 <strong>{item.company.name ?? "Unbekannte Firma"}</strong>
                 <span>Seite {item.page ?? "—"} · {item.reason}</span>
