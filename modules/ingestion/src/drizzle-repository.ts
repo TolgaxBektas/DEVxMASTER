@@ -414,8 +414,14 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
         area: areas,
         classification: classifications,
       }).from(occurrences)
-        .innerJoin(pages, eq(pages.id, occurrences.pageId))
-        .innerJoin(documents, eq(documents.id, occurrences.documentId))
+        .innerJoin(pages, and(
+          eq(pages.id, occurrences.pageId),
+          eq(pages.documentId, occurrences.documentId),
+        ))
+        .innerJoin(documents, and(
+          eq(documents.id, occurrences.documentId),
+          eq(documents.tenantId, occurrences.tenantId),
+        ))
         .leftJoin(sources, and(
           eq(sources.id, documents.sourceId!),
           eq(sources.tenantId, occurrences.tenantId),
