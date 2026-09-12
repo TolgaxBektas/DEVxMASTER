@@ -23,7 +23,8 @@ export JWT_SECRET=replace-with-a-long-random-secret   # must match the stored ad
 export PUBLIC_APP_ORIGIN=http://localhost:3020 ADMIN_PIN=1907 PORT=3010
 # storage + stateless PDF machine (without these the upload route fails)
 export S3_ENDPOINT=http://127.0.0.1:9000 S3_ACCESS_KEY=minioadmin S3_SECRET_KEY=minioadmin S3_BUCKET=xmaster-center
-export PIF_BASE_URL=http://127.0.0.1:8010 PIF_SERVICE_TOKEN=local-print-ingest-token
+export PRINT_INGEST_BASE_URL=http://127.0.0.1:8010 PRINT_INGEST_SERVICE_TOKEN=local-print-ingest-token
+export ARTWORK_BASE_URL=http://127.0.0.1:8011 ARTWORK_SERVICE_TOKEN=local-print-ingest-token
 # shrink the upload limit so oversized-file rejection is testable without a 25 MB fixture
 export INGESTION_MAX_UPLOAD_BYTES=102400
 npm exec --yes pnpm@10.4.1 -- dev:api      # :3010, health at /api/health (lists module health)
@@ -112,7 +113,7 @@ the occurrence AND the lead in tenant 2 — always upload identical bytes in BOT
 - `docker compose up -d` now also starts SearXNG (`127.0.0.1:8081`, health `/healthz` via compose).
 
 ## Data-Factory review tab („Prüfung“, `/ingestion/review`)
-- Gated on `PIF_REVIEW_TENANT_ID` (plus `PIF_BASE_URL` / `PIF_SERVICE_TOKEN`). Without the tenant id
+- Gated on `PIF_REVIEW_TENANT_ID` (plus `ARTWORK_BASE_URL` / `ARTWORK_SERVICE_TOKEN`). Without the tenant id
   the nav entry is absent and the page shows „Prüfung deaktiviert“; a session in another tenant sees
   „Für diesen Mandanten sind keine Data-Factory-Prüffälle konfiguriert.“ and the image proxy
   `GET /api/ingestion/reviews/:id/original|restored` answers 403

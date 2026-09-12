@@ -25,7 +25,7 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: sqlite:////data/print_intelligence.db
-      SERVICE_TOKEN: ${PRINT_INGEST_TOKEN:-local-print-ingest-token}
+      SERVICE_TOKEN: ${PRINT_INGEST_SERVICE_TOKEN:-local-print-ingest-token}
       OUTBOUND_HTTP_ENABLED: "true"
       S3_ENDPOINT: http://minio:9000
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
@@ -41,6 +41,36 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+
+  artwork:
+    build:
+      context: ./print-intelligence-foundation
+    container_name: xmaster-center-artwork
+    restart: unless-stopped
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    environment:
+      DATABASE_URL: sqlite:////work/print-intelligence/print_intelligence.db
+      SERVICE_TOKEN: ${ARTWORK_SERVICE_TOKEN:-local-print-ingest-token}
+      STORAGE_BACKEND: s3
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_BUCKET: xmaster-center
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      VISION_PROVIDER: recorded
+      RESTORATION_ENABLED: "false"
+      SEARXNG_URL: http://searxng:8080
+    ports:
+      - "127.0.0.1:8011:8000"
+    volumes:
+      - artwork_data:/work/print-intelligence
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    depends_on:
+      minio:
+        condition: service_healthy
 
   searxng:
     image: searxng/searxng:latest
@@ -97,3 +127,4 @@ volumes:
   print_ingest_data:
   print_ingest_storage:
   searxng_data:
+  artwork_data:
