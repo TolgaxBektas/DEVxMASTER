@@ -329,6 +329,44 @@ def test_decision_sets_status_note_and_next_open_id(tmp_path, monkeypatch):
         app.dependency_overrides.clear()
 
 
+def test_restored_reviews_are_listed_and_selected_before_plain_reviews(
+    tmp_path, monkeypatch
+):
+    client, factory = _client(tmp_path, monkeypatch)
+    try:
+        restored = _import(client, _metadata("Restaurierte Firma", 4))
+        plain = _import(client, _metadata("Reine Erkennung", 5))
+        assert restored.status_code == 200
+        assert plain.status_code == 200
+        with factory() as session:
+            occurrence = session.scalar(
+                select(AdOccurrence).where(
+                    AdOccurrence.id == plain.json()["ad_id"]
+                )
+            )
+            occurrence.restoration_path = None
+            occurrence.restoration_manifest_json = "{}"
+            session.commit()
+
+        headers = {"x-service-token": "review-token"}
+        items = client.get("/api/v1/reviews/open", headers=headers).json()
+        assert [item["ad_id"] for item in items] == [
+            restored.json()["ad_id"],
+            plain.json()["ad_id"],
+        ]
+
+        first_review = items[0]["id"]
+        response = client.post(
+            f"/api/v1/reviews/{first_review}/decision",
+            headers=headers,
+            json={"decision": "approve"},
+        )
+        assert response.status_code == 200
+        assert response.json()["next_open_id"] == items[1]["id"]
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_review_rejects_unknown_and_invalid_decisions(tmp_path, monkeypatch):
     client, _ = _client(tmp_path, monkeypatch)
     try:
