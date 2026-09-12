@@ -14,6 +14,7 @@ import {
   parseVerdictFile,
   plannedRejection,
   rejectionEvidence,
+  updatedRowCount,
 } from "../modules/ingestion/src/inserenten-test-verdicts.ts";
 
 type Summary = {
@@ -55,7 +56,6 @@ async function main() {
   const factory = createDbFactory(parseEnv());
   try {
     const db = factory.get();
-    const audit = createDrizzleAuditRepository(db);
     const summaries = new Map<string, Summary>();
     let ignoredCompanies = 0;
     let totalChanged = 0;
@@ -86,35 +86,44 @@ async function main() {
       const reasons = rejectionEvidence(verdict.reason);
       const evidence = Array.isArray(row.evidence) ? row.evidence as string[] : null;
       if (apply) {
-        const result = await db.update(occurrences)
-          .set({
-            status: "rejected",
-            evidence: mergeEvidence(evidence, reasons),
-          })
-          .where(and(
-            eq(occurrences.id, verdict.occurrenceId),
-            eq(occurrences.tenantId, row.tenantId),
-            eq(occurrences.status, "detected"),
-          ));
-        if (Number(result.affectedRows ?? 0) === 0) {
+        const changed = await db.transaction(async (transaction) => {
+          const result = await transaction.update(occurrences)
+            .set({
+              status: "rejected",
+              evidence: mergeEvidence(evidence, reasons),
+            })
+            .where(and(
+              eq(occurrences.id, verdict.occurrenceId),
+              eq(occurrences.tenantId, row.tenantId),
+              eq(occurrences.status, "detected"),
+            ));
+          if (updatedRowCount(result) === 0) return false;
+          const transactionAudit = createDrizzleAuditRepository({
+            select: transaction.select.bind(transaction),
+            insert: transaction.insert.bind(transaction),
+            update: transaction.update.bind(transaction),
+          });
+          await appendAudit(transactionAudit, {
+            tenantId: String(row.tenantId),
+            action: "ingestion.occurrence.rejected",
+            entityType: "ingestion_occurrence",
+            entityId: row.id,
+            actorId: null,
+            actorName: "Inserenten-Test (System)",
+            detailsJson: JSON.stringify({
+              status: "rejected",
+              reasons,
+              verdictSource: "inserenten-test",
+              verdictFile: basename(verdictPath),
+            }),
+          });
+          return true;
+        });
+        if (!changed) {
           summary.protected += 1;
           totalProtected += 1;
           continue;
         }
-        await appendAudit(audit, {
-          tenantId: String(row.tenantId),
-          action: "ingestion.occurrence.rejected",
-          entityType: "ingestion_occurrence",
-          entityId: row.id,
-          actorId: null,
-          actorName: "Inserenten-Test (System)",
-          detailsJson: JSON.stringify({
-            status: "rejected",
-            reasons,
-            verdictSource: "inserenten-test",
-            verdictFile: basename(verdictPath),
-          }),
-        });
       }
       summary.changed += 1;
       totalChanged += 1;
