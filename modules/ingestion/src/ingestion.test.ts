@@ -15,7 +15,10 @@ import { deriveDocumentClassification, selectRegionSource } from "./classificati
 import { createDrizzleIngestionRepository } from "./drizzle-repository.js";
 import { classifications, documents, occurrences, pages } from "./schema.js";
 import { classificationCorrectionSchema, createIngestionRouter } from "./router.js";
-import { periodIncludesYear } from "./repository.js";
+import {
+  IngestionOccurrenceNotFoundError,
+  periodIncludesYear,
+} from "./repository.js";
 import { documentActualityStatus } from "./actuality.js";
 import { areaWebsiteSeeds, websiteRegister } from "./website-registry.js";
 
@@ -1933,7 +1936,32 @@ describe("Ingestion-Bestand", () => {
     }]);
     if (!occurrence) throw new Error("Fundstelle fehlt");
     await expect(repository.getOccurrenceProvenance("1", occurrence.id))
-      .rejects.toThrow("Fundstelle nicht gefunden");
+      .rejects.toBeInstanceOf(IngestionOccurrenceNotFoundError);
+  });
+
+  it("ordnet eine unbekannte Fundstelle im Memory-Repository als nicht gefunden ein", async () => {
+    const repository = new MemoryIngestionRepository();
+    await expect(repository.getOccurrenceProvenance("1", 999999))
+      .rejects.toBeInstanceOf(IngestionOccurrenceNotFoundError);
+  });
+
+  it("ordnet unbekannte Fundstellen im Drizzle-Repository als nicht gefunden ein", async () => {
+    const query = {
+      innerJoin: () => query,
+      leftJoin: () => query,
+      where: () => query,
+      limit: async () => [],
+    };
+    const database = {
+      select: () => ({
+        from: () => query,
+      }),
+    };
+    const repository = createDrizzleIngestionRepository(database);
+    await expect(repository.getOccurrenceProvenance("1", 999999))
+      .rejects.toBeInstanceOf(IngestionOccurrenceNotFoundError);
+    await expect(repository.getOccurrenceProvenance("2", 999999))
+      .rejects.toBeInstanceOf(IngestionOccurrenceNotFoundError);
   });
 
   it("schützt die Provenienzroute mit der Leseberechtigung", async () => {
@@ -1977,6 +2005,11 @@ describe("Ingestion-Bestand", () => {
       .rejects.toMatchObject({ code: "FORBIDDEN" });
     await expect(caller(["ingestion.occurrence.read"]).occurrences.provenance({ id: occurrence.id }))
       .resolves.toMatchObject({ occurrenceId: occurrence.id });
+    await expect(caller(["ingestion.occurrence.read"]).occurrences.provenance({ id: 999999 }))
+      .rejects.toMatchObject({
+        code: "NOT_FOUND",
+        message: "Fundstelle nicht gefunden.",
+      });
   });
 
   it("bildet Fundstellen ohne Laufzeit-ID stabil und unterscheidet gleiche Firmen auf einer Seite", () => {

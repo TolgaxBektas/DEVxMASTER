@@ -4,6 +4,7 @@ import { areas, classifications, documents, occurrences, pages, sourceVisits, so
 import type { DerivedClassification, DocumentClassification } from "./classification.js";
 import { documentActualityStatus, sourceActualityHint, type ActualityStatus } from "./actuality.js";
 import {
+  IngestionOccurrenceNotFoundError,
   IngestionSourceNotFoundError,
   occurrenceFingerprint,
   type DocumentListFilters,
@@ -397,7 +398,7 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
         eq(occurrences.id, occurrenceId),
         eq(occurrences.tenantId, Number(tenantId)),
       )).limit(1))[0];
-      if (!row) throw new Error("Fundstelle nicht gefunden");
+      if (!row) throw new IngestionOccurrenceNotFoundError();
       return {
         ...row,
         bbox: readBbox(row.bbox),
@@ -439,7 +440,7 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
           eq(occurrences.tenantId, Number(tenantId)),
         ))
         .limit(1))[0];
-      if (!row) throw new Error("Fundstelle nicht gefunden");
+      if (!row) throw new IngestionOccurrenceNotFoundError();
       const evidence = Array.isArray(row.occurrence.evidence)
         ? row.occurrence.evidence as string[]
         : [];

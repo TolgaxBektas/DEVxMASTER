@@ -7,7 +7,11 @@ import {
   TRPCError,
 } from "@xmaster-center/kernel";
 import { ZodError, z } from "zod";
-import { IngestionSourceNotFoundError, type IngestionRepository } from "./repository.js";
+import {
+  IngestionOccurrenceNotFoundError,
+  IngestionSourceNotFoundError,
+  type IngestionRepository,
+} from "./repository.js";
 import type { PifReviewClient } from "./review-client.js";
 import type { ActualityStatus } from "./actuality.js";
 import { publishCurrentActualityTransition } from "./actuality-replay.js";
@@ -305,7 +309,19 @@ export function createIngestionRouter(
       ),
       provenance: permissionProcedure("ingestion.occurrence.read")
         .input(z.object({ id: z.number().int().positive() }))
-        .query(({ ctx, input }) => repository.getOccurrenceProvenance(ctx.auth.tenantId, input.id)),
+        .query(async ({ ctx, input }) => {
+          try {
+            return await repository.getOccurrenceProvenance(ctx.auth.tenantId, input.id);
+          } catch (error) {
+            if (error instanceof IngestionOccurrenceNotFoundError) {
+              throw new TRPCError({
+                code: "NOT_FOUND",
+                message: "Fundstelle nicht gefunden.",
+              });
+            }
+            throw error;
+          }
+        }),
       review: permissionProcedure("ingestion.occurrence.review")
         .input(z.object({
           id: z.number().int().positive(),

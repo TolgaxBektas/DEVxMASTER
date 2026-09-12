@@ -12,6 +12,7 @@ import type {
 import { WEB_FIND_DATA_SOURCE } from "./repository.js";
 import type { DerivedClassification, DocumentClassification } from "./classification.js";
 import {
+  IngestionOccurrenceNotFoundError,
   IngestionSourceNotFoundError,
   occurrenceFingerprint,
   periodIncludesYear,
@@ -216,13 +217,13 @@ export class MemoryIngestionRepository implements IngestionRepository {
       && this.documents.some((document) =>
         document.id === item.documentId && document.tenantId === tenantId,
       ));
-    if (!occurrence) throw new Error("Fundstelle nicht gefunden");
+    if (!occurrence) throw new IngestionOccurrenceNotFoundError();
     return occurrence;
   }
   async getOccurrenceProvenance(tenantId: string, occurrenceId: number): Promise<OccurrenceProvenance> {
     const occurrence = await this.getOccurrence(tenantId, occurrenceId);
     const document = this.documents.find((item) => item.id === occurrence.documentId && item.tenantId === tenantId);
-    if (!document) throw new Error("Fundstelle nicht gefunden");
+    if (!document) throw new IngestionOccurrenceNotFoundError();
     const source = document.sourceId == null
       ? null
       : this.sources.find((item) => item.id === document.sourceId && item.tenantId === tenantId) ?? null;

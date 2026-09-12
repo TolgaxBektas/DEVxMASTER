@@ -11,6 +11,13 @@ export class IngestionSourceNotFoundError extends Error {
   }
 }
 
+export class IngestionOccurrenceNotFoundError extends Error {
+  constructor() {
+    super("Fundstelle nicht gefunden");
+    this.name = "IngestionOccurrenceNotFoundError";
+  }
+}
+
 export type IngestionSource = {
   id: number;
   tenantId: string;
