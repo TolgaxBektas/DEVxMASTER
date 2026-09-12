@@ -63,7 +63,7 @@ export function parseVerdictFile(content: string): InserentenTestVerdict[] {
     const occurrenceId = Number(valueAt(row, "occurrence_id"));
     const verdict = valueAt(row, "urteil_neu").trim();
     if (!Number.isInteger(occurrenceId) || occurrenceId <= 0) {
-      throw new Error(`Ungültige Fundstellen-ID in Urteildateile, Zeile ${index + 2}`);
+      throw new Error(`Ungültige Fundstellen-ID in Urteildatei, Zeile ${index + 2}`);
     }
     if (!verdict) {
       throw new Error(`Leeres Urteil in Urteildatei, Zeile ${index + 2}`);
