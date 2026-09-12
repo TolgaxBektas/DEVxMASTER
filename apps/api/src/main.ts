@@ -93,11 +93,11 @@ const ingestion = createIngestionModule({
   audit,
   storage,
   maxUploadBytes: env.INGESTION_MAX_UPLOAD_BYTES,
-  ...(env.PIF_SERVICE_TOKEN
+  ...(env.ARTWORK_SERVICE_TOKEN
     ? {
         reviewClient: createPifReviewClient({
-          baseUrl: env.PIF_BASE_URL,
-          serviceToken: env.PIF_SERVICE_TOKEN,
+          baseUrl: env.ARTWORK_BASE_URL,
+          serviceToken: env.ARTWORK_SERVICE_TOKEN,
         }),
       }
     : {}),
@@ -113,11 +113,13 @@ const ingestion = createIngestionModule({
   }),
   publish: (input) => eventBus.publish(input),
   discoverProposals: async ({ seedPages, archiveDomains, searchTerms, maxResults, areaName }) => {
-    const response = await fetch(`${env.PIF_BASE_URL}/api/v1/discovery/proposals`, {
+    const response = await fetch(`${env.PRINT_INGEST_BASE_URL}/api/v1/discovery/proposals`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        ...(env.PIF_SERVICE_TOKEN ? { "x-service-token": env.PIF_SERVICE_TOKEN } : {}),
+        ...(env.PRINT_INGEST_SERVICE_TOKEN
+          ? { "x-service-token": env.PRINT_INGEST_SERVICE_TOKEN }
+          : {}),
       },
       body: JSON.stringify({
         seed_pages: seedPages,

@@ -8,6 +8,7 @@ router = APIRouter()
 
 
 @router.get("/health")
+@router.get("/api/v1/health")
 def health():
     settings = get_settings()
     try:

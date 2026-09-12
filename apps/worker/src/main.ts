@@ -96,19 +96,22 @@ const ingestion = createIngestionModule({
     payload: input.payload,
   }),
   processDocument: async (input) => {
-    if (!env.PIF_SERVICE_TOKEN) throw new Error("PIF-Service-Token fehlt");
+    if (!env.PRINT_INGEST_SERVICE_TOKEN) throw new Error("Print-Ingest-Service-Token fehlt");
     const processor = createPifProcessor({
       storage,
-      baseUrl: env.PIF_BASE_URL,
-      serviceToken: env.PIF_SERVICE_TOKEN,
+      baseUrl: env.PRINT_INGEST_BASE_URL,
+      serviceToken: env.PRINT_INGEST_SERVICE_TOKEN,
     });
     return processor(input);
   },
   discoverProposals: async ({ seedPages, archiveDomains, searchTerms, maxResults, areaName }) => {
-    if (!env.PIF_SERVICE_TOKEN) throw new Error("PIF-Service-Token fehlt");
-    const response = await fetch(`${env.PIF_BASE_URL}/api/v1/discovery/proposals`, {
+    if (!env.PRINT_INGEST_SERVICE_TOKEN) throw new Error("Print-Ingest-Service-Token fehlt");
+    const response = await fetch(`${env.PRINT_INGEST_BASE_URL}/api/v1/discovery/proposals`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "x-service-token": env.PIF_SERVICE_TOKEN },
+      headers: {
+        "Content-Type": "application/json",
+        "x-service-token": env.PRINT_INGEST_SERVICE_TOKEN,
+      },
       signal: AbortSignal.timeout(1_200_000),
       body: JSON.stringify({
         seed_pages: seedPages,
@@ -142,10 +145,13 @@ const ingestion = createIngestionModule({
     };
   },
   fetchSource: async ({ url, archiveUrl, archiveLength, archiveCaptures }) => {
-    if (!env.PIF_SERVICE_TOKEN) throw new Error("PIF-Service-Token fehlt");
-    const response = await fetch(`${env.PIF_BASE_URL}/api/v1/fetch`, {
+    if (!env.PRINT_INGEST_SERVICE_TOKEN) throw new Error("Print-Ingest-Service-Token fehlt");
+    const response = await fetch(`${env.PRINT_INGEST_BASE_URL}/api/v1/fetch`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "x-service-token": env.PIF_SERVICE_TOKEN },
+      headers: {
+        "Content-Type": "application/json",
+        "x-service-token": env.PRINT_INGEST_SERVICE_TOKEN,
+      },
       body: JSON.stringify({
         url,
         ...(archiveUrl ? { archive_url: archiveUrl } : {}),
@@ -168,10 +174,13 @@ const ingestion = createIngestionModule({
     };
   },
   revisitSource: async ({ url, fingerprint }) => {
-    if (!env.PIF_SERVICE_TOKEN) throw new Error("PIF-Service-Token fehlt");
-    const response = await fetch(`${env.PIF_BASE_URL}/api/v1/sources/revisit`, {
+    if (!env.PRINT_INGEST_SERVICE_TOKEN) throw new Error("Print-Ingest-Service-Token fehlt");
+    const response = await fetch(`${env.PRINT_INGEST_BASE_URL}/api/v1/sources/revisit`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "x-service-token": env.PIF_SERVICE_TOKEN },
+      headers: {
+        "Content-Type": "application/json",
+        "x-service-token": env.PRINT_INGEST_SERVICE_TOKEN,
+      },
       body: JSON.stringify({ url, fingerprint }),
     });
     if (!response.ok) throw new Error(`Quellenprüfung fehlgeschlagen (${response.status})`);
