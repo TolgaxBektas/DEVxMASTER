@@ -35,6 +35,20 @@ export function applyOccurrenceReviewStatuses(
   });
 }
 
+export function reconcileOccurrenceReviewStatuses(
+  occurrences: Occurrence[],
+  decisions: Record<number, OccurrenceReviewDecision>,
+): Record<number, OccurrenceReviewDecision> {
+  const next = { ...decisions };
+  for (const id of Object.keys(decisions)) {
+    const serverOccurrence = occurrences.find((item) => item.id === Number(id));
+    if (!serverOccurrence || serverOccurrence.status !== "detected") {
+      delete next[Number(id)];
+    }
+  }
+  return next;
+}
+
 type OccurrenceProvenance = {
   occurrenceId: number;
   dataSource: string;
@@ -152,16 +166,8 @@ export function OccurrencesPage({ api }: ModulePageProps) {
   useEffect(() => {
     if (!occurrences.data) return;
     setReviewStatuses((current) => {
-      const next = { ...current };
-      let changed = false;
-      for (const [id, decision] of Object.entries(current)) {
-        const serverOccurrence = occurrences.data?.find((item) => item.id === Number(id));
-        if (serverOccurrence?.status === decision) {
-          delete next[Number(id)];
-          changed = true;
-        }
-      }
-      return changed ? next : current;
+      const next = reconcileOccurrenceReviewStatuses(occurrences.data ?? [], current);
+      return Object.keys(next).length === Object.keys(current).length ? current : next;
     });
   }, [occurrences.data]);
   if (occurrences.isLoading || capabilities.isLoading) return <Skeleton />;
