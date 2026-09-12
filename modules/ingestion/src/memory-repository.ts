@@ -7,7 +7,9 @@ import type {
   IngestionAreaInput,
   IngestionSourceVisit,
   OccurrenceReviewResult,
+  OccurrenceProvenance,
 } from "./repository.js";
+import { WEB_FIND_DATA_SOURCE } from "./repository.js";
 import type { DerivedClassification, DocumentClassification } from "./classification.js";
 import {
   IngestionSourceNotFoundError,
@@ -21,10 +23,13 @@ export class MemoryIngestionRepository implements IngestionRepository {
   sources: IngestionSource[] = [];
   documents: IngestionDocument[] = [];
   occurrences: IngestionOccurrence[] = [];
+  pages: Array<{ id: number; documentId: number; pageNumber: number | null }> = [];
+  private pageId = 0;
   classifications = new Map<string, DocumentClassification>();
   private sourceId = 0;
   private documentId = 0;
   private occurrenceId = 0;
+  private occurrencePages = new Map<number, number>();
   areas: IngestionArea[] = [];
   sourceVisits: IngestionSourceVisit[] = [];
   private areaId = 0;
@@ -214,6 +219,76 @@ export class MemoryIngestionRepository implements IngestionRepository {
     if (!occurrence) throw new Error("Fundstelle nicht gefunden");
     return occurrence;
   }
+  async getOccurrenceProvenance(tenantId: string, occurrenceId: number): Promise<OccurrenceProvenance> {
+    const occurrence = await this.getOccurrence(tenantId, occurrenceId);
+    const document = this.documents.find((item) => item.id === occurrence.documentId && item.tenantId === tenantId);
+    if (!document) throw new Error("Fundstelle nicht gefunden");
+    const source = document.sourceId == null
+      ? null
+      : this.sources.find((item) => item.id === document.sourceId && item.tenantId === tenantId) ?? null;
+    const area = source?.areaId == null
+      ? null
+      : this.areas.find((item) => item.id === source.areaId && item.tenantId === tenantId) ?? null;
+    const classification = this.classifications.get(`${tenantId}:${document.id}`) ?? null;
+    const publication = classification
+      && [
+        classification.type,
+        classification.publicationName,
+        classification.editionLabel,
+        classification.periodStartYear,
+        classification.periodEndYear,
+        classification.periodIssue,
+      ].some((value) => value != null)
+      ? classification
+      : null;
+    const page = this.pages.find((item) => item.id === this.occurrencePages.get(occurrence.id))
+      ?? { id: occurrence.id, documentId: document.id, pageNumber: occurrence.pageNumber ?? null };
+    const evidence = occurrence.evidence ?? [];
+    const rawBbox = occurrence.bbox;
+    const bbox = rawBbox
+      && typeof rawBbox.x === "number"
+      && typeof rawBbox.y === "number"
+      && typeof rawBbox.width === "number"
+      && typeof rawBbox.height === "number"
+      ? {
+        x: rawBbox.x,
+        y: rawBbox.y,
+        width: rawBbox.width,
+        height: rawBbox.height,
+      }
+      : null;
+    return {
+      occurrenceId: occurrence.id,
+      dataSource: occurrence.dataSource,
+      company: occurrence.company,
+      status: occurrence.status,
+      confidence: occurrence.confidence ?? null,
+      bbox,
+      imageKey: occurrence.imageKey ?? null,
+      evidence,
+      advertiserProof: evidence.filter((item) => item.startsWith("positiv:")),
+      page: { id: page.id, number: page.pageNumber ?? null },
+      document: {
+        id: document.id,
+        filename: document.filename,
+        sha256: document.sha256,
+        origin: document.origin,
+        storageKey: document.storageKey,
+      },
+      source: source ? { id: source.id, url: source.url } : null,
+      area: area ? { id: area.id, ags: area.ags, name: area.name, stateName: area.stateName } : null,
+      publication: publication
+        ? {
+          type: publication.type,
+          name: publication.publicationName,
+          editionLabel: publication.editionLabel,
+          periodStartYear: publication.periodStartYear,
+          periodEndYear: publication.periodEndYear,
+          periodIssue: publication.periodIssue,
+        }
+        : null,
+    };
+  }
   async reviewOccurrence(tenantId: string, occurrenceId: number, status: "approved" | "rejected"): Promise<OccurrenceReviewResult> {
     const occurrence = await this.getOccurrence(tenantId, occurrenceId);
     if (occurrence.status === status) return { occurrence, changed: false };
@@ -300,31 +375,42 @@ export class MemoryIngestionRepository implements IngestionRepository {
     const document = await this.getDocument(tenantId, documentId);
     const previous = this.occurrences.filter((item) => item.documentId === document.id);
     this.occurrences = this.occurrences.filter((item) => item.documentId !== document.id);
+    this.pages = this.pages.filter((item) => item.documentId !== document.id);
+    for (const [occurrenceId, pageId] of this.occurrencePages) {
+      if (!this.pages.some((item) => item.id === pageId)) this.occurrencePages.delete(occurrenceId);
+    }
     const created = includeOccurrences
-      ? processedPages.flatMap((page) => page.occurrences.map((item) => {
-      const fingerprint = occurrenceFingerprint({
-        pageNumber: page.pageNumber,
-        company: item.company,
-        preview: item.preview,
-        bbox: item.bbox,
+      ? processedPages.flatMap((page) => {
+        const pageId = ++this.pageId;
+        this.pages.push({ id: pageId, documentId: document.id, pageNumber: page.pageNumber });
+        return page.occurrences.map((item) => {
+          const fingerprint = occurrenceFingerprint({
+            pageNumber: page.pageNumber,
+            company: item.company,
+            preview: item.preview,
+            bbox: item.bbox,
+          });
+          const old = previous.find((candidate) =>
+            occurrenceFingerprint(candidate) === fingerprint,
+          );
+          const occurrence = {
+            id: ++this.occurrenceId,
+            documentId: document.id,
+            dataSource: WEB_FIND_DATA_SOURCE,
+            pageNumber: page.pageNumber,
+            company: item.company,
+            preview: item.preview,
+            status: old?.status ?? "detected",
+            bbox: item.bbox,
+            imageKey: item.imageKey,
+            confidence: item.confidence,
+            evidence: item.evidence ?? [],
+            contacts: item.contacts ?? null,
+          };
+          this.occurrencePages.set(occurrence.id, pageId);
+          return occurrence;
       });
-      const old = previous.find((candidate) =>
-        occurrenceFingerprint(candidate) === fingerprint,
-      );
-      return {
-      id: ++this.occurrenceId,
-      documentId: document.id,
-      pageNumber: page.pageNumber,
-      company: item.company,
-      preview: item.preview,
-      status: old?.status ?? "detected",
-      bbox: item.bbox,
-      imageKey: item.imageKey,
-      confidence: item.confidence,
-      evidence: item.evidence ?? [],
-      contacts: item.contacts ?? null,
-    };
-      }))
+      })
       : [];
     this.occurrences.push(...created);
     document.state = "processed";

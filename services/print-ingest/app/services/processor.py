@@ -1364,6 +1364,7 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
             evidence.append("whitespace")
         evidence.extend(_provenance_warnings(text_value))
         confidence = min(0.98, 0.45 + len(evidence) * 0.1)
+        evidence.extend(classification["reasons"])
         normalized = {
             "x": box[0] / width,
             "y": box[1] / height,

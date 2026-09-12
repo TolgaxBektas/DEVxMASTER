@@ -338,3 +338,8 @@ def test_three_ad_strip_is_split_into_three_candidates():
     )
     assert len(result) == 3
     assert all(item["height"] < 0.2 for item in result)
+    assert all(
+        any(evidence.startswith("positiv:") for evidence in item["evidence"])
+        for item in result
+    )
+    assert {item["confidence"] for item in result} == {0.98}

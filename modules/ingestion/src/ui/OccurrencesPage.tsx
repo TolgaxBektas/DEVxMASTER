@@ -23,6 +23,74 @@ type Occurrence = {
   evidence?: string[] | null;
 };
 
+type OccurrenceProvenance = {
+  occurrenceId: number;
+  dataSource: string;
+  company: string;
+  status: string;
+  confidence: number | null;
+  bbox: { x: number; y: number; width: number; height: number } | null;
+  imageKey: string | null;
+  evidence: string[];
+  advertiserProof: string[];
+  page: { id: number; number: number | null };
+  document: { id: number; filename: string; sha256: string; origin: string; storageKey: string };
+  source: { id: number; url: string } | null;
+  area: { id: number; ags: string; name: string; stateName: string } | null;
+  publication: {
+    type: string | null;
+    name: string | null;
+    editionLabel: string | null;
+    periodStartYear: number | null;
+    periodEndYear: number | null;
+    periodIssue: number | null;
+  } | null;
+};
+
+export type ProvenanceDisplayRow = { label: string; value: string };
+
+export function formatOccurrenceProvenance(provenance: OccurrenceProvenance): ProvenanceDisplayRow[] {
+  const publication = provenance.publication;
+  const period = [
+    publication?.periodStartYear != null && publication.periodEndYear != null
+      ? `${publication.periodStartYear}–${publication.periodEndYear}`
+      : publication?.periodStartYear ?? publication?.periodEndYear,
+    publication?.periodIssue != null ? `Ausgabennummer ${publication.periodIssue}` : null,
+  ].filter((value): value is string | number => value != null).join(" · ");
+  const dataSourceLabels: Record<string, string> = {
+    xdata_germany: "xDATA Germany",
+    xdata_nb_high_quality: "xDATA-nB High Quality",
+  };
+  const dataSource = dataSourceLabels[provenance.dataSource] ?? provenance.dataSource;
+  return [
+    {
+      label: "Gebiet",
+      value: provenance.area
+        ? `${provenance.area.name} · AGS ${provenance.area.ags} · ${provenance.area.stateName}`
+        : "nicht angegeben",
+    },
+    { label: "Quelle", value: provenance.source?.url ?? "nicht angegeben" },
+    {
+      label: "Heft",
+      value: publication
+        ? [publication.name, publication.editionLabel, period].filter(Boolean).join(" · ") || "nicht angegeben"
+        : "nicht angegeben",
+    },
+    {
+      label: "Seite",
+      value: provenance.page.number == null ? "nicht angegeben" : String(provenance.page.number),
+    },
+    { label: "Datenquelle", value: dataSource || "nicht angegeben" },
+    { label: "Dokument-SHA-256", value: provenance.document.sha256.slice(0, 12) || "nicht angegeben" },
+    {
+      label: "Inserenten-Nachweis",
+      value: provenance.advertiserProof.length
+        ? provenance.advertiserProof.map(evidenceLabel).join(", ")
+        : "Kein Inserenten-Nachweis (Altfund)",
+    },
+  ];
+}
+
 type ImageState = "loading" | "loaded" | "missing";
 
 export function occurrenceImageFallbackVisible(state: ImageState): boolean {
@@ -120,7 +188,13 @@ export function OccurrencesPage({ api }: ModulePageProps) {
       {!rows.length && <EmptyState title="Keine Fundstellen für diesen Status." />}
       <div className="stack">
         {rows.map((occurrence) => (
-          <OccurrenceCard key={occurrence.id} occurrence={occurrence} canReview={Boolean(capabilities.data?.review)} review={review} />
+          <OccurrenceCard
+            key={occurrence.id}
+            api={api}
+            occurrence={occurrence}
+            canReview={Boolean(capabilities.data?.review)}
+            review={review}
+          />
         ))}
       </div>
     </div>
@@ -128,15 +202,23 @@ export function OccurrencesPage({ api }: ModulePageProps) {
 }
 
 function OccurrenceCard({
+  api,
   occurrence,
   canReview,
   review,
 }: {
+  api: ModulePageProps["api"];
   occurrence: Occurrence;
   canReview: boolean;
   review: (id: number, decision: "approved" | "rejected") => Promise<void>;
 }) {
   const [imageState, setImageState] = useState<ImageState>("loading");
+  const provenance = useModuleQuery<OccurrenceProvenance>(
+    api,
+    "modules.ingestion.occurrences.provenance",
+    { id: occurrence.id },
+  );
+  const provenanceRows = provenance.data ? formatOccurrenceProvenance(provenance.data) : [];
   return (
           <Card>
             <div style={{ display: "grid", gap: "1.25rem", gridTemplateColumns: "minmax(280px, 1fr) minmax(280px, 1.2fr)" }}>
@@ -180,6 +262,21 @@ function OccurrenceCard({
                 {occurrence.evidence?.includes("provenance-uncertain") && (
                   <p><strong>Hinweis:</strong> Die Herkunft ist unklar. Bitte prüfen, ob der Werbetreibende zum gewünschten Bestand gehört.</p>
                 )}
+                <div>
+                  <strong>Herkunft</strong>
+                  {provenance.isLoading && <p className="form-message">Herkunft wird geladen …</p>}
+                  {provenance.error && <p className="form-message">Herkunft konnte nicht geladen werden.</p>}
+                  {provenance.data && (
+                    <dl className="detail-list">
+                      {provenanceRows.map((row) => (
+                        <div key={row.label}>
+                          <dt>{row.label}</dt>
+                          <dd>{row.value}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  )}
+                </div>
                 {canReview && occurrence.status !== "approved" && (
                   <Button onClick={() => void review(occurrence.id, "approved")}>Freigeben</Button>
                 )}

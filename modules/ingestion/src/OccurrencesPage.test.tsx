@@ -2,11 +2,40 @@ import { describe, expect, it } from "vitest";
 import {
   downloadOccurrenceExport,
   evidenceLabel,
+  formatOccurrenceProvenance,
   occurrenceExportPath,
   occurrenceImageFallbackVisible,
 } from "./ui/OccurrencesPage.js";
 
 describe("Fundstellenansicht", () => {
+  it("formatiert die Herkunft vollständig und markiert Altfunde", () => {
+    const rows = formatOccurrenceProvenance({
+      occurrenceId: 1,
+      dataSource: "xdata_germany",
+      company: "Muster GmbH",
+      status: "detected",
+      confidence: 0.9,
+      bbox: null,
+      imageKey: null,
+      evidence: ["geometry", "positiv:p2"],
+      advertiserProof: ["positiv:p2"],
+      page: { id: 2, number: 4 },
+      document: {
+        id: 3,
+        filename: "heft.pdf",
+        sha256: "abcdef1234567890",
+        origin: "upload",
+        storageKey: "heft.pdf",
+      },
+      source: null,
+      area: null,
+      publication: null,
+    });
+    expect(rows.find((row) => row.label === "Datenquelle")?.value).toBe("xDATA Germany");
+    expect(rows.find((row) => row.label === "Dokument-SHA-256")?.value).toBe("abcdef123456");
+    expect(rows.find((row) => row.label === "Inserenten-Nachweis")?.value).toBe("P2 Werbeabsicht");
+  });
+
   it("übersetzt alle technischen Evidenzen ohne rohe Werte", () => {
     expect(evidenceLabel("typography")).toBe("Typografische Gestaltung");
     expect(evidenceLabel("whitespace")).toBe("Freiraum um die Anzeige");

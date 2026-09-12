@@ -23,6 +23,7 @@ const document = {
 const occurrence = {
   id: 11,
   documentId: 7,
+  dataSource: "xdata_germany",
   pageNumber: 1,
   company: "Muster GmbH",
   preview: "Telefon 0123",
