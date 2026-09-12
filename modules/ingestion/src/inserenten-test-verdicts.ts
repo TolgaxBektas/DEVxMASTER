@@ -107,3 +107,10 @@ export function mergeEvidence(existing: string[] | null, added: string[]): strin
 export function plannedRejection(current: { status: string }, verdict: string): boolean {
   return verdict === "keine_anzeige" && current.status === "detected";
 }
+
+export function updatedRowCount(result: unknown): number {
+  const candidate = Array.isArray(result) ? result[0] : result;
+  if (!candidate || typeof candidate !== "object") return 0;
+  const affectedRows = Number((candidate as { affectedRows?: unknown }).affectedRows ?? 0);
+  return Number.isFinite(affectedRows) && affectedRows > 0 ? affectedRows : 0;
+}

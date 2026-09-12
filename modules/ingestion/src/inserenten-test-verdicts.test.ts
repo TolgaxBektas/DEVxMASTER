@@ -5,6 +5,7 @@ import {
   parseVerdictFile,
   plannedRejection,
   rejectionEvidence,
+  updatedRowCount,
 } from "./inserenten-test-verdicts.js";
 
 describe("Urteile des Inserenten-Tests", () => {
@@ -51,5 +52,12 @@ describe("Urteile des Inserenten-Tests", () => {
     expect(plannedRejection({ status: "approved" }, "keine_anzeige")).toBe(false);
     expect(plannedRejection({ status: "rejected" }, "keine_anzeige")).toBe(false);
     expect(plannedRejection({ status: "detected" }, "firmenanzeige")).toBe(false);
+  });
+
+  it("liest die betroffenen Zeilen aus beiden MySQL-Ergebnisformen", () => {
+    expect(updatedRowCount([{ affectedRows: 1 }])).toBe(1);
+    expect(updatedRowCount({ affectedRows: 1 })).toBe(1);
+    expect(updatedRowCount(undefined)).toBe(0);
+    expect(updatedRowCount([])).toBe(0);
   });
 });
