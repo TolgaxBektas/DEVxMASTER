@@ -348,6 +348,26 @@ same tenant must answer „Bereits vorhanden“ and create no extra row/occurren
 - After changing print-ingest, rebuild/restart that service AND reprocess the affected document — existing
   `ingestion_occurrences.contacts` rows keep the old values and a re-export alone proves nothing.
 
+## Statusfilter/Export-Semantik auf `/ingestion/occurrences` (ab PR #85)
+- Empty select value = „Nur Anzeigen (ohne abgelehnte)“ and HIDES `status='rejected'`; `all` =
+  „Alle Fundstellen (mit abgelehnten)“. The same semantics apply to the export route: no `status` param →
+  rejected rows dropped, `?status=all` → everything, explicit status → exact filter. Check it cheaply with
+  `&documentId=<id>` instead of pulling the whole stock (a full export is GB-sized):
+  `http://localhost:3020/api/ingestion/occurrences/export?documentId=1115[&status=all|rejected]`, then read
+  the `Status` / `Fundstelle-ID` columns with openpyxl. Typing the export URL into the address bar of the
+  logged-in browser reuses the session cookie, so no curl/auth juggling is needed.
+- Pick fixtures by SQL first: `select status,count(*) from ingestion_occurrences where tenant_id=1 group by status`
+  and `select id,company,status from ingestion_occurrences where document_id=<id>`. Never verify by company
+  name alone — the same company can exist several times with different statuses (e.g. „Zimmermann Sanitäts…“
+  appears both rejected and detected); assert on occurrence IDs/status badges.
+- GUI trap: after a Chrome relaunch the NATIVE select popup often paints blank/stuck. Workaround that reliably
+  changes the value: click the select once, press `Escape`, then press `Down`/`Up` — the closed select commits
+  the change and React re-renders. `Escape` while the popup is open reverts; arrow keys only work while the
+  select still has focus (scrolling the page loses it).
+- Incognito (`ctrl+shift+n`) is the quickest way to log in as a SECOND tenant without hunting the logout
+  button — the logout icon sits in the sidebar footer and is easily below the fold. In incognito every
+  download raises the GTK „Save File“ dialog; just press `Save`.
+
 ## Überwachungsordner (`INGESTION_WATCH_FOLDER`)
 - Worker job `ingestion.watchfolder.scan` (schedule `frequent`) moves files to `erfolgreich/`,
   `bereits-vorhanden/` or `fehlerhaft/`. A file must survive two scans with a stable size, so wait out at
