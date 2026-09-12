@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Badge,
   Button,
@@ -13,7 +13,7 @@ import { evidenceLabel } from "../evidence-labels.js";
 
 export { evidenceLabel } from "../evidence-labels.js";
 
-type Occurrence = {
+export type Occurrence = {
   id: number;
   pageNumber?: number;
   company?: string;
@@ -22,6 +22,18 @@ type Occurrence = {
   confidence?: number | null;
   evidence?: string[] | null;
 };
+
+export type OccurrenceReviewDecision = "approved" | "rejected";
+
+export function applyOccurrenceReviewStatuses(
+  occurrences: Occurrence[],
+  decisions: Record<number, OccurrenceReviewDecision>,
+): Occurrence[] {
+  return occurrences.map((occurrence) => {
+    const decision = decisions[occurrence.id];
+    return decision ? { ...occurrence, status: decision } : occurrence;
+  });
+}
 
 type OccurrenceProvenance = {
   occurrenceId: number;
@@ -128,6 +140,7 @@ const statusLabels: Record<string, string> = {
 export function OccurrencesPage({ api }: ModulePageProps) {
   const [status, setStatus] = useState("");
   const [message, setMessage] = useState("");
+  const [reviewStatuses, setReviewStatuses] = useState<Record<number, OccurrenceReviewDecision>>({});
   const occurrences = useModuleQuery<Occurrence[]>(
     api,
     "modules.ingestion.occurrences.list",
@@ -136,22 +149,39 @@ export function OccurrencesPage({ api }: ModulePageProps) {
     api,
     "modules.ingestion.occurrences.capabilities",
   );
+  useEffect(() => {
+    if (!occurrences.data) return;
+    setReviewStatuses((current) => {
+      const next = { ...current };
+      let changed = false;
+      for (const [id, decision] of Object.entries(current)) {
+        const serverOccurrence = occurrences.data?.find((item) => item.id === Number(id));
+        if (serverOccurrence?.status === decision) {
+          delete next[Number(id)];
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [occurrences.data]);
   if (occurrences.isLoading || capabilities.isLoading) return <Skeleton />;
   if (occurrences.error || capabilities.error) {
     return <EmptyState title="Fundstellen konnten nicht geladen werden" description="Bitte Anmeldung und Berechtigung prüfen." />;
   }
-  const rows = (occurrences.data ?? []).filter((item) =>
+  const rows = applyOccurrenceReviewStatuses(occurrences.data ?? [], reviewStatuses).filter((item) =>
     status ? item.status === status : true,
   );
-  const review = async (id: number, decision: "approved" | "rejected") => {
+  const review = async (id: number, decision: OccurrenceReviewDecision) => {
     setMessage("");
     try {
       await api.mutate("modules.ingestion.occurrences.review", { id, decision });
-      await api.invalidate?.("modules.ingestion.occurrences.list");
-      setMessage(decision === "approved" ? "Fundstelle freigegeben." : "Fundstelle abgelehnt.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Entscheidung konnte nicht gespeichert werden.");
+      return;
     }
+    setReviewStatuses((current) => ({ ...current, [id]: decision }));
+    setMessage(decision === "approved" ? "Fundstelle freigegeben." : "Fundstelle abgelehnt.");
+    await Promise.resolve(api.invalidate?.("modules.ingestion.occurrences.list")).catch(() => undefined);
   };
   const downloadExport = async () => {
     setMessage("");
@@ -210,7 +240,7 @@ function OccurrenceCard({
   api: ModulePageProps["api"];
   occurrence: Occurrence;
   canReview: boolean;
-  review: (id: number, decision: "approved" | "rejected") => Promise<void>;
+  review: (id: number, decision: OccurrenceReviewDecision) => Promise<void>;
 }) {
   const [imageState, setImageState] = useState<ImageState>("loading");
   const provenance = useModuleQuery<OccurrenceProvenance>(

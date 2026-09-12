@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyOccurrenceReviewStatuses,
   downloadOccurrenceExport,
   evidenceLabel,
   formatOccurrenceProvenance,
@@ -78,5 +79,21 @@ describe("Fundstellenansicht", () => {
       } },
       urlRef: { createObjectURL: () => "unused", revokeObjectURL: () => undefined },
     })).rejects.toThrow("Excel-Paket konnte nicht heruntergeladen werden.");
+  });
+
+  it("zeigt eine erfolgreiche Entscheidung sofort im lokalen Kartenstatus", () => {
+    const rows = applyOccurrenceReviewStatuses(
+      [{ id: 7, company: "Muster GmbH", status: "detected" }],
+      { 7: "approved" },
+    );
+    expect(rows[0]).toMatchObject({ id: 7, status: "approved" });
+  });
+
+  it("übernimmt nach dem Serverabgleich wieder den Serverstatus", () => {
+    const rows = applyOccurrenceReviewStatuses(
+      [{ id: 7, company: "Muster GmbH", status: "approved" }],
+      {},
+    );
+    expect(rows[0]).toMatchObject({ id: 7, status: "approved" });
   });
 });
