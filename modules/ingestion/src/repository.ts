@@ -152,6 +152,7 @@ export type OccurrenceProvenance = {
   occurrenceId: number;
   dataSource: string;
   company: string;
+  preview?: string;
   status: string;
   confidence: number | null;
   bbox: { x: number; y: number; width: number; height: number } | null;

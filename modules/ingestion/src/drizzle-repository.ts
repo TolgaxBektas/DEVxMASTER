@@ -458,6 +458,7 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
         occurrenceId: row.occurrence.id,
         dataSource: row.occurrence.dataSource,
         company: row.occurrence.company,
+        preview: row.occurrence.preview,
         status: row.occurrence.status,
         confidence: row.occurrence.confidence,
         bbox: readProvenanceBbox(row.occurrence.bbox),
