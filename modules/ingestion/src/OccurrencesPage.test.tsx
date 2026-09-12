@@ -7,6 +7,7 @@ import {
   occurrenceExportPath,
   occurrenceImageFallbackVisible,
   reconcileOccurrenceReviewStatuses,
+  visibleOccurrences,
 } from "./ui/OccurrencesPage.js";
 
 describe("Fundstellenansicht", () => {
@@ -41,6 +42,9 @@ describe("Fundstellenansicht", () => {
   it("übersetzt alle technischen Evidenzen ohne rohe Werte", () => {
     expect(evidenceLabel("typography")).toBe("Typografische Gestaltung");
     expect(evidenceLabel("whitespace")).toBe("Freiraum um die Anzeige");
+    expect(evidenceLabel("veto:falscher-ausschnitt")).toBe("Ablehnung: Falscher Ausschnitt");
+    expect(evidenceLabel("fehlend:kontakt")).toBe("Fehlt: Kontakt");
+    expect(evidenceLabel("unclear:traeger")).toBe("Unklar: Träger");
     expect(evidenceLabel("future-signal")).toBe("Zusätzlicher Prüfbeleg");
   });
 
@@ -70,6 +74,19 @@ describe("Fundstellenansicht", () => {
       documentRef,
       urlRef: { createObjectURL, revokeObjectURL },
     });
+    expect(occurrenceExportPath("")).toBe("/api/ingestion/occurrences/export");
+    expect(occurrenceExportPath("all")).toBe("/api/ingestion/occurrences/export?status=all");
+  });
+
+  it("filtert abgelehnte Fundstellen standardmäßig aus der Oberfläche", () => {
+    const rows = [
+      { id: 1, status: "detected" },
+      { id: 2, status: "approved" },
+      { id: 3, status: "rejected" },
+    ];
+    expect(visibleOccurrences(rows, "").map((row) => row.id)).toEqual([1, 2]);
+    expect(visibleOccurrences(rows, "all").map((row) => row.id)).toEqual([1, 2, 3]);
+    expect(visibleOccurrences(rows, "rejected").map((row) => row.id)).toEqual([3]);
   });
 
   it("meldet einen fehlgeschlagenen Excel-Download", async () => {

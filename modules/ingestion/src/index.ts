@@ -9,3 +9,11 @@ export { ingestionPages, IngestionPage } from "./ui/index.js";
 export { areaSearchTerms, PUBLICATION_TERMS } from "./search-terms.js";
 export { PUBLISHER_SEED_PAGES } from "./publishers.js";
 export { areaWebsiteSeeds, MAX_MUNICIPALITY_SEEDS_PER_RUN, websiteRegister } from "./website-registry.js";
+export {
+  collapseVerdicts,
+  mergeEvidence,
+  parseVerdictFile,
+  plannedRejection,
+  rejectionEvidence,
+} from "./inserenten-test-verdicts.js";
+export type { InserentenTestVerdict } from "./inserenten-test-verdicts.js";

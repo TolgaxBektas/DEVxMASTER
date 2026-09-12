@@ -14,6 +14,21 @@ const evidenceLabels: Record<string, string> = {
   "positiv:p2": "P2 Werbeabsicht",
   "positiv:p3": "P3 Kontaktweg",
   "positiv:p4": "P4 Gestaltung",
+  "veto:ganzseite": "Ablehnung: Ganzseite",
+  "veto:behoerde": "Ablehnung: Behörde",
+  "veto:kirche": "Ablehnung: Kirche",
+  "veto:verein": "Ablehnung: Verein",
+  "veto:verzeichnis": "Ablehnung: Verzeichnis",
+  "veto:redaktion": "Ablehnung: Redaktion",
+  "veto:verlag": "Ablehnung: Verlag",
+  "veto:stellenanzeige": "Ablehnung: Stellenanzeige",
+  "veto:falscher-ausschnitt": "Ablehnung: Falscher Ausschnitt",
+  "fehlend:absender": "Fehlt: Absender",
+  "fehlend:werbeabsicht": "Fehlt: Werbeabsicht",
+  "fehlend:kontakt": "Fehlt: Kontakt",
+  "fehlend:gestaltung": "Fehlt: Gestaltung",
+  "unclear:traeger": "Unklar: Träger",
+  "unclear:stellenanzeige": "Unklar: Stellenanzeige",
 };
 
 export function evidenceLabel(value: string): string {
