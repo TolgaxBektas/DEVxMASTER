@@ -801,7 +801,7 @@ describe("Ingestion-Bestand", () => {
       regionSource: "first-pages", regionConfidence: null,
     });
     repository.occurrences.push({
-      id: 1, documentId: document.document.id, pageNumber: 1,
+      id: 1, documentId: document.document.id, dataSource: "xdata_germany", pageNumber: 1,
       bbox: null, imageKey: null, confidence: 0.9,
       evidence: [], company: "Muster GmbH", preview: "Telefon 0123 456789",
       status: "detected",
@@ -1791,6 +1791,192 @@ describe("Ingestion-Bestand", () => {
     await expect(caller.occurrences.review({ id: 1, decision: "approved" })).rejects.toMatchObject({
       code: "FORBIDDEN",
     });
+  });
+
+  it("bildet die vollständige Herkunft einer Fundstelle im Memory-Repository", async () => {
+    const repository = new MemoryIngestionRepository();
+    const area = await repository.upsertArea("1", {
+      level: "district",
+      ags: "09162",
+      name: "Musterkreis",
+      stateName: "Bayern",
+      kind: "Kreis",
+      orderIndex: 1,
+      status: "done",
+      lastRunAt: null,
+      startedAt: null,
+      nextDueAt: null,
+      lastError: null,
+      foundSources: 1,
+    });
+    const source = await repository.createSource("1", {
+      url: "https://muster.example/heft.pdf",
+      score: 0.9,
+      metadata: {},
+      areaId: area.id,
+    });
+    const document = await repository.createUploadedDocument("1", {
+      filename: "heft.pdf",
+      sourceId: source.id,
+      sha256: "a".repeat(64),
+      storageKey: "tenants/1/heft.pdf",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "web",
+    });
+    await repository.upsertDerivedClassification("1", document.document.id, {
+      type: "amtsblatt",
+      typeSource: "first-pages",
+      typeConfidence: 0.9,
+      publicationName: "Musterheft",
+      publicationNameSource: "first-pages",
+      publicationNameConfidence: 0.9,
+      editionLabel: "Ausgabe 4",
+      editionSource: "first-pages",
+      editionConfidence: 0.9,
+      periodStartYear: 2025,
+      periodEndYear: 2025,
+      periodIssue: 4,
+      periodSource: "first-pages",
+      periodConfidence: 0.9,
+      regionPlace: null,
+      regionDistrict: null,
+      regionState: "Bayern",
+      regionSource: "first-pages",
+      regionConfidence: 0.9,
+    });
+    const [occurrence] = await repository.replaceProcessedDocument("1", document.document.id, [{
+      pageNumber: 4,
+      text: "Anzeige",
+      imageKey: "page.png",
+      classification: "MIXED_CONTENT",
+      adProbability: 0.9,
+      occurrences: [{
+        bbox: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
+        imageKey: "ad.png",
+        confidence: 0.9,
+        evidence: ["geometry", "positiv:p2", "fehlend:p4"],
+        company: "Muster GmbH",
+        preview: "Muster GmbH",
+      }],
+    }]);
+    if (!occurrence) throw new Error("Fundstelle fehlt");
+    await expect(repository.getOccurrenceProvenance("1", occurrence.id)).resolves.toMatchObject({
+      dataSource: "xdata_germany",
+      advertiserProof: ["positiv:p2"],
+      page: { number: 4 },
+      source: { url: "https://muster.example/heft.pdf" },
+      area: { ags: "09162", name: "Musterkreis", stateName: "Bayern" },
+      publication: { name: "Musterheft", editionLabel: "Ausgabe 4", periodIssue: 4 },
+    });
+  });
+
+  it("liefert Herkunft ohne Quelle und Gebiet sowie für Altfunde ohne Nachweis", async () => {
+    const repository = new MemoryIngestionRepository();
+    const document = await repository.createUploadedDocument("1", {
+      filename: "upload.pdf",
+      sha256: "b".repeat(64),
+      storageKey: "upload.pdf",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "upload",
+    });
+    const [occurrence] = await repository.replaceProcessedDocument("1", document.document.id, [{
+      pageNumber: 1,
+      text: "Altbestand",
+      imageKey: "page.png",
+      classification: "MIXED_CONTENT",
+      adProbability: 0.5,
+      occurrences: [{
+        bbox: { x: 0, y: 0, width: 1, height: 1 },
+        imageKey: "ad.png",
+        confidence: 0.5,
+        evidence: ["geometry"],
+        company: "Altbestand",
+        preview: "Altbestand",
+      }],
+    }]);
+    if (!occurrence) throw new Error("Fundstelle fehlt");
+    await expect(repository.getOccurrenceProvenance("1", occurrence.id)).resolves.toMatchObject({
+      source: null,
+      area: null,
+      publication: null,
+      advertiserProof: [],
+      document: { origin: "upload" },
+    });
+  });
+
+  it("verweigert die Provenienz einer mandantenfremden Fundstelle", async () => {
+    const repository = new MemoryIngestionRepository();
+    const document = await repository.createUploadedDocument("2", {
+      filename: "fremd.pdf",
+      sha256: "c".repeat(64),
+      storageKey: "fremd.pdf",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "upload",
+    });
+    const [occurrence] = await repository.replaceProcessedDocument("2", document.document.id, [{
+      pageNumber: 1,
+      text: "Fremd",
+      imageKey: "page.png",
+      classification: "MIXED_CONTENT",
+      adProbability: 0.5,
+      occurrences: [{
+        bbox: { x: 0, y: 0, width: 1, height: 1 },
+        imageKey: "ad.png",
+        confidence: 0.5,
+        evidence: ["positiv:p2", "geometry"],
+        company: "Fremd",
+        preview: "Fremd",
+      }],
+    }]);
+    if (!occurrence) throw new Error("Fundstelle fehlt");
+    await expect(repository.getOccurrenceProvenance("1", occurrence.id))
+      .rejects.toThrow("Fundstelle nicht gefunden");
+  });
+
+  it("schützt die Provenienzroute mit der Leseberechtigung", async () => {
+    const repository = new MemoryIngestionRepository();
+    const document = await repository.createUploadedDocument("1", {
+      filename: "route.pdf",
+      sha256: "d".repeat(64),
+      storageKey: "route.pdf",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "upload",
+    });
+    const [occurrence] = await repository.replaceProcessedDocument("1", document.document.id, [{
+      pageNumber: 1,
+      text: "Route",
+      imageKey: "page.png",
+      classification: "MIXED_CONTENT",
+      adProbability: 0.5,
+      occurrences: [{
+        bbox: { x: 0, y: 0, width: 1, height: 1 },
+        imageKey: "ad.png",
+        confidence: 0.5,
+        evidence: [],
+        company: "Route",
+        preview: "Route",
+      }],
+    }]);
+    if (!occurrence) throw new Error("Fundstelle fehlt");
+    const caller = (permissions: string[]) => createIngestionRouter(
+      repository,
+      async () => undefined,
+    ).createCaller({
+      auth: {
+        tenantId: "1",
+        user: { id: "reader", email: null, displayName: "Leser" },
+        permissions: new Set(permissions),
+        provider: "local",
+      },
+    });
+    await expect(caller([]).occurrences.provenance({ id: occurrence.id }))
+      .rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(caller(["ingestion.occurrence.read"]).occurrences.provenance({ id: occurrence.id }))
+      .resolves.toMatchObject({ occurrenceId: occurrence.id });
   });
 
   it("bildet Fundstellen ohne Laufzeit-ID stabil und unterscheidet gleiche Firmen auf einer Seite", () => {

@@ -83,6 +83,7 @@ function seedRepository() {
     {
       id: 11,
       documentId: 1,
+      dataSource: "xdata_germany",
       pageNumber: 3,
       company: "Muster GmbH",
       preview: "Muster-Anzeige",
@@ -101,6 +102,7 @@ function seedRepository() {
     {
       id: 12,
       documentId: 1,
+      dataSource: "xdata_germany",
       pageNumber: 4,
       company: "Ohne Bild",
       preview: "Zweite Anzeige",
@@ -113,6 +115,7 @@ function seedRepository() {
     {
       id: 21,
       documentId: 2,
+      dataSource: "xdata_germany",
       pageNumber: 1,
       company: "Fremder Mandant",
       preview: "Nicht exportieren",

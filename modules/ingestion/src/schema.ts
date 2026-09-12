@@ -121,6 +121,7 @@ export const occurrences = mysqlTable("ingestion_occurrences", {
   tenantId: int("tenant_id").notNull(),
   documentId: int("document_id").notNull(),
   pageId: int("page_id").notNull(),
+  dataSource: varchar("data_source", { length: 32 }).default("xdata_germany").notNull(),
   company: varchar("company", { length: 255 }).notNull(),
   preview: text("preview").notNull(),
   status: varchar("status", { length: 32 }).notNull(),

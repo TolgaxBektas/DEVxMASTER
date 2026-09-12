@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import type { DerivedClassification, DocumentClassification } from "./classification.js";
 import type { ActualityStatus } from "./actuality.js";
 
+export const WEB_FIND_DATA_SOURCE = "xdata_germany";
+
 export class IngestionSourceNotFoundError extends Error {
   constructor() {
     super("Quelle nicht gefunden");
@@ -129,6 +131,7 @@ export function periodIncludesYear(
 export type IngestionOccurrence = {
   id: number;
   documentId: number;
+  dataSource: string;
   pageNumber?: number;
   company: string;
   preview: string;
@@ -143,6 +146,29 @@ export type IngestionOccurrence = {
     website: string | null;
     postalCode: string | null;
     city: string | null;
+  } | null;
+};
+export type OccurrenceProvenance = {
+  occurrenceId: number;
+  dataSource: string;
+  company: string;
+  status: string;
+  confidence: number | null;
+  bbox: { x: number; y: number; width: number; height: number } | null;
+  imageKey: string | null;
+  evidence: string[];
+  advertiserProof: string[];
+  page: { id: number; number: number | null };
+  document: { id: number; filename: string; sha256: string; origin: string; storageKey: string };
+  source: { id: number; url: string } | null;
+  area: { id: number; ags: string; name: string; stateName: string } | null;
+  publication: {
+    type: string | null;
+    name: string | null;
+    editionLabel: string | null;
+    periodStartYear: number | null;
+    periodEndYear: number | null;
+    periodIssue: number | null;
   } | null;
 };
 export type OccurrenceReviewResult = {
@@ -194,6 +220,7 @@ export type IngestionRepository = {
   ): Promise<IngestionDocument>;
   listOccurrences(tenantId: string): Promise<IngestionOccurrence[]>;
   getOccurrence(tenantId: string, occurrenceId: number): Promise<IngestionOccurrence>;
+  getOccurrenceProvenance(tenantId: string, occurrenceId: number): Promise<OccurrenceProvenance>;
   reviewOccurrence(
     tenantId: string,
     occurrenceId: number,

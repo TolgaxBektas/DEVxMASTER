@@ -10,6 +10,8 @@ import {
   type IngestionDocument,
   type IngestionOccurrence,
   type IngestionRepository,
+  type OccurrenceProvenance,
+  WEB_FIND_DATA_SOURCE,
 } from "./repository.js";
 
 type IngestionDb = MySql2Database<typeof ingestionSchema>;
@@ -20,6 +22,19 @@ function readBbox(value: unknown): Record<string, number> | null {
   const keys = ["x", "y", "width", "height", "confidence"];
   if (!keys.every((key) => typeof record[key] === "number")) return null;
   return Object.fromEntries(keys.map((key) => [key, record[key] as number])) as Record<string, number>;
+}
+
+function readProvenanceBbox(value: unknown): OccurrenceProvenance["bbox"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const keys = ["x", "y", "width", "height"];
+  if (!keys.every((key) => typeof record[key] === "number")) return null;
+  return {
+    x: record.x as number,
+    y: record.y as number,
+    width: record.width as number,
+    height: record.height as number,
+  };
 }
 
 function readContacts(value: unknown) {
@@ -390,6 +405,90 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
         contacts: readContacts(row.contacts),
       } as never;
     },
+    async getOccurrenceProvenance(tenantId, occurrenceId) {
+      const row = (await database.select({
+        occurrence: occurrences,
+        page: pages,
+        document: documents,
+        source: sources,
+        area: areas,
+        classification: classifications,
+      }).from(occurrences)
+        .innerJoin(pages, eq(pages.id, occurrences.pageId))
+        .innerJoin(documents, eq(documents.id, occurrences.documentId))
+        .leftJoin(sources, and(
+          eq(sources.id, documents.sourceId!),
+          eq(sources.tenantId, occurrences.tenantId),
+        ))
+        .leftJoin(areas, and(
+          eq(areas.id, sources.areaId!),
+          eq(areas.tenantId, occurrences.tenantId),
+        ))
+        .leftJoin(classifications, and(
+          eq(classifications.documentId, documents.id),
+          eq(classifications.tenantId, occurrences.tenantId),
+        ))
+        .where(and(
+          eq(occurrences.id, occurrenceId),
+          eq(occurrences.tenantId, Number(tenantId)),
+        ))
+        .limit(1))[0];
+      if (!row) throw new Error("Fundstelle nicht gefunden");
+      const evidence = Array.isArray(row.occurrence.evidence)
+        ? row.occurrence.evidence as string[]
+        : [];
+      const classification = row.classification
+        && [
+          row.classification.type,
+          row.classification.publicationName,
+          row.classification.editionLabel,
+          row.classification.periodStartYear,
+          row.classification.periodEndYear,
+          row.classification.periodIssue,
+        ].some((value) => value != null)
+        ? row.classification
+        : null;
+      return {
+        occurrenceId: row.occurrence.id,
+        dataSource: row.occurrence.dataSource,
+        company: row.occurrence.company,
+        status: row.occurrence.status,
+        confidence: row.occurrence.confidence,
+        bbox: readProvenanceBbox(row.occurrence.bbox),
+        imageKey: row.occurrence.imageKey,
+        evidence,
+        advertiserProof: evidence.filter((item) => item.startsWith("positiv:")),
+        page: { id: row.page.id, number: row.page.pageNumber ?? null },
+        document: {
+          id: row.document.id,
+          filename: row.document.filename,
+          sha256: row.document.sha256,
+          origin: row.document.origin,
+          storageKey: row.document.storageKey,
+        },
+        source: row.source
+          ? { id: row.source.id, url: row.source.url }
+          : null,
+        area: row.area
+          ? {
+            id: row.area.id,
+            ags: row.area.ags,
+            name: row.area.name,
+            stateName: row.area.stateName,
+          }
+          : null,
+        publication: classification
+          ? {
+            type: classification.type,
+            name: classification.publicationName,
+            editionLabel: classification.editionLabel,
+            periodStartYear: classification.periodStartYear,
+            periodEndYear: classification.periodEndYear,
+            periodIssue: classification.periodIssue,
+          }
+          : null,
+      };
+    },
     async reviewOccurrence(tenantId, occurrenceId, status) {
       const current = await this.getOccurrence(tenantId, occurrenceId);
       if (current.status === status) return { occurrence: current, changed: false };
@@ -497,6 +596,7 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
             tenantId: Number(tenantId),
             documentId,
             pageId,
+            dataSource: WEB_FIND_DATA_SOURCE,
             company: occurrence.company,
             preview: occurrence.preview,
             status: previousByIdentity.get(occurrenceFingerprint({
@@ -514,6 +614,7 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
           created.push({
             id: Number(occurrenceRow[0]?.insertId),
             documentId,
+            dataSource: WEB_FIND_DATA_SOURCE,
             pageNumber: processed.pageNumber,
             company: occurrence.company,
             preview: occurrence.preview,

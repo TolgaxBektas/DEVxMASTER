@@ -303,6 +303,9 @@ export function createIngestionRouter(
       list: permissionProcedure("ingestion.occurrence.read").query(({ ctx }) =>
         repository.listOccurrences(ctx.auth.tenantId),
       ),
+      provenance: permissionProcedure("ingestion.occurrence.read")
+        .input(z.object({ id: z.number().int().positive() }))
+        .query(({ ctx, input }) => repository.getOccurrenceProvenance(ctx.auth.tenantId, input.id)),
       review: permissionProcedure("ingestion.occurrence.review")
         .input(z.object({
           id: z.number().int().positive(),
