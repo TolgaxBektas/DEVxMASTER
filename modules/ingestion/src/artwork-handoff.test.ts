@@ -96,6 +96,16 @@ async function occurrenceWithEvidence(
 }
 
 describe("Übergabe frischer Fundstellen", () => {
+  it("wird nicht täglich eingeplant", () => {
+    const module = createIngestionModule({
+      publish: async () => undefined,
+    });
+    const handoffJob = module.jobs.find((item) => item.name === "ingestion.handoff.artwork");
+    const processingJob = module.jobs.find((item) => item.name === "ingestion.processing.run");
+    expect(handoffJob?.schedule).toBeUndefined();
+    expect(processingJob?.schedule).toBe("daily");
+  });
+
   it("übergibt den vollständigen Herkunftssatz an den Bearbeitungsdienst", async () => {
     const repository = new MemoryIngestionRepository();
     const audit = new MemoryAuditRepository();
@@ -199,6 +209,29 @@ describe("Übergabe frischer Fundstellen", () => {
 
     await expect(job.handle({ occurrenceId: occurrence.id }, context("1")))
       .rejects.toThrow("Bearbeitungsdienst ist nicht eingerichtet");
+  });
+
+  it("weist eine nicht numerische Mandantenkennung zurück", async () => {
+    const repository = new MemoryIngestionRepository();
+    const { occurrence } = await occurrenceWithEvidence(repository, ["positiv:p2"]);
+    const module = createIngestionModule({
+      repository,
+      storage: storage(),
+      handoffToArtwork: async () => ({
+        documentId: 1,
+        adId: 1,
+        reviewStatus: "pending",
+        deduplicated: false,
+      }),
+      publish: async () => undefined,
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.handoff.artwork");
+    if (!job) throw new Error("Übergabejob fehlt");
+
+    await expect(job.handle(
+      { occurrenceId: occurrence.id },
+      context("kein-zahlwert"),
+    )).rejects.toThrow("Ungültige Mandantenkennung für Übergabe");
   });
 
   it("meldet einen fehlenden Ausschnitt verständlich", async () => {

@@ -1016,9 +1016,12 @@ export function createIngestionModule(deps: {
       },
       {
         name: "ingestion.handoff.artwork",
-        schedule: "daily",
         handle: async (payload, context) => {
           const tenantId = jobTenantId(context);
+          const numericTenantId = Number(tenantId);
+          if (!Number.isInteger(numericTenantId) || numericTenantId <= 0) {
+            throw new Error("Ungültige Mandantenkennung für Übergabe");
+          }
           const occurrenceId = (payload as { occurrenceId?: unknown }).occurrenceId;
           if (typeof occurrenceId !== "number") {
             throw new Error("Fundstelle für Übergabe fehlt");
@@ -1070,7 +1073,7 @@ export function createIngestionModule(deps: {
             evidence: provenance.evidence,
             provenance: {
               data_source: provenance.dataSource,
-              center_tenant_id: Number(tenantId),
+              center_tenant_id: numericTenantId,
               center_occurrence_id: provenance.occurrenceId,
               document_sha256: provenance.document.sha256,
               page: provenance.page.number,
