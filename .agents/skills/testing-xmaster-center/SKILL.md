@@ -113,11 +113,12 @@ the occurrence AND the lead in tenant 2 — always upload identical bytes in BOT
 - `docker compose up -d` now also starts SearXNG (`127.0.0.1:8081`, health `/healthz` via compose).
 
 ## Data-Factory review tab („Prüfung“, `/ingestion/review`)
-- Gated on `PIF_REVIEW_TENANT_ID` (plus `ARTWORK_BASE_URL` / `ARTWORK_SERVICE_TOKEN`). Without the tenant id
-  the nav entry is absent and the page shows „Prüfung deaktiviert“; a session in another tenant sees
-  „Für diesen Mandanten sind keine Data-Factory-Prüffälle konfiguriert.“ and the image proxy
-  `GET /api/ingestion/reviews/:id/original|restored` answers 403
-  „Prüffall gehört zu einem anderen Mandanten“.
+- Gated on `PIF_REVIEW_TENANT_ID` (plus `ARTWORK_BASE_URL` / `ARTWORK_SERVICE_TOKEN`). When the
+  review is configured, the navigation contains „Prüfung“ and opens `/ingestion/review`; without
+  the tenant id the nav entry is absent and the page shows „Prüfung deaktiviert“. The image proxy
+  `GET /api/ingestion/reviews/:id/original|restored` answers 404
+  „Die Prüfung ist nicht konfiguriert“ without a tenant value, and 403
+  „Prüffall gehört zu einem anderen Mandanten“ for a foreign tenant.
 - Seed cases in a local Data Factory instead of mocking: start print-intelligence-foundation with
   `VISION_PROVIDER=recorded STORAGE_BACKEND=filesystem DATABASE_URL=sqlite:///... SERVICE_TOKEN=...`
   and POST real pairs from `/home/ubuntu/run50/kunden/<case>/` (`original.png`, `restauriert.png`,

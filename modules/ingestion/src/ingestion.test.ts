@@ -24,6 +24,38 @@ const context = (tenantId: string | null, payload: unknown) => ({
 });
 
 describe("Ingestion-Bestand", () => {
+  it("zeigt die Prüfung nur mit vollständiger Konfiguration in der Navigation", () => {
+    const withoutReview = createIngestionModule({
+      publish: async () => undefined,
+      enqueue: async () => undefined,
+    });
+    expect(withoutReview.nav).not.toContainEqual(expect.objectContaining({ id: "ingestion.review" }));
+
+    const reviewClient = {
+      listOpen: async () => [],
+      get: async () => {
+        throw new Error("not used");
+      },
+      decide: async () => {
+        throw new Error("not used");
+      },
+      image: async () => new Uint8Array(),
+    };
+    const configured = createIngestionModule({
+      publish: async () => undefined,
+      enqueue: async () => undefined,
+      reviewClient,
+      reviewTenantId: "1",
+    });
+    expect(configured.nav).toContainEqual({
+      id: "ingestion.review",
+      label: "Prüfung",
+      href: "/ingestion/review",
+      permission: "ingestion.review.read",
+      order: 25,
+    });
+  });
+
   it("arbeitet fällige Gebiete in Reihenfolge und isoliert Fehler", async () => {
     const repository = new MemoryIngestionRepository();
     await repository.upsertArea("1", {
