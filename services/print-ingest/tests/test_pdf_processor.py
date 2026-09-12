@@ -6,6 +6,7 @@ from app.services.processor import (
     _add_candidate_without_nested_duplicates,
     extract_contacts,
     extract_pdf_metadata,
+    classify_ad_candidate,
     heuristic_ad_regions,
     render_ad_crop,
     render_and_extract,
@@ -286,7 +287,7 @@ def test_contact_signal_without_material_geometry_is_not_a_candidate():
     assert result == []
 
 
-def test_bounded_ad_requires_logo_and_phone_not_legal_form():
+def test_logo_and_phone_without_commercial_sender_is_not_an_ad():
     result = heuristic_ad_regions(
         b"",
         "",
@@ -297,8 +298,14 @@ def test_bounded_ad_requires_logo_and_phone_not_legal_form():
             logo_drawing(220, 190, 320, 240),
         ]),
     )
-    assert len(result) == 1
-    assert {"geometry", "contact", "logo"} <= set(result[0]["evidence"])
+    assert result == []
+    classification = classify_ad_candidate(
+        "WAT pflegt! Tel. 02327 9607571",
+        [block(180, 180, 820, 260, "WAT pflegt! Tel. 02327 9607571", (18, 28), ("Display", "Bold"))],
+        logo=True,
+    )
+    assert classification["classification"] == "non_commercial"
+    assert "fehlend:absender" in classification["reasons"]
 
 
 def test_bounded_ad_without_logo_or_phone_is_not_a_candidate():
@@ -324,7 +331,7 @@ def test_directory_entry_without_logo_or_material_is_not_a_candidate():
     assert result == []
 
 
-def test_phone_labels_and_provenance_warning_are_preserved():
+def test_association_contact_box_is_not_a_company_ad():
     result = heuristic_ad_regions(
         b"",
         "",
@@ -332,8 +339,7 @@ def test_phone_labels_and_provenance_warning_are_preserved():
             block(180, 180, 820, 260, "Gemeinnütziger Verein Pflegehilfe Tel.: 0234 - 54 45 51 54", (18, 28), ("Display", "Bold")),
         ], [drawing(120, 120, 880, 320), logo_drawing(220, 190, 320, 240)]),
     )
-    assert len(result) == 1
-    assert "provenance-uncertain" in result[0]["evidence"]
+    assert result == []
 
 
 def test_directory_with_multiple_providers_is_not_an_ad():
@@ -375,7 +381,7 @@ def test_numbered_map_overview_is_not_an_ad():
     assert result == []
 
 
-def test_phone_heavy_ambulante_pflege_ad_is_not_numbered_overview():
+def test_phone_heavy_ambulante_pflege_weak_sender_without_ad_intent_is_not_an_ad():
     result = heuristic_ad_regions(
         b"",
         "",
@@ -395,7 +401,17 @@ def test_phone_heavy_ambulante_pflege_ad_is_not_numbered_overview():
             logo_drawing(220, 110, 320, 160),
         ]),
     )
-    assert len(result) == 1
+    assert result == []
+    classification = classify_ad_candidate(
+        "Ambulante Pflege Parkstraße 93 44866 Bochum Tel. 0234 - 54 45 51 54 Fax: 0234 - 54 45 51 55 www.pflegebeispiel.de",
+        [
+            block(180, 100, 820, 170, "Ambulante Pflege", (22,), ("Display", "Bold")),
+            block(180, 220, 820, 300, "Parkstraße 93 44866 Bochum Tel. 0234 - 54 45 51 54 Fax: 0234 - 54 45 51 55", (10,)),
+            block(180, 320, 820, 380, "www.pflegebeispiel.de", (10,)),
+        ],
+        logo=True,
+    )
+    assert "fehlend:werbeabsicht" in classification["reasons"]
 
 
 def test_strong_public_origin_is_excluded():
@@ -414,7 +430,7 @@ def test_strong_public_origin_is_excluded():
         assert result == []
 
 
-def test_publicly_owned_company_remains_an_ad():
+def test_publicly_owned_ggmbh_is_not_a_company_ad():
     result = heuristic_ad_regions(
         b"",
         "",
@@ -422,11 +438,17 @@ def test_publicly_owned_company_remains_an_ad():
             block(180, 180, 820, 260, "Senioreneinrichtungen der Stadt Bochum gGmbH Telefon 0234 9352900", (18, 28), ("Display", "Bold")),
         ], [drawing(120, 120, 880, 320), logo_drawing(220, 190, 320, 240)]),
     )
-    assert len(result) == 1
-    assert "provenance-uncertain" in result[0]["evidence"]
+    assert result == []
+    classification = classify_ad_candidate(
+        "Senioreneinrichtungen der Stadt Bochum gGmbH Telefon 0234 9352900",
+        [block(180, 180, 820, 260, "Senioreneinrichtungen der Stadt Bochum gGmbH Telefon 0234 9352900", (18, 28), ("Display", "Bold"))],
+        logo=True,
+    )
+    assert classification["classification"] in {"non_commercial", "unclear"}
+    assert any(reason in classification["reasons"] for reason in ("veto:behoerde", "unclear:traeger"))
 
 
-def test_failed_ocr_keeps_existing_block_text(monkeypatch):
+def test_failed_ocr_does_not_guess_an_ad_from_existing_block_text(monkeypatch):
     calls = 0
 
     def fail(*_args, **_kwargs):
@@ -448,11 +470,11 @@ def test_failed_ocr_keeps_existing_block_text(monkeypatch):
             logo_drawing(180, 90, 300, 140),
         ]),
     )
-    assert result
+    assert result == []
     assert calls <= 3
 
 
-def test_ocr_regions_are_capped_and_cached(monkeypatch):
+def test_ocr_regions_are_capped_and_cached_without_guessing_an_ad(monkeypatch):
     calls = []
     monkeypatch.setattr(
         "app.services.processor._ocr_region_text",
@@ -468,7 +490,7 @@ def test_ocr_regions_are_capped_and_cached(monkeypatch):
             logo_drawing(180, 90, 300, 140),
         ]),
     )
-    assert result
+    assert result == []
     assert len(calls) <= 3
 
 
@@ -480,7 +502,13 @@ def test_brand_name_alone_does_not_guess_public_origin():
             block(180, 180, 820, 260, "VBW KundenCenter Bochum Telefon 0234 310-310", (18, 28), ("Display", "Bold")),
         ], [drawing(120, 120, 880, 320), logo_drawing(220, 190, 320, 240)]),
     )
-    assert len(result) == 1
+    assert result == []
+    classification = classify_ad_candidate(
+        "VBW KundenCenter Bochum Telefon 0234 310-310",
+        [block(180, 180, 820, 260, "VBW KundenCenter Bochum Telefon 0234 310-310", (18, 28), ("Display", "Bold"))],
+        logo=True,
+    )
+    assert "veto:behoerde" not in classification["reasons"]
 
 
 def test_shared_domain_and_headline_keep_multi_location_ad():
@@ -520,6 +548,22 @@ def test_company_group_marker_keeps_multi_location_ad_with_multiple_domains():
     assert len(result) == 1
 
 
+def test_commercial_ad_preserves_provenance_warning():
+    result = heuristic_ad_regions(
+        b"",
+        "",
+        layout([
+            block(100, 80, 900, 150, "Versicherung Muster GmbH", (20,), ("Display",)),
+            block(100, 180, 900, 260, "Versicherungsschutz für Familien in Stadt Bochum. Telefon 0234 310-310", (10,)),
+        ], [
+            drawing(60, 60, 940, 300),
+            logo_drawing(180, 90, 300, 140),
+        ]),
+    )
+    assert len(result) == 1
+    assert "provenance-uncertain" in result[0]["evidence"]
+
+
 def test_public_terms_in_body_text_do_not_exclude_sender():
     result = heuristic_ad_regions(
         b"",
@@ -534,7 +578,18 @@ def test_public_terms_in_body_text_do_not_exclude_sender():
             logo_drawing(180, 90, 300, 140),
         ]),
     )
-    assert len(result) == 1
+    assert result == []
+    classification = classify_ad_candidate(
+        "VBW KundenCenter Bochum Telefon +49 234 310-310 Seniorenwohnungen mit günstigen Mieten im Bochumer Stadtgebiet und öffentlich geförderten Wohnungen.",
+        [
+            block(100, 80, 900, 140, "VBW", (20,), ("Display",)),
+            block(100, 180, 900, 280, "Seniorenwohnungen mit günstigen Mieten im Bochumer Stadtgebiet und öffentlich geförderten Wohnungen.", (11,)),
+            block(100, 300, 900, 360, "KundenCenter Nord Lahnstraße 1 44807 Bochum Telefon +49 234 310-310", (9,)),
+            block(100, 380, 900, 440, "KundenCenter Süd Wittener Straße 102 44789 Bochum Telefon +49 234 310-310", (9,)),
+        ],
+        logo=True,
+    )
+    assert "veto:behoerde" not in classification["reasons"]
 
 
 def test_publisher_marking_is_independent_evidence():
@@ -652,7 +707,7 @@ def test_candidate_snaps_to_existing_frame_and_confidence_follows_evidence():
     assert strong[0]["confidence"] > weak[0]["confidence"]
 
 
-def test_full_page_material_with_brand_and_contact_is_one_ad():
+def test_unmarked_full_page_material_with_brand_and_contact_is_rejected():
     result = heuristic_ad_regions(
         b"",
         "",
@@ -663,9 +718,14 @@ def test_full_page_material_with_brand_and_contact_is_one_ad():
         ], [drawing(200, 300, 300, 380)],
         images=[{"bbox": (0, 0, 1000, 1000)}]),
     )
-    assert len(result) == 1
-    assert result[0]["evidence"][:3] == ["geometry", "advertiser", "contact"]
-    assert result[0]["width"] == 1
+    assert result == []
+    classification = classify_ad_candidate(
+        "Private Information GmbH Telefon 01234 567890",
+        [block(100, 100, 900, 900, "Private Information GmbH Telefon 01234 567890", (10,))],
+        logo=True,
+        geometry_ratio=0.75,
+    )
+    assert "veto:ganzseite" in classification["reasons"]
 
 
 def test_frame_does_not_cut_a_touched_text_line():

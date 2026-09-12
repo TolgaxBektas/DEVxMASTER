@@ -1,7 +1,8 @@
 import io
 import math
 import re
-from collections import Counter
+from collections import Counter, OrderedDict
+from statistics import median
 import fitz
 from PIL import Image
 import pytesseract
@@ -47,7 +48,10 @@ LOCATION_STOPWORDS = {
 }
 ADVERTISER_SIGNALS = re.compile(r'\b[\wÄÖÜäöüß&.-]+\s+(?:GmbH|AG|KG|e\.V\.)\b', re.I)
 EDITORIAL_SIGNALS = re.compile(
-    r'\b(?:impressum|herausgeber|verantwortlich|redaktion|bekanntmachung|anlage|amtliche\s+mitteilung)\b',
+    r'\b(?:impressum|herausgeber|verantwortlich|redaktion|bekanntmachung|anlage|amtliche\s+mitteilung|'
+    r'bericht|rückblick|vorschau|einladung|lädt\s+ein|veranstaltung|veranstaltungsreihe|programm|'
+    r'sprechstunde|tagesordnung|protokoll|jahreshauptversammlung|generalversammlung|kermversammlung|'
+    r'wir\s+informieren|informationen\s+zu|satzung|datenschutz|anmeldung\s+erforderlich)\b',
     re.I,
 )
 PUBLIC_ORIGIN_SIGNALS = re.compile(
@@ -64,6 +68,121 @@ DIRECTORY_SIGNALS = re.compile(
 MAX_ADS_PER_PAGE = 24
 MAX_CROP_PIXELS = 18_000_000
 MAX_OCR_REGIONS_PER_PAGE = 12
+_CLUSTER_MAX_GAP = 8
+
+
+def _fold_industry(value):
+    return (
+        value.casefold()
+        .replace("ä", "ae")
+        .replace("ö", "oe")
+        .replace("ü", "ue")
+        .replace("ß", "ss")
+    )
+
+
+COMMERCIAL_INDUSTRIES = (
+    "Bäckerei", "Konditorei", "Metzgerei", "Gärtnerei", "Baumschule", "Hofladen",
+    "Weingut", "Winzer", "Restaurant", "Gasthof", "Gaststätte", "Café", "Pension",
+    "Hotel", "Dachdecker", "Spenglerei", "Bauspenglerei", "Flaschnerei", "Zimmerei", "Schreinerei", "Fliesen",
+    "Maler", "Verputzer", "Stuckateur", "Elektro", "Sanitär", "Heizung", "Küchen",
+    "Möbel", "Autohaus", "Kfz", "Reifen", "Tiefbau", "Erdbau", "Transporte",
+    "Kiesgrube", "Entsorgung", "Naturstein", "Steinmetz", "Grabmal", "Grabmale", "Grabdenkmäler", "Bestattung",
+    "Sanitätshaus",
+    "Floristik", "Florist", "Blumen", "Pflanzen", "Gartenbau", "Gartengestaltung",
+    "Photovoltaik", "Solar", "Stromspeicher", "Wallbox", "Elektrotechnik", "Energietechnik",
+    "Getränke", "Brunnen", "Brauerei", "Pflegedienst", "Pflege zu Hause",
+    "Seniorenbetreuung", "Tagespflege", "Pflegeheim", "Seniorenzentrum", "Physiotherapie", "Fußpflege",
+    "Podologie", "Kosmetik", "Friseur", "Apotheke", "Optiker", "Hörgeräte",
+    "Schuhhaus", "Orthopädie", "Direktvertrieb", "Küchenstudio", "Malerbetrieb",
+    "Heizungsbau", "Bauunternehmen", "Getränkemarkt", "Hörakustik", "Zahntechnik", "Bauträger",
+    "Garten- und Landschaftsbau", "Steuerberater", "Rechtsanwalt", "Notar", "Versicherung", "Sparkasse",
+    "Volksbank", "Raiffeisenbank", "Stadtwerke", "Energieversorger", "Immobilien",
+    "Reisedienst", "Reisebüro", "Busreisen", "Busunternehmen", "Fahrschule", "Werbeagentur", "Druckerei",
+    "Schlüsseldienst", "Kunstschmiede", "Meisterbetrieb", "Fachhandel", "Fachbetrieb",
+    "Taxi", "Taxiunternehmen", "Mietwagen", "Autovermietung", "Rundfahrten",
+    "Tours", "Omnibus", "Bäcker", "Metzger", "Gärtner", "Raumausstatter", "Polsterei",
+    "Glaserei", "Schlosserei", "Landmaschinen", "Baustoffe", "Zahnarzt", "Tierarzt",
+    "Heilpraktiker",
+)
+_COMPOUND_HEAD_INDUSTRIES = frozenset(
+    _fold_industry(value)
+    for value in (
+        "Bäckerei", "Konditorei", "Metzgerei", "Gärtnerei", "Spenglerei", "Bauspenglerei",
+        "Flaschnerei", "Schreinerei", "Zimmerei", "Glaserei", "Schlosserei", "Polsterei",
+        "Druckerei", "Brauerei", "Kunstschmiede", "Naturstein", "Steinmetz", "Autohaus",
+        "Schuhhaus", "Sanitätshaus", "Pflegedienst", "Pflegeheim", "Tagespflege",
+        "Seniorenzentrum", "Küchenstudio", "Malerbetrieb", "Meisterbetrieb", "Fachbetrieb",
+        "Fachhandel", "Getränkemarkt", "Bauunternehmen", "Busunternehmen", "Taxiunternehmen",
+        "Energieversorger", "Energietechnik", "Elektrotechnik", "Werbeagentur", "Fahrschule",
+        "Photovoltaik", "Bestattung", "Grabmal", "Grabmale", "Grabdenkmäler", "Physiotherapie",
+        "Fußpflege", "Podologie", "Hörakustik", "Hörgeräte", "Zahntechnik", "Raumausstatter",
+        "Landmaschinen", "Baustoffe", "Immobilien", "Steuerberater", "Rechtsanwalt", "Tierarzt",
+        "Zahnarzt", "Heilpraktiker", "Gartenbau", "Gartengestaltung", "Landschaftsbau",
+        "Heizungsbau", "Rundfahrten", "Tours", "Schlüsseldienst", "Stromspeicher", "Wallbox",
+        "Getränke", "Omnibus",
+    )
+)
+_LEGAL_FORM_PATTERN = re.compile(
+    r"\b(?:GmbH|AG|KG|OHG|GbR|mbH|e\.K\.|UG)\b|&\s*Co\b",
+    re.I,
+)
+_PUBLIC_SENDER_PATTERN = re.compile(
+    r"\b(?:stadt|gemeinde|marktgemeinde|markt\s+\w+|verwaltungsgemeinschaft|landkreis|"
+    r"landratsamt|bezirk|regierung\s+von|amt|amtsgericht|rathaus|bürgermeister|"
+    r"bürgerservice|bürgerbüro|einwohnermeldeamt|ordnungsamt|standesamt|jugendamt|"
+    r"sozialamt|beirat|ausländerbeirat|beratungsstelle|pflegestützpunkt|umweltstation|"
+    r"stadtbücherei|stadtbibliothek|kreisjugendring|polizei|freiwillige\s+feuerwehr|"
+    r"bauhof|kindergarten|kita|grundschule|mittelschule|realschule|gymnasium|"
+    r"uniklinik|universitätsklinikum)\b",
+    re.I,
+)
+_CHURCH_SENDER_PATTERN = re.compile(
+    r"\b(?:pfarrei|pfarreiengemeinschaft|pfarrgemeinde|kirchengemeinde|pfarramt|pfarrer|"
+    r"dekanat|wallfahrt|kath\.?|katholische|evang\.?|evangelische)\b",
+    re.I,
+)
+_ASSOCIATION_PATTERN = re.compile(
+    r"\b(?:e\.V\.|verein|fanclub|gesangverein|schützenverein|turnverein|sportverein|"
+    r"(?-i:FC|TSV|SV|DJK|MGV)|landfrauen|kolping|vdk|jugendtreff)\b",
+    re.I,
+)
+_PUBLISHER_PROMOTION_PATTERN = re.compile(
+    r"\b(?:anzeigenschluss|anzeigenannahme|anzeigenauftrag|anzeigenpreisliste|mediadaten|"
+    r"redaktionsschluss|nächste\s+ausgabe|erscheint\s+am|auflage|sepa[-\s]?lastschriftmandat)\b",
+    re.I,
+)
+_DIRECTORY_LABELS = (
+    "Kontaktdaten", "Kontaktzeiten", "Öffnungszeiten", "Sprechzeiten", "Sprechstunde",
+    "Ansprechpartner", "Vorstand", "Vereinsziele", "Treffpunkt", "Homepage", "Angebote",
+    "Förderschwerpunkte", "Hinweise", "Örtliche Einschränkung",
+)
+_DIRECTORY_LABEL_PATTERN = re.compile(
+    r"^\s*(?:" + "|".join(re.escape(value) for value in _DIRECTORY_LABELS) + r")\s*:",
+    re.I,
+)
+_JOB_PATTERN = re.compile(
+    r"\(\s*m\s*/\s*w(?:\s*/\s*d)?\s*\)|\bsucht\s+zum\s+nächstmöglichen\b|"
+    r"\bbewerbung\b|\bvollzeit\b|\bteilzeit\b|\btvöd\b|\bausbildungsplatz\b|"
+    r"\bstellenangebot\b|\bwir\s+bilden\b",
+    re.I,
+)
+_CHARITY_PATTERN = re.compile(
+    r"\b(?:ggmbh|gemeinnützig\w*|caritas|diakonie|awo|rotes\s+kreuz|drk|malteser|"
+    r"johanniter|stiftung)\b",
+    re.I,
+)
+_AD_INTENT_PATTERN = re.compile(
+    r"\b(?:wir\s+bieten|unser\s+angebot|angebot|aktion|rabatt|jetzt\s+wechseln|jetzt|"
+    r"öffnungszeiten|verkauf|ausstellung|beratung|service|leistungen|meisterbetrieb|"
+    r"fachhandel|seit\s+\d{4})\b|[%€]",
+    re.I,
+)
+_GREETING_PATTERN = re.compile(
+    r"\b(?:wir\s+wünschen|frohe\s+weihnachten|guten\s+rutsch|frohe\s+ostern|"
+    r"danke\s+für\s+ihr\s+vertrauen)\b",
+    re.I,
+)
 
 
 def sanitize_extracted_text(text: str) -> str:
@@ -423,11 +542,10 @@ def _looks_directory_or_overview(text, blocks, page_dominant=False, logo=False):
             or bool(DIRECTORY_SIGNALS.search(text))
         )
     )
-    provider_list = provider_blocks >= 4 and not grouped_advertiser
-    return numbered_overview or provider_list
+    return numbered_overview
 
 
-def _looks_editorial(text, blocks, page_dominant=False):
+def _looks_editorial(text, blocks):
     if EDITORIAL_SIGNALS.search(text):
         return True
     words = text.split()
@@ -435,9 +553,9 @@ def _looks_editorial(text, blocks, page_dominant=False):
     sizes = [size for block in blocks for size in block["font_sizes"] if size > 0]
     uniform = bool(sizes) and max(sizes) / max(1, min(sizes)) < 1.3
     hyphenated = any(block["text"].rstrip().endswith(("-", "­")) for block in blocks)
-    if not page_dominant and len(words) > 80 and len(lines) >= 6:
+    if len(words) > 130 and len(lines) >= 5:
         return True
-    return not page_dominant and len(words) > 55 and len(lines) >= 5 and uniform and hyphenated
+    return len(words) > 80 and len(lines) >= 6 and uniform and hyphenated
 
 
 def _material_geometry(layout, width, height):
@@ -544,38 +662,424 @@ def _plausible(box, width, height):
     return area >= page_area * 0.003 and area <= page_area and 0.08 <= ratio <= 12
 
 
-def _candidate_is_ad(
+def _candidate_lines(blocks, text):
+    lines = [
+        str(line.get("text", "")).strip()
+        for block in blocks
+        for line in block.get("lines", [])
+        if str(line.get("text", "")).strip()
+    ]
+    return lines or [line.strip() for line in str(text).splitlines() if line.strip()]
+
+
+def _normalize_spaced_letters(text):
+    pattern = re.compile(
+        r"(?<!\w)(?:[A-Za-zÄÖÜäöüß]\s+){3,}[A-Za-zÄÖÜäöüß](?!\w)"
+    )
+    return pattern.sub(lambda match: re.sub(r"\s+", "", match.group(0)), str(text))
+
+
+_FONT_SIZE_STATS_CACHE = OrderedDict()
+
+
+def _font_size_stats(blocks):
+    key = id(blocks)
+    cached = _FONT_SIZE_STATS_CACHE.get(key)
+    if cached is not None:
+        cached_blocks, cached_length, sizes_present, median_value = cached
+        if cached_blocks is blocks and cached_length == len(blocks):
+            _FONT_SIZE_STATS_CACHE.move_to_end(key)
+            return sizes_present, median_value
+    sizes = [
+        size
+        for block in blocks
+        for size in block.get("font_sizes", [])
+        if size > 0
+    ]
+    sizes_present = bool(sizes)
+    median_value = median(sizes) if sizes_present else None
+    _FONT_SIZE_STATS_CACHE[key] = (blocks, len(blocks), sizes_present, median_value)
+    _FONT_SIZE_STATS_CACHE.move_to_end(key)
+    if len(_FONT_SIZE_STATS_CACHE) > 8:
+        _FONT_SIZE_STATS_CACHE.popitem(last=False)
+    return sizes_present, median_value
+
+
+def _prominent_sender_text(text, blocks, page_blocks=None):
+    all_sizes_present, all_sizes_median = _font_size_stats(page_blocks or blocks)
+    candidate_sizes = [
+        size
+        for block in blocks
+        for size in block.get("font_sizes", [])
+        if size > 0
+    ]
+    if not candidate_sizes:
+        return _normalize_spaced_letters(text)
+    if not all_sizes_present:
+        return _normalize_spaced_letters(" ".join(
+            block.get("text", "")
+            for block in blocks
+            if max(block.get("font_sizes", [0])) >= 1.2 * median(candidate_sizes)
+        ) or text)
+    threshold = 1.2 * all_sizes_median
+    prominent = " ".join(
+        block.get("text", "")
+        for block in blocks
+        if max(block.get("font_sizes", [0])) >= threshold
+    )
+    return _normalize_spaced_letters(prominent or text)
+
+
+def _has_named_sender(text):
+    words = [
+        word.strip(".,:;·|()[]{}")
+        for word in str(text).split()
+        if word.strip(".,:;·|()[]{}")[:1].isalpha()
+    ]
+    return sum(word[:1].isupper() or word.isupper() for word in words) >= 2
+
+
+def _has_commercial_sender(text):
+    normalized = _normalize_spaced_letters(text)
+    return bool(_LEGAL_FORM_PATTERN.search(normalized) or _industry_match(normalized))
+
+
+def _industry_match(text):
+    normalized = _normalize_spaced_letters(text)
+    def split_token(token):
+        return [
+            _fold_industry(part.lstrip(".,:;!?…()[]{}'\"„“‚‘«»"))
+            for part in re.split(r"[.@_ -]+", token)
+            if part.lstrip(".,:;!?…()[]{}'\"„“‚‘«»")
+        ]
+
+    def matches(term, token_parts):
+        term = _fold_industry(term)
+        return any(
+            segment.startswith(term)
+            or (term in _COMPOUND_HEAD_INDUSTRIES and segment.endswith(term))
+            for segment in token_parts
+        )
+
+    token_parts = [split_token(token) for token in normalized.split()]
+    for industry in COMMERCIAL_INDUSTRIES:
+        industry_parts = industry.split()
+        if len(industry_parts) == 1 and any(matches(industry, token) for token in token_parts):
+            return True
+        if len(industry_parts) > 1:
+            for index in range(len(token_parts) - len(industry_parts) + 1):
+                if all(
+                    matches(term, token_parts[index + offset])
+                    for offset, term in enumerate(industry_parts)
+                ):
+                    return True
+    return False
+
+
+def _p1_reason(text, blocks, page_blocks=None):
+    normalized_text = _normalize_spaced_letters(text)
+    prominent = _prominent_sender_text(normalized_text, blocks, page_blocks)
+    if _LEGAL_FORM_PATTERN.search(prominent) or _LEGAL_FORM_PATTERN.search(normalized_text):
+        return "p1a"
+    if _industry_match(normalized_text):
+        return "p1b"
+    if not blocks:
+        return None
+    page_sizes_present, page_sizes_median = _font_size_stats(page_blocks or blocks)
+    if not page_sizes_present:
+        return None
+    largest = max(
+        blocks,
+        key=lambda block: max(block.get("font_sizes", [0])),
+        default=None,
+    )
+    if largest is None:
+        return None
+    largest_size = max(largest.get("font_sizes", [0]))
+    sender = _normalize_spaced_letters(largest.get("text", ""))
+    words = sender.split()
+    veto_text = (
+        _PUBLIC_SENDER_PATTERN.search(sender)
+        or _CHURCH_SENDER_PATTERN.search(sender)
+        or _ASSOCIATION_PATTERN.search(sender)
+        or _PUBLISHER_PROMOTION_PATTERN.search(sender)
+        or EDITORIAL_SIGNALS.search(sender)
+        or _JOB_PATTERN.search(sender)
+        or _CHARITY_PATTERN.search(sender)
+    )
+    if (
+        largest_size >= 1.4 * page_sizes_median
+        and 1 <= len(words) <= 6
+        and not veto_text
+        and not PHONE_SIGNALS.search(sender)
+        and not re.fullmatch(r"[\d\s./()+-]+", sender)
+    ):
+        return "p1c"
+    return None
+
+
+def _has_ad_intent(text):
+    normalized = _normalize_spaced_letters(text)
+    return bool(_AD_INTENT_PATTERN.search(normalized) or (
+        _GREETING_PATTERN.search(normalized)
+        and _has_commercial_sender(normalized)
+    ))
+
+
+def _directory_blocks(blocks):
+    return sum(
+        bool(PHONE_SIGNALS.search(block.get("text", "")) or EMAIL_SIGNAL.search(block.get("text", "")))
+        and _has_named_sender(block.get("text", ""))
+        for block in blocks
+    )
+
+
+def _domain_root(value):
+    labels = value.casefold().strip(".").split(".")
+    return ".".join(labels[-2:]) if len(labels) >= 2 else value.casefold()
+
+
+def _sender_key(text, blocks, page_blocks=None):
+    sender = _prominent_sender_text(text, blocks, page_blocks)
+    sender = re.sub(
+        r"(?:https?://)?(?:www\.)?[\w.-]+\.[a-z]{2,}",
+        "",
+        sender,
+        flags=re.I,
+    )
+    sender = re.split(r"\b(?:telefon|tel\.?|fax|fon|mobil|www\.)\b", sender, maxsplit=1, flags=re.I)[0]
+    return " ".join(sender.split()).casefold()
+
+
+def _distinct_sender_count(blocks, page_blocks=None, candidate_text=""):
+    if re.search(r"\b(?:unternehmensverbund|unternehmensgruppe|firmenverbund|verbund)\b", candidate_text, re.I):
+        return 1
+    senders = set()
+    for block in blocks:
+        text = _normalize_spaced_letters(block.get("text", ""))
+        if not CONTACT_SIGNALS.search(text):
+            continue
+        reason = _p1_reason(text, [block], page_blocks)
+        if not reason:
+            continue
+        domains = re.findall(
+            r"(?:https?://)?(?:www\.)?([\w.-]+\.[a-z]{2,})",
+            text,
+            re.I,
+        )
+        sender = (
+            _domain_root(domains[0])
+            if domains
+            else _sender_key(text, [block], page_blocks)
+        )
+        sender = re.sub(r"\b(?:telefon|tel\.?|fax|fon|www\.)\b.*$", "", sender, flags=re.I)
+        sender = " ".join(sender.split()).casefold()
+        if sender:
+            senders.add(sender)
+    return len(senders)
+
+
+def _label_line_count(blocks, text):
+    return sum(
+        bool(_DIRECTORY_LABEL_PATTERN.match(line))
+        for line in _candidate_lines(blocks, text)
+    )
+
+
+def _phone_count(text):
+    return len(list(PHONE_SIGNALS.finditer(text)))
+
+
+def _typography_satisfies(blocks, page_blocks=None):
+    sizes = [size for block in blocks for size in block.get("font_sizes", []) if size > 0]
+    page_sizes_present, page_sizes_median = _font_size_stats(page_blocks or blocks)
+    return (
+        len({round(size, 1) for size in sizes}) >= 2
+        and bool(sizes)
+        and page_sizes_present
+        and max(sizes) >= 1.4 * page_sizes_median
+    )
+
+
+def _classification_reasons(
     text,
     blocks,
-    marked,
-    page_dominant,
-    max_words=None,
+    marked=False,
+    page_dominant=False,
     logo=False,
+    page_blocks=None,
+    geometry_ratio=None,
+    cluster_count=1,
 ):
-    advertiser, contact = _advertiser_and_contact(text, blocks)
-    standard_evidence = (
-        logo
-        and _has_phone(text)
-        and (max_words is None or len(text.split()) <= max_words)
-    )
-    editorial = _looks_editorial(text, blocks, page_dominant)
-    editorial_ok = (
-        not editorial
-        or (
-            marked
-            and not EDITORIAL_SIGNALS.search(text)
+    prominent = _prominent_sender_text(text, blocks, page_blocks)
+    public_sender = bool(_PUBLIC_SENDER_PATTERN.search(prominent))
+    church_sender = bool(_CHURCH_SENDER_PATTERN.search(prominent))
+    association_sender = bool(_ASSOCIATION_PATTERN.search(prominent))
+    charity_sender = bool(_CHARITY_PATTERN.search(prominent))
+    job_signal = bool(_JOB_PATTERN.search(text))
+    p1_reason = _p1_reason(text, blocks, page_blocks)
+    p1a_or_b = p1_reason in {"p1a", "p1b"}
+    p1 = bool(p1_reason)
+    p2 = _has_ad_intent(text)
+    p3 = bool(CONTACT_SIGNALS.search(text))
+    p4 = bool(logo or _typography_satisfies(blocks, page_blocks))
+    normalized_text = _normalize_spaced_letters(text)
+
+    if geometry_ratio is not None and geometry_ratio >= 0.55:
+        allowed = marked and len(text.split()) <= 120 and cluster_count == 1
+        if not allowed:
+            return "non_commercial", ["veto:ganzseite"]
+    if cluster_count >= 2:
+        return "non_commercial", ["veto:mehrfachschnitt"]
+    if _PUBLISHER_PROMOTION_PATTERN.search(text):
+        return "non_commercial", ["veto:verlag"]
+    if public_sender or _has_strong_public_origin(normalized_text) or PUBLIC_ORIGIN_SIGNALS.search(prominent):
+        if job_signal:
+            return "non_commercial", ["veto:behoerde", "veto:stellenanzeige"]
+        return "non_commercial", ["veto:behoerde"]
+    if church_sender:
+        if job_signal:
+            return "non_commercial", ["veto:kirche", "veto:stellenanzeige"]
+        return "non_commercial", ["veto:kirche"]
+    if association_sender and not (p1 and p2):
+        return "non_commercial", ["veto:verein"]
+    distinct_senders = _distinct_sender_count(blocks, page_blocks, normalized_text)
+    if distinct_senders >= 3 or (
+        _label_line_count(blocks, normalized_text) >= 3
+        and not p1a_or_b
+    ):
+        return "non_commercial", ["veto:verzeichnis"]
+    hard_editorial = bool(EDITORIAL_SIGNALS.search(normalized_text))
+    prose_editorial = _looks_editorial(normalized_text, blocks)
+    if hard_editorial or (
+        prose_editorial
+        and not (
+            p1a_or_b
+            and p3
             and logo
-            and advertiser
-            and contact
         )
+    ):
+        return "non_commercial", ["veto:redaktion"]
+    if job_signal:
+        return "unclear", ["unclear:stellenanzeige"]
+    if charity_sender:
+        return "unclear", ["unclear:traeger"]
+    if not p1:
+        return "non_commercial", ["fehlend:absender"]
+    if p1_reason == "p1c" and not p2:
+        return "non_commercial", ["fehlend:werbeabsicht"]
+    for value, reason in (
+        (p3, "fehlend:kontakt"),
+        (p4, "fehlend:gestaltung"),
+    ):
+        if not value:
+            return "non_commercial", [reason]
+    if association_sender:
+        return "unclear", ["unclear:verein"]
+    return "company_ad", [
+        f"positiv:{p1_reason}",
+        *([] if p1_reason != "p1c" else ["positiv:p2"]),
+        "positiv:p3",
+        "positiv:p4",
+    ]
+
+
+def classify_ad_candidate(
+    text,
+    blocks,
+    marked=False,
+    page_dominant=False,
+    logo=False,
+    page_blocks=None,
+    geometry_ratio=None,
+    cluster_count=1,
+):
+    """Classify a bounded candidate as a commercial ad or non-ad content."""
+    classification, reasons = _classification_reasons(
+        text,
+        blocks,
+        marked=marked,
+        page_dominant=page_dominant,
+        logo=logo,
+        page_blocks=page_blocks,
+        geometry_ratio=geometry_ratio,
+        cluster_count=cluster_count,
     )
-    accepted = (
-        standard_evidence
-        and not _sender_has_strong_public_origin(text, blocks)
-        and not _looks_directory_or_overview(text, blocks, page_dominant, logo)
-        and editorial_ok
-    )
-    return accepted, advertiser, contact
+    return {"classification": classification, "reasons": reasons}
+
+
+def _blocks_are_clustered(first, second, max_gap=_CLUSTER_MAX_GAP):
+    a, b = first["bbox"], second["bbox"]
+    horizontal_overlap = min(a[2], b[2]) - max(a[0], b[0])
+    vertical_overlap = min(a[3], b[3]) - max(a[1], b[1])
+    vertical_gap = max(a[1], b[1]) - min(a[3], b[3])
+    horizontal_gap = max(a[0], b[0]) - min(a[2], b[2])
+    return (
+        horizontal_overlap > 0 and vertical_gap < max_gap
+    ) or (
+        vertical_overlap > 0 and horizontal_gap < max_gap
+    ) or _intersection(a, b) > 0
+
+
+def _sender_clusters(box, blocks, page_blocks=None):
+    if len(blocks) < 2:
+        return []
+    all_text = _normalize_spaced_letters(" ".join(block.get("text", "") for block in blocks))
+    if re.search(r"\b(?:unternehmensverbund|unternehmensgruppe|firmenverbund|verbund)\b", all_text, re.I):
+        return []
+    domains = [
+        _domain_root(domain)
+        for domain in re.findall(
+            r"(?:https?://)?(?:www\.)?([\w.-]+\.[a-z]{2,})",
+            all_text,
+            re.I,
+        )
+    ]
+    if domains and len(set(domains)) == 1:
+        return []
+    parent = list(range(len(blocks)))
+
+    def find(index):
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    def union(first, second):
+        first_root = find(first)
+        second_root = find(second)
+        if first_root != second_root:
+            parent[second_root] = first_root
+
+    ordered_indices = sorted(range(len(blocks)), key=lambda index: blocks[index]["bbox"][1])
+    for position, first in enumerate(ordered_indices):
+        limit = blocks[first]["bbox"][3] + _CLUSTER_MAX_GAP
+        for second in ordered_indices[position + 1:]:
+            if blocks[second]["bbox"][1] > limit:
+                break
+            if _blocks_are_clustered(blocks[first], blocks[second]):
+                union(first, second)
+
+    components = {}
+    for index in range(len(blocks)):
+        components.setdefault(find(index), []).append(index)
+
+    groups = []
+    for group in components.values():
+        grouped_blocks = [blocks[index] for index in sorted(group)]
+        grouped_text = " ".join(block.get("text", "") for block in grouped_blocks)
+        prominent = _prominent_sender_text(grouped_text, grouped_blocks, page_blocks)
+        if _has_commercial_sender(prominent) and bool(CONTACT_SIGNALS.search(grouped_text)):
+            grouped_box = _union([block["bbox"] for block in grouped_blocks])
+            clipped_box = (
+                max(box[0], grouped_box[0]),
+                max(box[1], grouped_box[1]),
+                min(box[2], grouped_box[2]),
+                min(box[3], grouped_box[3]),
+            )
+            if clipped_box[2] > clipped_box[0] and clipped_box[3] > clipped_box[1]:
+                groups.append((clipped_box, grouped_blocks))
+    return groups
 
 
 def _add_candidate_without_nested_duplicates(results, normalized, box):
@@ -681,25 +1185,57 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
         if len(candidate_text.split()) < 10 and len((text or "").split()) > len(candidate_text.split()):
             candidate_text = text
         marked = bool(marking_blocks)
-        accepted, _advertiser, _contact = _candidate_is_ad(
-            candidate_text,
-            contained,
-            marked,
-            True,
-            max_words=180,
-            logo=_candidate_has_logo(layout, box, candidate_text, contained),
-        )
-        if accepted:
-            if marked:
-                box = (0, 0, width, height)
-            candidates.append({
-                "bbox": box,
-                "geometry": "page",
-                "blocks": contained,
-                "page_dominant": True,
-                "marked": marked,
-                "text": candidate_text,
-            })
+        clusters = _sender_clusters(box, contained, blocks)
+        if len(clusters) >= 2:
+            for cluster_box, cluster_blocks in clusters:
+                cluster_text = " ".join(item["text"] for item in cluster_blocks)
+                cluster_marked = marked_box(cluster_box)
+                cluster_logo = _candidate_has_logo(
+                    layout, cluster_box, cluster_text, cluster_blocks, "cluster", False, ocr_neighbors,
+                )
+                classification = classify_ad_candidate(
+                    cluster_text,
+                    cluster_blocks,
+                    marked=cluster_marked,
+                    logo=cluster_logo,
+                    page_blocks=blocks,
+                    geometry_ratio=(
+                        (cluster_box[2] - cluster_box[0]) * (cluster_box[3] - cluster_box[1])
+                        / (width * height)
+                    ),
+                )
+                if classification["classification"] == "company_ad":
+                    candidates.append({
+                        "bbox": cluster_box,
+                        "geometry": "cluster",
+                        "blocks": cluster_blocks,
+                        "page_dominant": False,
+                        "marked": cluster_marked,
+                        "text": cluster_text,
+                        "ocr_neighbors": ocr_neighbors,
+                    })
+        else:
+            page_box = (0, 0, width, height) if marked else box
+            classification = classify_ad_candidate(
+                candidate_text,
+                contained,
+                marked=marked,
+                page_dominant=True,
+                logo=_candidate_has_logo(layout, page_box, candidate_text, contained),
+                page_blocks=blocks,
+                geometry_ratio=(
+                    (box[2] - box[0]) * (box[3] - box[1]) / (width * height)
+                ),
+            )
+            if classification["classification"] == "company_ad":
+                candidates.append({
+                    "bbox": page_box,
+                    "geometry": "page",
+                    "blocks": contained,
+                    "page_dominant": True,
+                    "marked": marked,
+                    "text": candidate_text,
+                })
     for box, geometry_kind in material:
         if not _plausible(box, width, height):
             continue
@@ -713,22 +1249,58 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
         page_dominant = geometry_kind == "image" and (
             (box[2] - box[0]) * (box[3] - box[1]) >= width * height * 0.75
         )
-        accepted, _advertiser, _contact = _candidate_is_ad(
+        clusters = _sender_clusters(box, contained, blocks)
+        if len(clusters) >= 2:
+            for cluster_box, cluster_blocks in clusters:
+                cluster_text = " ".join(item["text"] for item in cluster_blocks)
+                cluster_marked = marked_box(cluster_box)
+                cluster_logo = _candidate_has_logo(
+                    layout, cluster_box, cluster_text, cluster_blocks, "cluster", False, ocr_neighbors,
+                )
+                classification = classify_ad_candidate(
+                    cluster_text,
+                    cluster_blocks,
+                    marked=cluster_marked,
+                    logo=cluster_logo,
+                    page_blocks=blocks,
+                    geometry_ratio=(
+                        (cluster_box[2] - cluster_box[0]) * (cluster_box[3] - cluster_box[1])
+                        / (width * height)
+                    ),
+                )
+                if classification["classification"] != "company_ad":
+                    continue
+                candidates.append({
+                    "bbox": cluster_box,
+                    "geometry": "cluster",
+                    "blocks": cluster_blocks,
+                    "page_dominant": False,
+                    "marked": cluster_marked,
+                    "text": cluster_text,
+                    "ocr_neighbors": ocr_neighbors,
+                })
+            continue
+        logo = _candidate_has_logo(
+            layout,
+            box,
             candidate_text,
             contained,
-            marked,
+            geometry_kind,
             page_dominant,
-            logo=_candidate_has_logo(
-                layout,
-                box,
-                candidate_text,
-                contained,
-                geometry_kind,
-                page_dominant,
-                ocr_neighbors,
+            ocr_neighbors,
+        )
+        classification = classify_ad_candidate(
+            candidate_text,
+            contained,
+            marked=marked,
+            page_dominant=page_dominant,
+            logo=logo,
+            page_blocks=blocks,
+            geometry_ratio=(
+                (box[2] - box[0]) * (box[3] - box[1]) / (width * height)
             ),
         )
-        if not accepted:
+        if classification["classification"] != "company_ad":
             continue
         if not _contains_complete_lines(box, contained):
             continue
@@ -749,29 +1321,7 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
         if not _plausible(box, width, height):
             continue
         text_value = candidate["text"]
-        accepted, advertiser, contact = _candidate_is_ad(
-            text_value,
-            candidate["blocks"],
-            candidate["marked"],
-            candidate["page_dominant"],
-            logo=_candidate_has_logo(
-                layout,
-                box,
-                text_value,
-                candidate["blocks"],
-                candidate["geometry"],
-                candidate["page_dominant"],
-                candidate.get("ocr_neighbors", False),
-            ),
-        )
-        if not accepted:
-            continue
-        evidence = ["geometry"]
-        if advertiser:
-            evidence.append("advertiser")
-        if contact:
-            evidence.append("contact")
-        if _candidate_has_logo(
+        logo = _candidate_has_logo(
             layout,
             box,
             text_value,
@@ -779,7 +1329,27 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
             candidate["geometry"],
             candidate["page_dominant"],
             candidate.get("ocr_neighbors", False),
-        ):
+        )
+        classification = classify_ad_candidate(
+            text_value,
+            candidate["blocks"],
+            marked=candidate["marked"],
+            page_dominant=candidate["page_dominant"],
+            logo=logo,
+            page_blocks=blocks,
+            geometry_ratio=(
+                (box[2] - box[0]) * (box[3] - box[1]) / (width * height)
+            ),
+        )
+        if classification["classification"] != "company_ad":
+            continue
+        advertiser, contact = _advertiser_and_contact(text_value, candidate["blocks"])
+        evidence = ["geometry"]
+        if advertiser:
+            evidence.append("advertiser")
+        if contact:
+            evidence.append("contact")
+        if logo:
             evidence.append("logo")
         if candidate["marked"]:
             evidence.append("publisher-marking")
