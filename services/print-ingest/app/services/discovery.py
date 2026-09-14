@@ -27,6 +27,7 @@ PUBLICATION_TERMS = {
 }
 
 GAZETTE_TERMS = {'amtsblatt', 'mitteilungsblatt', 'gemeindeblatt'}
+GAZETTE_PER_HOST_LIMIT = 12
 
 PUBLISHER_SIGNALS = (
     "total-lokal", "mediaprint", "inixmedia", "weka-info", "wekaverlag", "kommunalverlag",
