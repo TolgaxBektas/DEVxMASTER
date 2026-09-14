@@ -4,7 +4,12 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.models.entities import Source
 from app.services.archive_index import ArchiveIndex, deduplicate_archive_entries
-from app.services.discovery import candidate_rejection_reason, discover_pdf_links, score_candidate
+from app.services.discovery import (
+    candidate_priority,
+    candidate_rejection_reason,
+    discover_pdf_links,
+    score_candidate,
+)
 from app.services.policy import DiscoveryBudget, check_url_policy
 from app.services.sitemap import discover_sitemaps, extract_pdf_urls_from_sitemap
 from app.services.search_provider import web_search
@@ -226,4 +231,34 @@ def discover_proposals(
     unique = {}
     for item in collected:
         unique.setdefault(item['url'], item)
-    return list(unique.values())[:max_results]
+    ordered = sorted(
+        unique.values(),
+        key=lambda item: (
+            candidate_priority(item["url"], item.get("anchor_text", "")),
+            -item["score"],
+            item["url"],
+        ),
+    )
+    gazette_limit = max(1, max_results // 5)
+    allowed = []
+    rejected_gazettes = []
+    gazette_count = 0
+    for item in ordered:
+        if candidate_priority(item["url"], item.get("anchor_text", "")) == 1:
+            if gazette_count >= gazette_limit:
+                rejected_gazettes.append(item)
+                continue
+            gazette_count += 1
+        allowed.append(item)
+    selected = allowed[:max_results]
+    rejected_gazettes.extend(
+        item for item in allowed[max_results:]
+        if candidate_priority(item["url"], item.get("anchor_text", "")) == 1
+    )
+    if rejected is not None:
+        rejected.extend({
+            "url": item["url"],
+            "reason": "Amtsblatt-Anteil je Gebiet erschöpft",
+            "discovery": item.get("discovery"),
+        } for item in rejected_gazettes)
+    return selected
