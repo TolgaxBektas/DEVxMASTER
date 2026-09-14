@@ -4,7 +4,13 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.models.entities import Source
 from app.services.archive_index import ArchiveIndex, deduplicate_archive_entries
-from app.services.discovery import candidate_rejection_reason, discover_pdf_links, score_candidate
+from app.services.discovery import (
+    GAZETTE_PER_HOST_LIMIT,
+    candidate_priority,
+    candidate_rejection_reason,
+    discover_pdf_links,
+    score_candidate,
+)
 from app.services.policy import DiscoveryBudget, check_url_policy
 from app.services.sitemap import discover_sitemaps, extract_pdf_urls_from_sitemap
 from app.services.search_provider import web_search
@@ -226,4 +232,44 @@ def discover_proposals(
     unique = {}
     for item in collected:
         unique.setdefault(item['url'], item)
-    return list(unique.values())[:max_results]
+    ranked = [
+        (
+            candidate_priority(item["url"], item.get("anchor_text", "")),
+            item,
+        )
+        for item in unique.values()
+    ]
+    rank_zero = sorted(
+        (item for priority, item in ranked if priority == 0),
+        key=lambda item: (-item["score"], item["url"]),
+    )
+    rank_one = sorted(
+        (item for priority, item in ranked if priority == 1),
+        key=lambda item: item["url"],
+        reverse=True,
+    )
+    rank_one = sorted(rank_one, key=lambda item: -item["score"])
+    ordered = [*rank_zero, *rank_one]
+    selected = []
+    rejected_gazettes = []
+    gazette_hosts = {}
+    for item in ordered:
+        if len(selected) >= max_results:
+            break
+        if candidate_priority(item["url"], item.get("anchor_text", "")) == 1:
+            host = (urlparse(item["url"]).hostname or "").lower()
+            if host.startswith("www."):
+                host = host[4:]
+            gazette_hosts[host] = gazette_hosts.get(host, 0)
+            if gazette_hosts[host] >= GAZETTE_PER_HOST_LIMIT:
+                rejected_gazettes.append(item)
+                continue
+            gazette_hosts[host] += 1
+        selected.append(item)
+    if rejected is not None:
+        rejected.extend({
+            "url": item["url"],
+            "reason": "Amtsblatt-Anteil je Gemeinde erschöpft",
+            "discovery": item.get("discovery"),
+        } for item in rejected_gazettes)
+    return selected

@@ -26,6 +26,9 @@ PUBLICATION_TERMS = {
  'hochzeitsmagazin','amtsblatt','mitteilungsblatt','gemeindeblatt',
 }
 
+GAZETTE_TERMS = {'amtsblatt', 'mitteilungsblatt', 'gemeindeblatt'}
+GAZETTE_PER_HOST_LIMIT = 12
+
 PUBLISHER_SIGNALS = (
     "total-lokal", "mediaprint", "inixmedia", "weka-info", "wekaverlag", "kommunalverlag",
 )
@@ -74,6 +77,16 @@ def _match_text(value: str) -> str:
 def _publication_terms_in(text: str) -> list[str]:
     normalized = _match_text(text)
     return [term for term in PUBLICATION_TERMS if _match_text(term) in normalized]
+
+def candidate_priority(url: str, anchor_text: str = '') -> int:
+    text = _match_text(unquote(url) + " " + anchor_text)
+    terms = _publication_terms_in(text)
+    normalized_gazette_terms = {_match_text(term) for term in GAZETTE_TERMS}
+    if any(_match_text(signal) in text for signal in PUBLISHER_SIGNALS):
+        return 0
+    if terms and all(_match_text(term) in normalized_gazette_terms for term in terms):
+        return 1
+    return 0
 
 def _area_slug(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", _match_text(value)).strip("-")

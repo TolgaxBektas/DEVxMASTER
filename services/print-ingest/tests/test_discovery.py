@@ -9,6 +9,7 @@ from app.services.archive_index import (
     deduplicate_archive_entries,
 )
 from app.services.discovery import (
+    candidate_priority,
     MAX_SECOND_LEVEL_LINKS,
     MIN_CANDIDATE_SCORE,
     candidate_rejection_reason,
@@ -261,6 +262,132 @@ def test_amtsblatt_and_publisher_signals_satisfy_publication_requirement():
     assert rejection is not None
     assert "Kein Publikationsbegriff" not in rejection
     assert rejection.startswith("Bewertung ")
+
+
+@pytest.mark.parametrize(("url", "expected"), [
+    ("https://gemeinde-x.de/amtsblatt_nr_12_2025.pdf", 1),
+    ("https://gemeinde-x.de/mitteilungsblatt-2025-03.pdf", 1),
+    ("https://gemeinde-x.de/buergerbroschuere_2024.pdf", 0),
+    ("https://gemeinde-x.de/stadtmagazin-06-2024.pdf", 0),
+    ("https://gemeinde-x.de/total-lokal-amtsblatt-2025.pdf", 0),
+    ("https://gemeinde-x.de/amtsblatt-buergerinfo-2024.pdf", 0),
+])
+def test_candidate_priority_distinguishes_gazettes(url, expected):
+    assert candidate_priority(url) == expected
+
+
+def test_discover_proposals_prioritizes_brochures_without_global_gazette_limit(monkeypatch):
+    gazettes = [
+        {
+            "url": f"https://gemeinde.example/amtsblatt-{index:02d}-2025.pdf",
+            "score": 80,
+            "discovery": "html_link",
+        }
+        for index in range(50)
+    ]
+    brochures = [
+        {
+            "url": f"https://gemeinde.example/buergerbroschuere-{index:02d}-2025.pdf",
+            "score": 60,
+            "discovery": "html_link",
+        }
+        for index in range(3)
+    ]
+    monkeypatch.setattr(autodiscovery, "discover_pdf_links", lambda *_args, **_kwargs: [
+        *gazettes,
+        *brochures,
+    ])
+    monkeypatch.setattr(autodiscovery, "discover_sitemaps", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(autodiscovery, "web_search", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(ArchiveIndex, "fetch_many", lambda *_args, **_kwargs: {})
+
+    rejected = []
+    proposals = autodiscovery.discover_proposals(
+        ["https://gemeinde.example/"],
+        [],
+        max_results=10,
+        rejected=rejected,
+        archive_domains=[],
+    )
+
+    assert [item["url"] for item in proposals] == [
+        *[item["url"] for item in brochures],
+        *[item["url"] for item in sorted(gazettes, key=lambda item: item["url"], reverse=True)[:7]],
+    ]
+    gazette_rejections = [
+        item for item in rejected
+        if item["reason"] == "Amtsblatt-Anteil je Gemeinde erschöpft"
+    ]
+    assert gazette_rejections == []
+
+
+def test_discover_proposals_limits_gazettes_per_host(monkeypatch):
+    gazettes = [
+        {
+            "url": f"https://gemeinde-{host}.example/amtsblatt-{index:02d}-2025.pdf",
+            "score": 80,
+            "discovery": "archive_index",
+        }
+        for host in ("a", "b")
+        for index in range(20)
+    ]
+    monkeypatch.setattr(autodiscovery, "discover_pdf_links", lambda *_args, **_kwargs: gazettes)
+    monkeypatch.setattr(autodiscovery, "discover_sitemaps", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(autodiscovery, "web_search", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(ArchiveIndex, "fetch_many", lambda *_args, **_kwargs: {})
+
+    rejected = []
+    proposals = autodiscovery.discover_proposals(
+        ["https://gemeinde-a.example/"],
+        [],
+        max_results=50,
+        rejected=rejected,
+        archive_domains=[],
+    )
+
+    assert len(proposals) == 24
+    assert {item["url"].split("/")[2] for item in proposals} == {
+        "gemeinde-a.example",
+        "gemeinde-b.example",
+    }
+    assert len(rejected) == 16
+    assert all(
+        item["reason"] == "Amtsblatt-Anteil je Gemeinde erschöpft"
+        and item["discovery"] == "archive_index"
+        for item in rejected
+    )
+
+
+def test_discover_proposals_orders_same_score_gazettes_newest_first(monkeypatch):
+    gazettes = [
+        {
+            "url": "https://gemeinde.example/amtsblatt-2022-01.pdf",
+            "score": 80,
+            "discovery": "html_link",
+        },
+        {
+            "url": "https://gemeinde.example/amtsblatt-2025-03.pdf",
+            "score": 80,
+            "discovery": "html_link",
+        },
+    ]
+    monkeypatch.setattr(autodiscovery, "discover_pdf_links", lambda *_args, **_kwargs: gazettes)
+    monkeypatch.setattr(autodiscovery, "discover_sitemaps", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(autodiscovery, "web_search", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(ArchiveIndex, "fetch_many", lambda *_args, **_kwargs: {})
+
+    proposals = autodiscovery.discover_proposals(
+        ["https://gemeinde.example/"],
+        [],
+        max_results=10,
+        rejected=[],
+        archive_domains=[],
+    )
+
+    assert [item["url"] for item in proposals] == [
+        gazettes[1]["url"],
+        gazettes[0]["url"],
+    ]
 
 
 @pytest.mark.parametrize("signal", [
