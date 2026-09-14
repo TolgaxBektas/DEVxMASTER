@@ -23,7 +23,7 @@ PUBLICATION_TERMS = {
  'gästeführer','gaestefuehrer','gästejournal','gaestejournal',
  'urlaubsmagazin','freizeitführer','freizeitfuehrer','ortsplan','seniorenkompass',
  'pflegeratgeber','familienratgeber','familienbroschüre','familienbroschuere',
-    'hochzeitsmagazin','amtsblatt','mitteilungsblatt','gemeindeblatt',
+ 'hochzeitsmagazin','amtsblatt','mitteilungsblatt','gemeindeblatt',
 }
 
 GAZETTE_TERMS = {'amtsblatt', 'mitteilungsblatt', 'gemeindeblatt'}
