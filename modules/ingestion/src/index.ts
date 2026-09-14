@@ -15,6 +15,7 @@ export {
   parseVerdictFile,
   plannedRejection,
   rejectionEvidence,
+  retryableTransactionAttempt,
   updatedRowCount,
 } from "./inserenten-test-verdicts.js";
 export type { InserentenTestVerdict } from "./inserenten-test-verdicts.js";

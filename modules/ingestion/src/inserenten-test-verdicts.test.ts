@@ -5,6 +5,7 @@ import {
   parseVerdictFile,
   plannedRejection,
   rejectionEvidence,
+  retryableTransactionAttempt,
   updatedRowCount,
 } from "./inserenten-test-verdicts.js";
 
@@ -59,5 +60,13 @@ describe("Urteile des Inserenten-Tests", () => {
     expect(updatedRowCount({ affectedRows: 1 })).toBe(1);
     expect(updatedRowCount(undefined)).toBe(0);
     expect(updatedRowCount([])).toBe(0);
+  });
+
+  it("entscheidet über Wiederholungen für Transaktionsfehler", () => {
+    const retryable = () => true;
+    const notRetryable = () => false;
+    expect(retryableTransactionAttempt(new Error("deadlock"), 0, 8, retryable)).toBe(true);
+    expect(retryableTransactionAttempt(new Error("deadlock"), 7, 8, retryable)).toBe(false);
+    expect(retryableTransactionAttempt(new Error("validierung"), 0, 8, notRetryable)).toBe(false);
   });
 });
