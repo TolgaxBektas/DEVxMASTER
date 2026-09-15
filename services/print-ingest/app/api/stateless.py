@@ -20,7 +20,7 @@ router = APIRouter()
 
 
 @router.post("/fetch")
-async def fetch_source(payload: dict, _token: None = Depends(require_service_token)):
+def fetch_source(payload: dict, _token: None = Depends(require_service_token)):
     url = payload.get("url")
     if not isinstance(url, str):
         raise HTTPException(400, "url_required")
@@ -58,14 +58,14 @@ async def fetch_source(payload: dict, _token: None = Depends(require_service_tok
 
 
 @router.post("/process")
-async def process_upload(
+def process_upload(
     file: UploadFile = File(...),
     output_prefix: str = Form(...),
     _token: None = Depends(require_service_token),
 ):
     if not re.fullmatch(r"[a-zA-Z0-9/_-]{1,200}", output_prefix):
         raise HTTPException(400, "invalid_output_prefix")
-    data = await file.read(settings.max_download_mb * 1024 * 1024 + 1)
+    data = file.file.read(settings.max_download_mb * 1024 * 1024 + 1)
     if len(data) > settings.max_download_mb * 1024 * 1024:
         raise HTTPException(413, "file_too_large")
     if not data.startswith(b"%PDF-"):

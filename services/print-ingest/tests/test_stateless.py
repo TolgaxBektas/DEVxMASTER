@@ -1,9 +1,17 @@
+import asyncio
+
 from fastapi.testclient import TestClient
 
 from app.api import stateless
 from app.api import routes
 from app.core.config import settings
 from app.main import app
+
+
+def test_blocking_endpoints_are_not_coroutines():
+    assert not asyncio.iscoroutinefunction(stateless.fetch_source)
+    assert not asyncio.iscoroutinefunction(stateless.process_upload)
+    assert not asyncio.iscoroutinefunction(routes.upload)
 
 
 def test_discovery_response_replaces_unencodable_surrogates():
