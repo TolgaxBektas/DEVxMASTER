@@ -1,9 +1,11 @@
 import io
+from types import SimpleNamespace
 
 import fitz
 from PIL import Image
 from app.services.processor import (
     _add_candidate_without_nested_duplicates,
+    _layout_for_page,
     extract_contacts,
     extract_pdf_metadata,
     classify_ad_candidate,
@@ -99,6 +101,85 @@ def test_render_extract():
 def test_sanitize_extracted_text_removes_surrogates_and_nuls():
     text = "Vorher\ud800Mitte\x00Nachher"
     assert sanitize_extracted_text(text) == "VorherMitteNachher"
+
+
+class LayoutPageStub:
+    def __init__(self, xobjects, text_blocks=()):
+        self.number = 14
+        self.rect = SimpleNamespace(width=1000, height=1000)
+        self.xobjects = dict(xobjects)
+        self.text_blocks = list(text_blocks)
+        self.image_rect_calls = []
+        self.get_images_calls = 0
+
+    def get_text(self, kind):
+        assert kind == "dict"
+        return {"blocks": self.text_blocks}
+
+    def get_drawings(self):
+        return []
+
+    def get_images(self, full=False):
+        assert full is True
+        self.get_images_calls += 1
+        return [(xref,) for xref in self.xobjects]
+
+    def get_image_rects(self, xref):
+        self.image_rect_calls.append(xref)
+        return self.xobjects[xref]
+
+
+def image_rect(x0, y0, x1, y1):
+    return SimpleNamespace(x0=x0, y0=y0, x1=x1, y1=y1)
+
+
+def test_layout_skips_image_placements_for_too_many_xobjects():
+    page = LayoutPageStub([(xref, []) for xref in range(401)], [
+        {"type": 1, "bbox": (1, 2, 3, 4)},
+    ])
+
+    result = _layout_for_page(page)
+
+    assert result["images"] == [{"bbox": (1.0, 2.0, 3.0, 4.0)}]
+    assert result["image_placements_truncated"] is True
+    assert page.get_images_calls == 1
+    assert page.image_rect_calls == []
+
+
+def test_layout_caps_image_placements():
+    page = LayoutPageStub([
+        (xref, [image_rect(xref, index, xref + 1, index + 1) for index in range(500)])
+        for xref in range(10)
+    ])
+
+    result = _layout_for_page(page)
+
+    assert len(result["images"]) == 2000
+    assert result["image_placements_truncated"] is True
+    assert page.get_images_calls == 1
+
+
+def test_layout_preserves_normal_image_order_and_deduplicates_text_images():
+    duplicate = image_rect(10, 20, 30, 40)
+    page = LayoutPageStub([
+        (1, [duplicate, image_rect(50, 60, 70, 80)]),
+        (2, [image_rect(90, 100, 110, 120)]),
+        (3, []),
+    ], [
+        {"type": 1, "bbox": (10, 20, 30, 40)},
+    ])
+
+    result = _layout_for_page(page)
+
+    assert result["images"] == [
+        {"bbox": (10.0, 20.0, 30.0, 40.0)},
+        {"bbox": (50.0, 60.0, 70.0, 80.0)},
+        {"bbox": (90.0, 100.0, 110.0, 120.0)},
+    ]
+    assert result["image_placements_truncated"] is False
+    assert page.get_images_calls == 1
+    assert page.image_rect_calls == [1, 2, 3]
+
 
 def test_extracts_pdf_metadata_and_title_typography():
     d = fitz.open()
