@@ -27,7 +27,7 @@ PUBLICATION_TERMS = {
 }
 
 GAZETTE_TERMS = {'amtsblatt', 'mitteilungsblatt', 'gemeindeblatt'}
-GAZETTE_PER_HOST_LIMIT = 12
+GAZETTE_PER_HOST_LIMIT = 52  # ein Jahrgang wöchentlicher Ausgaben
 
 PUBLISHER_SIGNALS = (
     "total-lokal", "mediaprint", "inixmedia", "weka-info", "wekaverlag", "kommunalverlag",
@@ -87,6 +87,38 @@ def candidate_priority(url: str, anchor_text: str = '') -> int:
     if terms and all(_match_text(term) in normalized_gazette_terms for term in terms):
         return 1
     return 0
+
+def candidate_recency_key(url: str, archive_timestamp: str | None = None) -> tuple[int, int]:
+    """(Jahr, Monat) aus Archivstempel oder URL; (0, 0) wenn undatiert."""
+    if archive_timestamp:
+        match = re.match(r"^(20\d{2})(\d{2})?", archive_timestamp)
+        if match:
+            year = int(match.group(1))
+            month = int(match.group(2) or 0)
+            return year, month if 1 <= month <= 12 else 0
+
+    text = unquote(url).lower()
+    years = [int(year) for year in re.findall(r"(?<!\d)(20\d{2})(?!\d)", text)]
+    if not years:
+        return 0, 0
+    year = max(years)
+
+    for match in re.finditer(rf"{year}[-_/.]?(\d{{1,2}})", text):
+        month = int(match.group(1))
+        if 1 <= month <= 12:
+            return year, month
+    for match in re.finditer(
+        rf"(?<!\d)(?<!kw)(?<!kw-)(?<!kw_)(\d{{1,2}})[-_/.]{year}",
+        text,
+    ):
+        month = int(match.group(1))
+        if 1 <= month <= 12:
+            return year, month
+    for match in re.finditer(rf"kw[-_]?(\d{{1,2}})", text):
+        week = int(match.group(1))
+        if 1 <= week <= 53:
+            return year, min(12, week * 12 // 52 + 1)
+    return year, 0
 
 def _area_slug(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", _match_text(value)).strip("-")
