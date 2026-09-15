@@ -7,6 +7,7 @@ from app.services.archive_index import ArchiveIndex, deduplicate_archive_entries
 from app.services.discovery import (
     GAZETTE_PER_HOST_LIMIT,
     candidate_priority,
+    candidate_recency_key,
     candidate_rejection_reason,
     discover_pdf_links,
     score_candidate,
@@ -245,10 +246,12 @@ def discover_proposals(
     )
     rank_one = sorted(
         (item for priority, item in ranked if priority == 1),
-        key=lambda item: item["url"],
-        reverse=True,
+        key=lambda item: (
+            -item["score"],
+            *(-value for value in candidate_recency_key(item["url"], item.get("archiveTimestamp"))),
+            item["url"],
+        ),
     )
-    rank_one = sorted(rank_one, key=lambda item: -item["score"])
     ordered = [*rank_zero, *rank_one]
     selected = []
     rejected_gazettes = []
