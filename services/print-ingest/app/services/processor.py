@@ -1,4 +1,5 @@
 import io
+import logging
 import math
 import re
 from collections import Counter, OrderedDict
@@ -69,6 +70,10 @@ MAX_ADS_PER_PAGE = 24
 MAX_CROP_PIXELS = 18_000_000
 MAX_OCR_REGIONS_PER_PAGE = 12
 _CLUSTER_MAX_GAP = 8
+_IMAGE_XOBJECT_LIMIT = 400
+_IMAGE_PLACEMENT_LIMIT = 2000
+
+logger = logging.getLogger(__name__)
 
 
 def _fold_industry(value):
@@ -235,17 +240,51 @@ def _layout_for_page(page):
         for block in page.get_text("dict").get("blocks", [])
         if block.get("type") == 1 and block.get("bbox")
     ]
-    for image in page.get_images(full=True):
-        for rect in page.get_image_rects(image[0]):
-            bbox = (float(rect.x0), float(rect.y0), float(rect.x1), float(rect.y1))
-            if bbox not in [item["bbox"] for item in images]:
-                images.append({"bbox": bbox})
+    image_bboxes = {item["bbox"] for item in images}
+    image_xobjects = page.get_images(full=True)
+    image_placements_truncated = False
+    page_number = getattr(page, "number", None)
+    if isinstance(page_number, int):
+        page_number += 1
+
+    if len(image_xobjects) > _IMAGE_XOBJECT_LIMIT:
+        image_placements_truncated = True
+        logger.warning(
+            "Image placements truncated: page=%s xobjects=%d reason=xobject_limit",
+            page_number if page_number is not None else "unknown",
+            len(image_xobjects),
+        )
+    elif len(images) >= _IMAGE_PLACEMENT_LIMIT:
+        image_placements_truncated = True
+        logger.warning(
+            "Image placements truncated: page=%s xobjects=%d reason=placement_limit",
+            page_number if page_number is not None else "unknown",
+            len(image_xobjects),
+        )
+    else:
+        for image in image_xobjects:
+            for rect in page.get_image_rects(image[0]):
+                if len(images) >= _IMAGE_PLACEMENT_LIMIT:
+                    image_placements_truncated = True
+                    logger.warning(
+                        "Image placements truncated: page=%s xobjects=%d reason=placement_limit",
+                        page_number if page_number is not None else "unknown",
+                        len(image_xobjects),
+                    )
+                    break
+                bbox = (float(rect.x0), float(rect.y0), float(rect.x1), float(rect.y1))
+                if bbox not in image_bboxes:
+                    images.append({"bbox": bbox})
+                    image_bboxes.add(bbox)
+            if image_placements_truncated:
+                break
     return {
         "page_width": float(page.rect.width),
         "page_height": float(page.rect.height),
         "blocks": blocks,
         "drawings": drawings,
         "images": images,
+        "image_placements_truncated": image_placements_truncated,
     }
 
 def render_and_extract(pdf_bytes: bytes, dpi: int = 180):
