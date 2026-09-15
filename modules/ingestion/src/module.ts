@@ -847,15 +847,22 @@ export function createIngestionModule(deps: {
         handle: async (payload, context) => {
           const tenantId = jobTenantId(context);
           const documentId = (payload as { documentId?: unknown }).documentId;
+          const isTargeted = typeof documentId === "number";
           const documents = typeof documentId === "number"
             ? [await repository.getDocument(tenantId, documentId)]
             : await repository.listDocuments(tenantId);
-          for (const document of documents.filter((item) => item.state === "uploaded" || item.state === "failed")) {
+          for (const document of documents.filter((item) =>
+            item.state === "uploaded"
+            || item.state === "failed"
+            || (isTargeted && item.state === "processing"),
+          )) {
             if (!deps.processDocument || !deps.transaction) {
               await repository.setDocumentState(tenantId, document.id, "failed", "Verarbeitung ist nicht konfiguriert");
               continue;
             }
-            await repository.setDocumentState(tenantId, document.id, "processing");
+            if (document.state !== "processing") {
+              await repository.setDocumentState(tenantId, document.id, "processing");
+            }
             try {
               const pages = await deps.processDocument({
                 tenantId,
