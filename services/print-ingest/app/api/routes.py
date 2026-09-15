@@ -175,8 +175,8 @@ def download(req: DownloadRequest, db: Session=Depends(get_db), _token: None=Dep
     return {'document_id':doc.id,'deduplicated':False,'state':doc.state}
 
 @router.post('/documents/upload')
-async def upload(file: UploadFile=File(...), db: Session=Depends(get_db), _token: None=Depends(require_service_token)):
-    data=await file.read()
+def upload(file: UploadFile=File(...), db: Session=Depends(get_db), _token: None=Depends(require_service_token)):
+    data=file.file.read()
     if not data.startswith(b'%PDF-'): raise HTTPException(400,'not_a_real_pdf')
     digest=hashlib.sha256(data).hexdigest()
     existing=db.scalar(select(Document).where(Document.sha256==digest))
