@@ -353,7 +353,7 @@ export class MemoryIngestionRepository implements IngestionRepository {
   async replaceProcessedDocument(tenantId: string, documentId: number, processedPages: Array<{
     pageNumber: number;
     text: string;
-    imageKey: string;
+    imageKey: string | null;
     classification: string;
     adProbability: number;
     occurrences: Array<{

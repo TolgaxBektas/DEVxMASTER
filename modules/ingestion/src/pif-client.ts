@@ -39,7 +39,7 @@ export function createPifProcessor(input: {
       pages: Array<{
         page_number: number;
         text: string;
-        image_key: string;
+        image_key: string | null;
         classification: string;
         ad_probability: number;
         occurrences: Array<{
@@ -69,7 +69,7 @@ export function createPifProcessor(input: {
     const pages = result.pages.map((page) => ({
       pageNumber: page.page_number,
       text: page.text,
-      imageKey: page.image_key,
+      imageKey: page.image_key ?? null,
       classification: page.classification,
       adProbability: page.ad_probability,
       titleCandidates: page.title_candidates ?? [],
