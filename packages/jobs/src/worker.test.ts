@@ -35,7 +35,7 @@ describe("Worker-Leases", () => {
 
     const run = worker.run({ workerId: "first", pollMs: 1 });
     await started;
-    await vi.advanceTimersByTimeAsync(1_001);
+    await vi.advanceTimersByTimeAsync(3_001);
 
     expect(await queue.claimNext("second")).toBeNull();
     finish();
