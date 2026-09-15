@@ -253,7 +253,7 @@ export type IngestionRepository = {
     pages: Array<{
       pageNumber: number;
       text: string;
-      imageKey: string;
+      imageKey: string | null;
       classification: string;
       adProbability: number;
       occurrences: Array<{

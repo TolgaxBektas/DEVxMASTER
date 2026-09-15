@@ -90,6 +90,37 @@ def test_process_returns_pages_without_document_rows(monkeypatch):
         "city": "Musterstadt",
     }
     assert "tenants/1/processed/hash/page-0001.png" in storage.objects
+    assert response.json()["pages"][0]["image_key"] == "tenants/1/processed/hash/page-0001.png"
+
+
+def test_process_omits_page_image_without_ad_candidates(monkeypatch):
+    storage = FakeStorage()
+    monkeypatch.setattr(stateless, "storage", storage)
+    monkeypatch.setattr(stateless, "heuristic_ad_regions", lambda *_args: [])
+    monkeypatch.setattr(
+        stateless,
+        "render_and_extract",
+        lambda _data: [
+            {
+                "page_number": 1,
+                "text": "Redaktioneller Text ohne Anzeige",
+                "image_bytes": b"png",
+                "classification": "EDITORIAL",
+                "ad_probability": 0.01,
+            }
+        ],
+    )
+
+    response = TestClient(app).post(
+        "/api/v1/process",
+        headers={"x-service-token": settings.service_token},
+        files={"file": ("document.pdf", b"%PDF-1.7", "application/pdf")},
+        data={"output_prefix": "tenants/1/processed/hash"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["pages"][0]["image_key"] is None
+    assert storage.objects == {}
 
 
 def test_process_response_replaces_unencodable_surrogates(monkeypatch):

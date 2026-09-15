@@ -49,7 +49,7 @@ export type AdBoundingBox = {
 export type ProcessedPage = {
   pageNumber: number;
   text: string;
-  imageKey: string;
+  imageKey: string | null;
   classification: string;
   adProbability: number;
   titleCandidates?: Array<{ text: string; size: number }>;

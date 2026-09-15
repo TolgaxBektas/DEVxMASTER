@@ -79,7 +79,6 @@ def process_upload(
     for page in pages:
         number = page["page_number"]
         image_key = f"{output_prefix}/page-{number:04d}.png"
-        storage.put_bytes(image_key, page["image_bytes"], "image/png")
         text = page["text"]
         candidates = []
         for index, region in enumerate(
@@ -103,11 +102,13 @@ def process_upload(
                     "contacts": extract_contacts(ad_text),
                 }
             )
+        if candidates:
+            storage.put_bytes(image_key, page["image_bytes"], "image/png")
         result.append(
             {
                 "page_number": number,
                 "text": text,
-                "image_key": image_key,
+                "image_key": image_key if candidates else None,
                 "classification": page["classification"],
                 "ad_probability": page["ad_probability"],
                 "occurrences": candidates,
