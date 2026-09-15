@@ -4,6 +4,7 @@ import {
   createDrizzleEventRepository,
   defineModule,
   NonRetryableError,
+  type AuditRepository,
   type EventExecutor,
   type ModuleDefinition,
 } from "@xmaster-center/kernel";
@@ -14,7 +15,11 @@ import { ingestionSchema } from "./schema.js";
 import { createIngestionRouter } from "./router.js";
 import { MemoryIngestionRepository } from "./memory-repository.js";
 import { createDrizzleIngestionRepository } from "./drizzle-repository.js";
-import { occurrenceFingerprint, type IngestionRepository, type IngestionSource } from "./repository.js";
+import {
+  occurrenceFingerprint,
+  type IngestionRepository,
+  type IngestionSource,
+} from "./repository.js";
 import { registerReviewImageRoutes, registerUploadRoute } from "./rest.js";
 import { persistDocumentBytes } from "./rest.js";
 import { deriveDocumentClassification } from "./classification.js";
@@ -22,6 +27,10 @@ import { documentActualityStatus } from "./actuality.js";
 import { publishCurrentActualityTransition } from "./actuality-replay.js";
 import { ingestionPages, IngestionPage, OccurrencesPage, ReviewPage, AreasPage } from "./ui/index.js";
 import type { PifReviewClient } from "./review-client.js";
+import type {
+  ArtworkHandoffManifest,
+  ArtworkHandoffResult,
+} from "./artwork-handoff-client.js";
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { areaSearchTerms } from "./search-terms.js";
 import { PUBLISHER_SEED_PAGES } from "./publishers.js";
@@ -247,7 +256,7 @@ export async function scanWatchFolder(deps: WatchFolderScanDependencies) {
 export function createIngestionModule(deps: {
   db?: unknown;
   repository?: IngestionRepository;
-  audit?: ReturnType<typeof createDrizzleAuditRepository>;
+  audit?: AuditRepository;
   storage?: Storage;
   maxUploadBytes?: number;
   transaction?: <T>(callback: (db: unknown) => Promise<T>) => Promise<T>;
@@ -315,6 +324,10 @@ export function createIngestionModule(deps: {
   }>;
   reviewClient?: PifReviewClient;
   reviewTenantId?: string;
+  handoffToArtwork?: (input: {
+    original: Uint8Array;
+    manifest: ArtworkHandoffManifest;
+  }) => Promise<ArtworkHandoffResult>;
   watchFolderPath?: string;
 }): ModuleDefinition {
   const repository = deps.repository ?? (deps.db
@@ -941,6 +954,23 @@ export function createIngestionModule(deps: {
                     occurrence,
                   ),
                 }, executor);
+                if (
+                  deps.enqueue
+                  && (occurrence.evidence ?? []).some((item) => item.startsWith("positiv:"))
+                ) {
+                  try {
+                    await deps.enqueue({
+                      name: "ingestion.handoff.artwork",
+                      tenantId,
+                      payload: { occurrenceId: occurrence.id },
+                    });
+                  } catch (error) {
+                    console.error(
+                      "[ingestion] Übergabe an den Bearbeitungsdienst konnte nicht eingereiht werden",
+                      error,
+                    );
+                  }
+                }
               }
               if (deps.audit) {
                 await appendAudit(createDrizzleAuditRepository(db), {
@@ -981,6 +1011,127 @@ export function createIngestionModule(deps: {
           const document = await repository.getDocument(tenantId, documentId);
           if (document.state !== "failed") {
             await repository.setDocumentState(tenantId, documentId, "failed", message);
+          }
+        },
+      },
+      {
+        name: "ingestion.handoff.artwork",
+        handle: async (payload, context) => {
+          const tenantId = jobTenantId(context);
+          const numericTenantId = Number(tenantId);
+          if (!Number.isInteger(numericTenantId) || numericTenantId <= 0) {
+            throw new Error("Ungültige Mandantenkennung für Übergabe");
+          }
+          const occurrenceId = (payload as { occurrenceId?: unknown }).occurrenceId;
+          if (typeof occurrenceId !== "number") {
+            throw new Error("Fundstelle für Übergabe fehlt");
+          }
+          const provenance = await repository.getOccurrenceProvenance(
+            tenantId,
+            occurrenceId,
+          );
+          if (provenance.advertiserProof.length === 0) {
+            if (deps.audit) {
+              await appendAudit(deps.audit, {
+                tenantId,
+                action: "ingestion.occurrence.handoff",
+                entityType: "ingestion_occurrence",
+                entityId: occurrenceId,
+                actorId: null,
+                actorName: "Ingestion-Worker",
+                detailsJson: JSON.stringify({
+                  skipped: true,
+                  reason: "Kein Inserenten-Nachweis",
+                }),
+              });
+            }
+            return;
+          }
+          if (!provenance.imageKey) {
+            throw new Error("Ausschnitt fehlt, Übergabe nicht möglich");
+          }
+          if (provenance.page.number == null) {
+            throw new Error("Seitenzahl fehlt, Übergabe nicht möglich");
+          }
+          if (!provenance.bbox) {
+            throw new Error("Geometrie fehlt, Übergabe nicht möglich");
+          }
+          if (!deps.handoffToArtwork) {
+            throw new Error("Bearbeitungsdienst ist nicht eingerichtet");
+          }
+          if (!deps.storage) {
+            throw new Error("Speicher ist nicht eingerichtet");
+          }
+          const original = await deps.storage.get(provenance.imageKey);
+          if (!original) {
+            throw new Error("Ausschnitt fehlt, Übergabe nicht möglich");
+          }
+          const publication = provenance.publication;
+          const manifest: ArtworkHandoffManifest = {
+            company_name: provenance.company,
+            advertiser_proof: provenance.advertiserProof,
+            evidence: provenance.evidence,
+            provenance: {
+              data_source: provenance.dataSource,
+              center_tenant_id: numericTenantId,
+              center_occurrence_id: provenance.occurrenceId,
+              document_sha256: provenance.document.sha256,
+              page: provenance.page.number,
+              bbox: [
+                provenance.bbox.x,
+                provenance.bbox.y,
+                provenance.bbox.width,
+                provenance.bbox.height,
+              ],
+              ...(provenance.document.filename
+                ? { document_filename: provenance.document.filename }
+                : {}),
+              ...(provenance.source?.url
+                ? { source_url: provenance.source.url }
+                : {}),
+              ...(provenance.area?.name
+                ? { area_name: provenance.area.name }
+                : {}),
+              ...(provenance.area?.ags
+                ? { area_ags: provenance.area.ags }
+                : {}),
+              ...(provenance.area?.stateName
+                ? { area_state: provenance.area.stateName }
+                : {}),
+              ...(publication?.name
+                ? { publication: publication.name }
+                : {}),
+              ...(publication?.editionLabel
+                ? { edition: publication.editionLabel }
+                : {}),
+              ...(publication?.periodStartYear != null
+                ? { year: publication.periodStartYear }
+                : {}),
+              ...(publication?.periodIssue != null
+                ? { issue: publication.periodIssue }
+                : {}),
+            },
+            ...(provenance.preview ? { preview: provenance.preview } : {}),
+            ...(provenance.confidence != null
+              ? { confidence: provenance.confidence }
+              : {}),
+          };
+          const result = await deps.handoffToArtwork({ original, manifest });
+          if (deps.audit) {
+            await appendAudit(deps.audit, {
+              tenantId,
+              action: "ingestion.occurrence.handoff",
+              entityType: "ingestion_occurrence",
+              entityId: occurrenceId,
+              actorId: null,
+              actorName: "Ingestion-Worker",
+              detailsJson: JSON.stringify({
+                artworkDocumentId: result.documentId,
+                artworkAdId: result.adId,
+                reviewStatus: result.reviewStatus,
+                deduplicated: result.deduplicated,
+              }),
+            });
           }
         },
       },
