@@ -24,7 +24,7 @@ async function processPdf(input: {
   const target = new URL(`${input.baseUrl.replace(/\/$/, "")}/api/v1/process`);
   const requestFunction =
     target.protocol === "https:" ? httpsRequest : target.protocol === "http:" ? httpRequest : null;
-  if (!requestFunction) throw new Error("Unsupported PIF URL protocol");
+  if (!requestFunction) throw new Error(`Nicht unterstütztes Protokoll: ${target.protocol}`);
 
   return new Promise((resolve, reject) => {
     const request = requestFunction(
