@@ -280,11 +280,13 @@ const schedules = [
     : []),
 ];
 scheduler.start(schedules);
-void worker.run({
-  workerId: `worker-${process.pid}`,
-  signal: abort.signal,
-  pollMs: 1_000,
-});
+for (let index = 0; index < env.WORKER_CONCURRENCY; index += 1) {
+  void worker.run({
+    workerId: `worker-${process.pid}-${index}`,
+    signal: abort.signal,
+    pollMs: 1_000,
+  });
+}
 void dispatchLoop();
 
 const shutdown = async () => {
