@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt, ValidationError
 from sqlalchemy import select
 
-from app.api.auth import require_auth
+from app.api.auth import require_compat_auth
 from app.api.dependencies import session_dependency, storage_dependency
 from app.core.config import get_settings
 from app.models import AdOccurrence, Document, Page, ReviewItem
@@ -73,7 +73,7 @@ class PrintFindMetadata(BaseModel):
 
 
 router = APIRouter(
-    prefix="/imports", tags=["imports"], dependencies=[Depends(require_auth)]
+    prefix="/imports", tags=["imports"], dependencies=[Depends(require_compat_auth)]
 )
 
 

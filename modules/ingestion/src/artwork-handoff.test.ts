@@ -8,8 +8,14 @@ import type {
   ArtworkHandoffResult,
 } from "./artwork-handoff-client.js";
 
-const context = (tenantId: string, payload: unknown = {}) => ({
+const context = (
+  tenantId: string,
+  payload: unknown = {},
+  signal = new AbortController().signal,
+) => ({
   job: { tenantId, payload },
+  signal,
+  heartbeat: async () => true,
 });
 
 function storage(bytes = new Uint8Array([1, 2, 3])) {
@@ -118,7 +124,7 @@ describe("Übergabe frischer Fundstellen", () => {
       original: Uint8Array;
       manifest: ArtworkHandoffManifest;
     };
-    const handoff = vi.fn(async (_input: HandoffInput): Promise<ArtworkHandoffResult> => ({
+    const handoff = vi.fn(async (_input: HandoffInput, _signal?: AbortSignal): Promise<ArtworkHandoffResult> => ({
       documentId: 11,
       adId: 22,
       reviewStatus: "pending",
@@ -163,6 +169,7 @@ describe("Übergabe frischer Fundstellen", () => {
         bbox: [0.1, 0.2, 0.3, 0.4],
       },
     });
+    expect(handoff.mock.calls[0]?.[1]).toBeInstanceOf(AbortSignal);
     expect(audit.entries).toHaveLength(1);
     expect(JSON.parse(audit.entries[0]?.detailsJson ?? "{}")).toEqual({
       artworkDocumentId: 11,
@@ -343,5 +350,57 @@ describe("Übergabe frischer Fundstellen", () => {
       tenantId: "1",
       payload: { occurrenceId: 1 },
     }]);
+  });
+
+  it("gibt einen fehlgeschlagenen Artwork-Enqueue weiter und verarbeitet nicht erfolgreich", async () => {
+    const repository = new MemoryIngestionRepository();
+    const document = await repository.createUploadedDocument("1", {
+      filename: "enqueue-fehler.pdf",
+      sha256: "c".repeat(64),
+      storageKey: "tenants/1/originals/c/enqueue-fehler.pdf",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "upload",
+    });
+    const enqueueError = new Error("Queue nicht erreichbar");
+    const module = createIngestionModule({
+      repository,
+      repositoryForTransaction: () => repository,
+      transaction: async (callback) => {
+        try {
+          return await callback({});
+        } catch (error) {
+          (await repository.getDocument("1", document.document.id)).state = "processing";
+          throw error;
+        }
+      },
+      processDocument: async () => [{
+        pageNumber: 1,
+        text: "Anzeigen",
+        imageKey: "page.png",
+        classification: "MIXED_CONTENT",
+        adProbability: 0.9,
+        occurrences: [{
+          bbox: { x: 0, y: 0, width: 1, height: 1, confidence: 0.9 },
+          imageKey: "positive.png",
+          confidence: 0.9,
+          evidence: ["geometry", "positiv:p2"],
+          company: "Queue Fehler GmbH",
+          preview: "Queue Fehler",
+        }],
+      }],
+      enqueue: async () => {
+        throw enqueueError;
+      },
+      publish: async () => undefined,
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.processing.run");
+    if (!job) throw new Error("Verarbeitungsjob fehlt");
+
+    await expect(job.handle(
+      { documentId: document.document.id },
+      context("1", { documentId: document.document.id }),
+    )).rejects.toBe(enqueueError);
+    expect((await repository.getDocument("1", document.document.id)).state).toBe("failed");
   });
 });

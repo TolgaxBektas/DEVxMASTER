@@ -4,7 +4,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 
+from app.api import auth
 from app.api.dependencies import session_dependency, storage_dependency
+from app.core.config import Settings
 from app.db.base import Base
 from app.main import app
 from app.models import AdOccurrence, Document, Page, ReviewItem
@@ -161,5 +163,65 @@ def test_print_find_import_requires_positive_advertiser_proof(tmp_path):
         )
         assert response.status_code == 422
         assert response.json()["detail"] == "advertiser proof required"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_print_find_import_accepts_service_token_when_auth_is_enabled(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        auth,
+        "get_settings",
+        lambda: Settings(service_token="compat-token", auth_disabled=False),
+    )
+    client, _ = _client(tmp_path)
+    try:
+        response = client.post(
+            "/imports/print-find",
+            headers={"x-service-token": "compat-token"},
+            files=_files(_manifest()),
+        )
+        assert response.status_code != 401
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_print_find_import_accepts_bearer_token_when_auth_is_enabled(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        auth,
+        "get_settings",
+        lambda: Settings(service_token="compat-token", auth_disabled=False),
+    )
+    client, _ = _client(tmp_path)
+    try:
+        response = client.post(
+            "/imports/print-find",
+            headers={"Authorization": "Bearer compat-token"},
+            files=_files(_manifest()),
+        )
+        assert response.status_code != 401
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_print_find_import_rejects_wrong_service_token_when_auth_is_enabled(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        auth,
+        "get_settings",
+        lambda: Settings(service_token="compat-token", auth_disabled=False),
+    )
+    client, _ = _client(tmp_path)
+    try:
+        response = client.post(
+            "/imports/print-find",
+            headers={"x-service-token": "wrong-token"},
+            files=_files(_manifest()),
+        )
+        assert response.status_code == 401
     finally:
         app.dependency_overrides.clear()

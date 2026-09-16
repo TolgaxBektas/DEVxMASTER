@@ -33,14 +33,16 @@ export type ArtworkHandoffResult = {
 export function createArtworkHandoffClient(input: {
   baseUrl: string;
   serviceToken: string;
+  timeoutMs?: number;
 }): {
   submit(payload: {
     original: Uint8Array;
     manifest: ArtworkHandoffManifest;
-  }): Promise<ArtworkHandoffResult>;
+  }, signal?: AbortSignal): Promise<ArtworkHandoffResult>;
 } {
+  const timeoutMs = input.timeoutMs ?? 30_000;
   return {
-    async submit(payload) {
+    async submit(payload, signal) {
       const form = new FormData();
       form.append(
         "original",
@@ -50,15 +52,31 @@ export function createArtworkHandoffClient(input: {
         "original.png",
       );
       form.append("manifest", JSON.stringify(payload.manifest));
+      const controller = new AbortController();
+      let timedOut = false;
+      const timeout = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, timeoutMs);
+      const onAbort = () => controller.abort();
+      signal?.addEventListener("abort", onAbort);
+      if (signal?.aborted) onAbort();
       let response: Response;
       try {
         response = await fetch(`${input.baseUrl.replace(/\/$/, "")}/imports/print-find`, {
           method: "POST",
           headers: { "x-service-token": input.serviceToken },
           body: form,
+          signal: controller.signal,
         });
       } catch {
+        if (timedOut) {
+          throw new Error("Bearbeitungsdienst hat nicht rechtzeitig geantwortet");
+        }
         throw new Error("Bearbeitungsdienst ist nicht erreichbar");
+      } finally {
+        clearTimeout(timeout);
+        signal?.removeEventListener("abort", onAbort);
       }
       if (!response.ok) {
         throw new Error("Bearbeitungsdienst hat die Übergabe abgelehnt");

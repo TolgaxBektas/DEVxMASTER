@@ -107,12 +107,12 @@ const ingestion = createIngestionModule({
     });
     return processor(input);
   },
-  handoffToArtwork: async (input) => {
+  handoffToArtwork: async (input, signal) => {
     if (!env.ARTWORK_SERVICE_TOKEN) throw new Error("Artwork-Service-Token fehlt");
     return createArtworkHandoffClient({
       baseUrl: env.ARTWORK_BASE_URL,
       serviceToken: env.ARTWORK_SERVICE_TOKEN,
-    }).submit(input);
+    }).submit(input, signal);
   },
   discoverProposals: async ({ seedPages, archiveDomains, searchTerms, maxResults, areaName }) => {
     if (!env.PRINT_INGEST_SERVICE_TOKEN) throw new Error("Print-Ingest-Service-Token fehlt");
