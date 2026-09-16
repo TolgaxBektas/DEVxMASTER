@@ -85,4 +85,60 @@ describe("Artwork-Übergabeclient", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("bricht eine nicht antwortende Übergabe nach dem Zeitlimit ab", async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => (
+      new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (signal?.aborted) {
+          reject(new DOMException("aborted", "AbortError"));
+          return;
+        }
+        signal?.addEventListener("abort", () => {
+          reject(new DOMException("aborted", "AbortError"));
+        }, { once: true });
+      })
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await expect(createArtworkHandoffClient({
+        baseUrl: "http://artwork",
+        serviceToken: "token",
+        timeoutMs: 10,
+      }).submit({ original: new Uint8Array([1]), manifest }))
+        .rejects.toThrow("Bearbeitungsdienst hat nicht rechtzeitig geantwortet");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("reicht ein externes Abbruchsignal an die Übergabe weiter", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => (
+      new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        signal?.addEventListener("abort", () => {
+          reject(new DOMException("aborted", "AbortError"));
+        }, { once: true });
+      })
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const request = createArtworkHandoffClient({
+        baseUrl: "http://artwork",
+        serviceToken: "token",
+        timeoutMs: 1_000,
+      }).submit({ original: new Uint8Array([1]), manifest }, controller.signal);
+      controller.abort();
+      await expect(request).rejects.toThrow("Bearbeitungsdienst ist nicht erreichbar");
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://artwork/imports/print-find",
+        expect.objectContaining({
+          signal: expect.any(AbortSignal),
+        }),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

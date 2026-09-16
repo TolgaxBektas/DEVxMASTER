@@ -80,7 +80,10 @@ export type OccurrenceContacts = {
   city: string | null;
 };
 
-type JobContext = { job: { tenantId: string | null } };
+type JobContext = {
+  job: { tenantId: string | null };
+  signal: AbortSignal;
+};
 
 export function advertisementEventIdempotencyKey(
   tenantId: string,
@@ -327,7 +330,7 @@ export function createIngestionModule(deps: {
   handoffToArtwork?: (input: {
     original: Uint8Array;
     manifest: ArtworkHandoffManifest;
-  }) => Promise<ArtworkHandoffResult>;
+  }, signal?: AbortSignal) => Promise<ArtworkHandoffResult>;
   watchFolderPath?: string;
 }): ModuleDefinition {
   const repository = deps.repository ?? (deps.db
@@ -958,18 +961,11 @@ export function createIngestionModule(deps: {
                   deps.enqueue
                   && (occurrence.evidence ?? []).some((item) => item.startsWith("positiv:"))
                 ) {
-                  try {
-                    await deps.enqueue({
-                      name: "ingestion.handoff.artwork",
-                      tenantId,
-                      payload: { occurrenceId: occurrence.id },
-                    });
-                  } catch (error) {
-                    console.error(
-                      "[ingestion] Übergabe an den Bearbeitungsdienst konnte nicht eingereiht werden",
-                      error,
-                    );
-                  }
+                  await deps.enqueue({
+                    name: "ingestion.handoff.artwork",
+                    tenantId,
+                    payload: { occurrenceId: occurrence.id },
+                  });
                 }
               }
               if (deps.audit) {
@@ -1116,7 +1112,10 @@ export function createIngestionModule(deps: {
               ? { confidence: provenance.confidence }
               : {}),
           };
-          const result = await deps.handoffToArtwork({ original, manifest });
+          const result = await deps.handoffToArtwork(
+            { original, manifest },
+            (context as JobContext).signal,
+          );
           if (deps.audit) {
             await appendAudit(deps.audit, {
               tenantId,
