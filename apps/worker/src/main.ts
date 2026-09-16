@@ -8,7 +8,10 @@ import {
   responseErrorMessage,
 } from "@xmaster-center/kernel";
 import { createConfiguredStorage } from "@xmaster-center/integrations";
-import { createPifProcessor } from "@xmaster-center/module-ingestion";
+import {
+  createArtworkHandoffClient,
+  createPifProcessor,
+} from "@xmaster-center/module-ingestion";
 import {
   DrizzleQueueRepository,
   LeaseQueue,
@@ -103,6 +106,13 @@ const ingestion = createIngestionModule({
       serviceToken: env.PRINT_INGEST_SERVICE_TOKEN,
     });
     return processor(input);
+  },
+  handoffToArtwork: async (input) => {
+    if (!env.ARTWORK_SERVICE_TOKEN) throw new Error("Artwork-Service-Token fehlt");
+    return createArtworkHandoffClient({
+      baseUrl: env.ARTWORK_BASE_URL,
+      serviceToken: env.ARTWORK_SERVICE_TOKEN,
+    }).submit(input);
   },
   discoverProposals: async ({ seedPages, archiveDomains, searchTerms, maxResults, areaName }) => {
     if (!env.PRINT_INGEST_SERVICE_TOKEN) throw new Error("Print-Ingest-Service-Token fehlt");

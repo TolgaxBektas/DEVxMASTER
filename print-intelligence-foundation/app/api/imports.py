@@ -41,6 +41,37 @@ class PrintBatchMetadata(BaseModel):
     restaurierung: dict[str, Any]
 
 
+class PrintFindProvenance(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    data_source: Literal["xdata_nb_high_quality", "xdata_germany"] = XDATA_GERMANY
+    center_tenant_id: PositiveInt
+    center_occurrence_id: PositiveInt
+    document_sha256: str = Field(min_length=64, max_length=64)
+    document_filename: str | None = None
+    source_url: str | None = None
+    area_name: str | None = None
+    area_ags: str | None = None
+    area_state: str | None = None
+    publication: str | None = None
+    edition: str | None = None
+    year: int | None = None
+    issue: int | None = None
+    page: PositiveInt
+    bbox: list[float] = Field(min_length=4, max_length=4)
+
+
+class PrintFindMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    company_name: str = Field(min_length=1)
+    preview: str | None = None
+    confidence: float | None = None
+    advertiser_proof: list[str] = Field(min_length=1)
+    evidence: list[str] = []
+    provenance: PrintFindProvenance
+
+
 router = APIRouter(
     prefix="/imports", tags=["imports"], dependencies=[Depends(require_auth)]
 )
@@ -206,5 +237,139 @@ def import_print_batch(
         "restoration_url": f"/documents/{document.id}/ads/{occurrence.id}/restoration",
         "manifest_url": (
             f"/documents/{document.id}/ads/{occurrence.id}/restoration/manifest"
+        ),
+    }
+
+
+@router.post("/print-find")
+def import_print_find(
+    original: UploadFile = File(...),
+    manifest: str = Form(...),
+    session=Depends(session_dependency),
+    storage=Depends(storage_dependency),
+):
+    try:
+        payload = PrintFindMetadata.model_validate_json(manifest)
+    except (ValidationError, ValueError) as exc:
+        raise HTTPException(422, "invalid print-find metadata") from exc
+    if not all(item.startswith("positiv:") for item in payload.advertiser_proof):
+        raise HTTPException(422, "advertiser proof required")
+
+    try:
+        original_bytes = read_limited(
+            original.file,
+            get_settings().max_download_bytes,
+        )
+    except UploadTooLargeError as exc:
+        raise HTTPException(413, str(exc)) from exc
+    if not original_bytes:
+        raise HTTPException(422, "original image is required")
+
+    provenance = payload.provenance
+    document_digest = sha256(
+        f"center:{provenance.center_tenant_id}:{provenance.document_sha256}".encode()
+    )
+    document = session.scalar(
+        select(Document).where(Document.content_sha256 == document_digest)
+    )
+    if document is None:
+        document = Document(
+            content_sha256=document_digest,
+            source_url=provenance.source_url,
+            filename=provenance.document_filename,
+        )
+        session.add(document)
+        session.flush()
+
+    page = session.scalar(
+        select(Page).where(
+            Page.document_id == document.id,
+            Page.page_number == provenance.page,
+        )
+    )
+    if page is None:
+        page = Page(
+            document_id=document.id,
+            page_number=provenance.page,
+            image_path=None,
+            classification="advertisement",
+        )
+        session.add(page)
+        session.flush()
+    else:
+        page.classification = "advertisement"
+
+    occurrence_key = (
+        f"center:{provenance.center_tenant_id}:{provenance.center_occurrence_id}"
+    )
+    occurrence = session.scalar(
+        select(AdOccurrence).where(
+            AdOccurrence.page_id == page.id,
+            AdOccurrence.occurrence_key == occurrence_key,
+        )
+    )
+    deduplicated = occurrence is not None
+    if occurrence is None:
+        occurrence = AdOccurrence(
+            page_id=page.id,
+            occurrence_key=occurrence_key,
+            bbox=json.dumps(provenance.bbox),
+            confidence=payload.confidence or 0.0,
+            data_source=provenance.data_source,
+            source_explicit=True,
+            restoration_path=None,
+            restoration_manifest_json="{}",
+        )
+        session.add(occurrence)
+        session.flush()
+    else:
+        occurrence.bbox = json.dumps(provenance.bbox)
+        occurrence.confidence = payload.confidence or 0.0
+        occurrence.data_source = provenance.data_source
+        occurrence.source_explicit = True
+
+    company = resolve_company(
+        session,
+        payload.company_name,
+        {"company": payload.company_name},
+        provenance.data_source,
+        write_source=provenance.data_source,
+    )
+    occurrence.company_id = company.id
+    occurrence.artwork_path = storage.put(
+        original_bytes,
+        f"center-find/{provenance.center_tenant_id}/"
+        f"{provenance.center_occurrence_id}/original.png",
+    )
+    occurrence.artwork_metadata_json = json.dumps(
+        payload.model_dump(),
+        ensure_ascii=False,
+    )
+    occurrence.fields_json = json.dumps(
+        {"fields": {"company": payload.company_name}},
+        ensure_ascii=False,
+    )
+
+    review = session.scalar(
+        select(ReviewItem).where(ReviewItem.ad_id == occurrence.id)
+    )
+    if review is None:
+        review = ReviewItem(
+            ad_id=occurrence.id,
+            page_id=page.id,
+            status="pending",
+            reason="frischer Internetfund, menschliche Freigabe erforderlich",
+        )
+        session.add(review)
+        session.flush()
+
+    session.commit()
+    return {
+        "document_id": document.id,
+        "ad_id": occurrence.id,
+        "review_status": review.status,
+        "deduplicated": deduplicated,
+        "artwork_url": (
+            f"/documents/{document.id}/ads/{occurrence.id}/artwork"
         ),
     }

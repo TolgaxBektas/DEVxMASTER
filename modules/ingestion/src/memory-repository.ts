@@ -262,6 +262,7 @@ export class MemoryIngestionRepository implements IngestionRepository {
       occurrenceId: occurrence.id,
       dataSource: occurrence.dataSource,
       company: occurrence.company,
+      preview: occurrence.preview,
       status: occurrence.status,
       confidence: occurrence.confidence ?? null,
       bbox,
