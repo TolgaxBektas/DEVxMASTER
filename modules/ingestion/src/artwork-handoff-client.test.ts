@@ -112,6 +112,36 @@ describe("Artwork-Übergabeclient", () => {
     }
   });
 
+  it("bricht einen nicht antwortenden Antwortkörper nach dem Zeitlimit ab", async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const signal = init?.signal;
+      return {
+        ok: true,
+        json: () => new Promise<never>((_resolve, reject) => {
+          const abort = () => reject(new DOMException("aborted", "AbortError"));
+          if (signal?.aborted) {
+            abort();
+            return;
+          }
+          signal?.addEventListener("abort", abort, { once: true });
+        }),
+      } as unknown as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const startedAt = Date.now();
+      await expect(createArtworkHandoffClient({
+        baseUrl: "http://artwork",
+        serviceToken: "token",
+        timeoutMs: 20,
+      }).submit({ original: new Uint8Array([1]), manifest }))
+        .rejects.toThrow("Bearbeitungsdienst hat nicht rechtzeitig geantwortet");
+      expect(Date.now() - startedAt).toBeLessThan(500);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("reicht ein externes Abbruchsignal an die Übergabe weiter", async () => {
     const controller = new AbortController();
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => (

@@ -61,38 +61,43 @@ export function createArtworkHandoffClient(input: {
       const onAbort = () => controller.abort();
       signal?.addEventListener("abort", onAbort);
       if (signal?.aborted) onAbort();
-      let response: Response;
       try {
-        response = await fetch(`${input.baseUrl.replace(/\/$/, "")}/imports/print-find`, {
+        const response = await fetch(`${input.baseUrl.replace(/\/$/, "")}/imports/print-find`, {
           method: "POST",
           headers: { "x-service-token": input.serviceToken },
           body: form,
           signal: controller.signal,
         });
-      } catch {
+        if (!response.ok) {
+          throw new Error("Bearbeitungsdienst hat die Übergabe abgelehnt");
+        }
+        const result = await response.json() as {
+          document_id: number;
+          ad_id: number;
+          review_status: string;
+          deduplicated: boolean;
+        };
+        return {
+          documentId: result.document_id,
+          adId: result.ad_id,
+          reviewStatus: result.review_status,
+          deduplicated: result.deduplicated,
+        };
+      } catch (error) {
         if (timedOut) {
           throw new Error("Bearbeitungsdienst hat nicht rechtzeitig geantwortet");
+        }
+        if (
+          error instanceof Error &&
+          error.message === "Bearbeitungsdienst hat die Übergabe abgelehnt"
+        ) {
+          throw error;
         }
         throw new Error("Bearbeitungsdienst ist nicht erreichbar");
       } finally {
         clearTimeout(timeout);
         signal?.removeEventListener("abort", onAbort);
       }
-      if (!response.ok) {
-        throw new Error("Bearbeitungsdienst hat die Übergabe abgelehnt");
-      }
-      const result = await response.json() as {
-        document_id: number;
-        ad_id: number;
-        review_status: string;
-        deduplicated: boolean;
-      };
-      return {
-        documentId: result.document_id,
-        adId: result.ad_id,
-        reviewStatus: result.review_status,
-        deduplicated: result.deduplicated,
-      };
     },
   };
 }
