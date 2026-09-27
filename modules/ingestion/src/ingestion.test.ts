@@ -2078,6 +2078,120 @@ describe("Ingestion-Bestand", () => {
       .rejects.toThrow("PDF-Verarbeitung ist nicht erreichbar");
   });
 
+  it("verarbeitet ein gezieltes Dokument nach abgebrochenem Lauf erneut", async () => {
+    const repository = new MemoryIngestionRepository();
+    const document = await repository.createUploadedDocument("1", {
+      filename: "abgebrochen.pdf",
+      sha256: "v".repeat(64),
+      storageKey: "abgebrochen",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "upload",
+    });
+    const page = {
+      pageNumber: 1,
+      text: "Anzeige",
+      imageKey: "page.png",
+      classification: "MIXED_CONTENT",
+      adProbability: 0.9,
+      occurrences: [{
+        bbox: { x: 0, y: 0, width: 1, height: 1, confidence: 0.9 },
+        imageKey: "ad.png",
+        confidence: 0.9,
+        evidence: ["test"],
+        company: "Muster GmbH",
+        preview: "Muster GmbH Telefon",
+      }],
+    };
+    await repository.replaceProcessedDocument("1", document.document.id, [page]);
+    document.document.state = "processing";
+    const setDocumentState = repository.setDocumentState.bind(repository);
+    const stateChanges: Array<{ documentId: number; state: string }> = [];
+    repository.setDocumentState = async (tenantId, documentId, state, error = null) => {
+      stateChanges.push({ documentId, state });
+      return setDocumentState(tenantId, documentId, state, error);
+    };
+    const calls: number[] = [];
+    const module = createIngestionModule({
+      repository,
+      repositoryForTransaction: () => repository,
+      transaction: async (callback) => callback({}),
+      processDocument: async ({ documentId }) => {
+        calls.push(documentId);
+        return [page];
+      },
+      publish: async () => undefined,
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.processing.run");
+    if (!job) throw new Error("Verarbeitungsjob fehlt");
+
+    await job.handle(
+      { documentId: document.document.id },
+      context("1", { documentId: document.document.id }),
+    );
+
+    expect(calls).toEqual([document.document.id]);
+    expect(stateChanges).not.toContainEqual({ documentId: document.document.id, state: "processing" });
+    expect((await repository.getDocument("1", document.document.id)).state).toBe("processed");
+    expect(await repository.listOccurrences("1")).toHaveLength(1);
+    expect((await repository.listOccurrences("1"))[0]?.company).toBe("Muster GmbH");
+  });
+
+  it("überspringt verarbeitete Dokumente im Sammellauf", async () => {
+    const repository = new MemoryIngestionRepository();
+    const processing = await repository.createUploadedDocument("1", {
+      filename: "laufend.pdf",
+      sha256: "w".repeat(64),
+      storageKey: "laufend",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "upload",
+    });
+    const uploaded = await repository.createUploadedDocument("1", {
+      filename: "neu.pdf",
+      sha256: "x".repeat(64),
+      storageKey: "neu",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "upload",
+    });
+    processing.document.state = "processing";
+    const setDocumentState = repository.setDocumentState.bind(repository);
+    const stateChanges: Array<{ documentId: number; state: string }> = [];
+    repository.setDocumentState = async (tenantId, documentId, state, error = null) => {
+      stateChanges.push({ documentId, state });
+      return setDocumentState(tenantId, documentId, state, error);
+    };
+    const calls: number[] = [];
+    const module = createIngestionModule({
+      repository,
+      repositoryForTransaction: () => repository,
+      transaction: async (callback) => callback({}),
+      processDocument: async ({ documentId }) => {
+        calls.push(documentId);
+        return [{
+          pageNumber: 1,
+          text: "Verarbeitbar",
+          imageKey: "page.png",
+          classification: "EDITORIAL_ONLY",
+          adProbability: 0.1,
+          occurrences: [],
+        }];
+      },
+      publish: async () => undefined,
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.processing.run");
+    if (!job) throw new Error("Verarbeitungsjob fehlt");
+
+    await job.handle({}, context("1", {}));
+
+    expect(calls).toEqual([uploaded.document.id]);
+    expect(stateChanges).toContainEqual({ documentId: uploaded.document.id, state: "processing" });
+    expect(stateChanges).not.toContainEqual({ documentId: processing.document.id, state: "processing" });
+    expect((await repository.getDocument("1", processing.document.id)).state).toBe("processing");
+    expect((await repository.getDocument("1", uploaded.document.id)).state).toBe("processed");
+  });
+
   it("setzt fehlerhafte Dokumente im Sammellauf auf Fehler und verarbeitet weitere Dokumente", async () => {
     const repository = new MemoryIngestionRepository();
     const first = await repository.createUploadedDocument("1", {
