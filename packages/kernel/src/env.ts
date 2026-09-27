@@ -24,6 +24,7 @@ export const envSchema = z.object({
   INGESTION_MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(25 * 1024 * 1024),
   INGESTION_WATCH_FOLDER: z.string().optional(),
   INGESTION_WATCH_INTERVAL_SECONDS: z.coerce.number().int().positive().default(60),
+  WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(1),
   OPENAI_API_KEY: z.string().optional(),
   GEMINI_API_KEY: z.string().optional(),
   XAI_API_KEY: z.string().optional(),
