@@ -30,6 +30,13 @@ export type ArtworkHandoffResult = {
   deduplicated: boolean;
 };
 
+type ArtworkHandoffResponse = {
+  document_id: number;
+  ad_id: number;
+  review_status: string;
+  deduplicated: boolean;
+};
+
 export function createArtworkHandoffClient(input: {
   baseUrl: string;
   serviceToken: string;
@@ -61,38 +68,44 @@ export function createArtworkHandoffClient(input: {
       const onAbort = () => controller.abort();
       signal?.addEventListener("abort", onAbort);
       if (signal?.aborted) onAbort();
-      let response: Response;
       try {
-        response = await fetch(`${input.baseUrl.replace(/\/$/, "")}/imports/print-find`, {
-          method: "POST",
-          headers: { "x-service-token": input.serviceToken },
-          body: form,
-          signal: controller.signal,
-        });
-      } catch {
-        if (timedOut) {
-          throw new Error("Bearbeitungsdienst hat nicht rechtzeitig geantwortet");
+        let response: Response;
+        try {
+          response = await fetch(`${input.baseUrl.replace(/\/$/, "")}/imports/print-find`, {
+            method: "POST",
+            headers: { "x-service-token": input.serviceToken },
+            body: form,
+            signal: controller.signal,
+          });
+        } catch {
+          throw new Error(
+            timedOut
+              ? "Bearbeitungsdienst hat nicht rechtzeitig geantwortet"
+              : "Bearbeitungsdienst ist nicht erreichbar",
+          );
         }
-        throw new Error("Bearbeitungsdienst ist nicht erreichbar");
+        if (!response.ok) {
+          throw new Error("Bearbeitungsdienst hat die Übergabe abgelehnt");
+        }
+        let result: ArtworkHandoffResponse;
+        try {
+          result = await response.json() as ArtworkHandoffResponse;
+        } catch (error) {
+          if (timedOut) {
+            throw new Error("Bearbeitungsdienst hat nicht rechtzeitig geantwortet");
+          }
+          throw error;
+        }
+        return {
+          documentId: result.document_id,
+          adId: result.ad_id,
+          reviewStatus: result.review_status,
+          deduplicated: result.deduplicated,
+        };
       } finally {
         clearTimeout(timeout);
         signal?.removeEventListener("abort", onAbort);
       }
-      if (!response.ok) {
-        throw new Error("Bearbeitungsdienst hat die Übergabe abgelehnt");
-      }
-      const result = await response.json() as {
-        document_id: number;
-        ad_id: number;
-        review_status: string;
-        deduplicated: boolean;
-      };
-      return {
-        documentId: result.document_id,
-        adId: result.ad_id,
-        reviewStatus: result.review_status,
-        deduplicated: result.deduplicated,
-      };
     },
   };
 }
