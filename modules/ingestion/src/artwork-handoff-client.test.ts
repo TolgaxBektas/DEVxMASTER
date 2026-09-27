@@ -142,6 +142,26 @@ describe("Artwork-Übergabeclient", () => {
     }
   });
 
+  it("gibt einen fehlerhaften Antwortkörper unverändert weiter", async () => {
+    const syntaxError = new SyntaxError("Ungültiges JSON");
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: () => {
+        throw syntaxError;
+      },
+    } as unknown as Response));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await expect(createArtworkHandoffClient({
+        baseUrl: "http://artwork",
+        serviceToken: "token",
+      }).submit({ original: new Uint8Array([1]), manifest }))
+        .rejects.toBe(syntaxError);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("reicht ein externes Abbruchsignal an die Übergabe weiter", async () => {
     const controller = new AbortController();
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => (
