@@ -47,6 +47,113 @@ describe("Worker-Leases", () => {
     });
   });
 
+  it("wiederholt einen fehlgeschlagenen Herzschlag ohne unhandled rejection", async () => {
+    vi.useFakeTimers();
+    const repository = new MemoryQueueRepository();
+    const queue = new LeaseQueue(repository, { leaseMs: 600 });
+    const created = await queue.enqueue({ name: "retry-heartbeat", payload: {} });
+    const heartbeat = repository.heartbeat.bind(repository);
+    let rejectNextHeartbeat = true;
+    vi.spyOn(repository, "heartbeat").mockImplementation(async (
+      id,
+      leaseToken,
+      leaseMs,
+      now,
+    ) => {
+      if (rejectNextHeartbeat) {
+        rejectNextHeartbeat = false;
+        throw new Error("temporary heartbeat failure");
+      }
+      return heartbeat(id, leaseToken, leaseMs, now);
+    });
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejections.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandledRejection);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    let start!: () => void;
+    let finish!: () => void;
+    const started = new Promise<void>((resolve) => {
+      start = resolve;
+    });
+    const finished = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    let worker!: Worker;
+    worker = new Worker(queue, new Map([
+      ["retry-heartbeat", {
+        name: "retry-heartbeat",
+        handle: async () => {
+          start();
+          await finished;
+          worker.stop();
+        },
+      }],
+    ]));
+
+    try {
+      const run = worker.run({ workerId: "first", pollMs: 1 });
+      await started;
+      await vi.advanceTimersByTimeAsync(1_000);
+      finish();
+      await run;
+
+      expect(await repository.get(created.id)).toMatchObject({
+        status: "completed",
+        attempts: 1,
+      });
+      expect(repository.heartbeat).toHaveBeenCalledTimes(5);
+      expect(unhandledRejections).toEqual([]);
+      expect(consoleError).toHaveBeenCalledWith(
+        `[worker] Herzschlag für Job retry-heartbeat (${created.id}) fehlgeschlagen; nächster Versuch im nächsten Intervall`,
+        expect.any(Error),
+      );
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+      consoleError.mockRestore();
+    }
+  });
+
+  it("hält eine kurze Lease während der Verarbeitung exklusiv", async () => {
+    vi.useFakeTimers();
+    const repository = new MemoryQueueRepository();
+    const queue = new LeaseQueue(repository, { leaseMs: 300 });
+    const created = await queue.enqueue({ name: "short-lease", payload: {} });
+    let start!: () => void;
+    let finish!: () => void;
+    const started = new Promise<void>((resolve) => {
+      start = resolve;
+    });
+    const finished = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    let worker!: Worker;
+    worker = new Worker(queue, new Map([
+      ["short-lease", {
+        name: "short-lease",
+        handle: async () => {
+          start();
+          await finished;
+          worker.stop();
+        },
+      }],
+    ]));
+
+    const run = worker.run({ workerId: "first", pollMs: 1 });
+    await started;
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(await queue.claimNext("second")).toBeNull();
+    finish();
+    await run;
+
+    expect(await repository.get(created.id)).toMatchObject({
+      status: "completed",
+      attempts: 1,
+    });
+  });
+
   it("bricht bei verlorenem Lease ab und schreibt den Jobstatus nicht", async () => {
     vi.useFakeTimers();
     const repository = new MemoryQueueRepository();

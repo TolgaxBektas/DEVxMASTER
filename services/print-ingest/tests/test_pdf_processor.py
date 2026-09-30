@@ -3,8 +3,11 @@ from types import SimpleNamespace
 
 import fitz
 from PIL import Image
+
+from app.services import processor
 from app.services.processor import (
     _add_candidate_without_nested_duplicates,
+    _image_placement_upper_bound,
     _layout_for_page,
     extract_contacts,
     extract_pdf_metadata,
@@ -104,11 +107,22 @@ def test_sanitize_extracted_text_removes_surrogates_and_nuls():
 
 
 class LayoutPageStub:
-    def __init__(self, xobjects, text_blocks=()):
+    def __init__(
+        self,
+        xobjects,
+        text_blocks=(),
+        content_stream=b"",
+        xobject_invokers=(),
+        form_streams=None,
+    ):
         self.number = 14
         self.rect = SimpleNamespace(width=1000, height=1000)
         self.xobjects = dict(xobjects)
         self.text_blocks = list(text_blocks)
+        self.content_stream = content_stream
+        self.xobject_invokers = list(xobject_invokers)
+        self.form_streams = form_streams or {}
+        self.parent = SimpleNamespace(xref_stream=lambda xref: self.form_streams[xref])
         self.image_rect_calls = []
         self.get_images_calls = 0
 
@@ -118,6 +132,12 @@ class LayoutPageStub:
 
     def get_drawings(self):
         return []
+
+    def read_contents(self):
+        return self.content_stream
+
+    def get_xobjects(self):
+        return self.xobject_invokers
 
     def get_images(self, full=False):
         assert full is True
@@ -131,6 +151,13 @@ class LayoutPageStub:
 
 def image_rect(x0, y0, x1, y1):
     return SimpleNamespace(x0=x0, y0=y0, x1=x1, y1=y1)
+
+
+def inline_image_blocks(count):
+    return [
+        {"type": 1, "bbox": (index, 0, index + 1, 1)}
+        for index in range(count)
+    ]
 
 
 def test_layout_skips_image_placements_for_too_many_xobjects():
@@ -157,6 +184,108 @@ def test_layout_caps_image_placements():
     assert len(result["images"]) == 2000
     assert result["image_placements_truncated"] is True
     assert page.get_images_calls == 1
+
+
+def test_layout_keeps_exactly_two_thousand_inline_images_without_truncation():
+    page = LayoutPageStub([], inline_image_blocks(2000))
+
+    result = _layout_for_page(page)
+
+    assert len(result["images"]) == 2000
+    assert result["image_placements_truncated"] is False
+    assert page.image_rect_calls == []
+
+
+def test_layout_only_truncates_when_a_new_placement_would_be_lost():
+    blocks = inline_image_blocks(2000)
+    duplicate = image_rect(0, 0, 1, 1)
+    duplicates_only = LayoutPageStub([(1, [duplicate, duplicate])], blocks)
+
+    duplicate_result = _layout_for_page(duplicates_only)
+
+    assert len(duplicate_result["images"]) == 2000
+    assert duplicate_result["image_placements_truncated"] is False
+
+    new_placement = image_rect(3000, 0, 3001, 1)
+    new_after_limit = LayoutPageStub([(1, [duplicate, new_placement])], blocks)
+
+    new_result = _layout_for_page(new_after_limit)
+
+    assert len(new_result["images"]) == 2000
+    assert new_result["image_placements_truncated"] is True
+
+
+def test_layout_skips_image_rects_when_do_limit_is_exceeded(monkeypatch):
+    page = LayoutPageStub([(1, [image_rect(1, 2, 3, 4)])])
+    monkeypatch.setattr(
+        processor,
+        "_image_placement_upper_bound",
+        lambda _page, cap: cap + 1,
+    )
+
+    result = _layout_for_page(page)
+
+    assert result["image_placements_truncated"] is True
+    assert page.image_rect_calls == []
+
+
+def test_layout_limits_repeated_image_xobject_placements(monkeypatch):
+    document = fitz.open()
+    page = document.new_page()
+    image = io.BytesIO()
+    Image.new("RGB", (8, 8), "red").save(image, format="PNG")
+    rects = [
+        fitz.Rect(10, 10, 40, 40),
+        fitz.Rect(50, 10, 80, 40),
+        fitz.Rect(90, 10, 120, 40),
+    ]
+    xref = page.insert_image(rects[0], stream=image.getvalue())
+    for rect in rects[1:]:
+        page.insert_image(rect, xref=xref)
+
+    assert len(page.get_image_rects(xref)) == 3
+    monkeypatch.setattr(processor, "_IMAGE_DO_LIMIT", 2)
+
+    limited_result = _layout_for_page(page)
+
+    assert limited_result["image_placements_truncated"] is True
+
+    monkeypatch.setattr(processor, "_IMAGE_DO_LIMIT", 20_000)
+
+    full_result = _layout_for_page(page)
+
+    assert full_result["image_placements_truncated"] is False
+    assert len(full_result["images"]) == 3
+
+
+def test_image_placement_upper_bound_counts_nested_form_placements():
+    image = io.BytesIO()
+    Image.new("RGB", (8, 8), "blue").save(image, format="PNG")
+    source = fitz.open()
+    source_page = source.new_page()
+    xref = source_page.insert_image(
+        fitz.Rect(10, 10, 40, 40),
+        stream=image.getvalue(),
+    )
+    source_page.insert_image(fitz.Rect(50, 10, 80, 40), xref=xref)
+    middle = fitz.open()
+    middle_page = middle.new_page()
+    middle_page.show_pdf_page(middle_page.rect, source, 0)
+    outer = fitz.open()
+    outer_page = outer.new_page()
+    outer_page.show_pdf_page(outer_page.rect, middle, 0)
+
+    image_xrefs = {
+        image_xobject[0]
+        for image_xobject in outer_page.get_images(full=True)
+    }
+    actual_placements = sum(
+        len(outer_page.get_image_rects(image_xref))
+        for image_xref in image_xrefs
+    )
+
+    assert actual_placements == 2
+    assert _image_placement_upper_bound(outer_page, 20_000) >= actual_placements
 
 
 def test_layout_preserves_normal_image_order_and_deduplicates_text_images():
