@@ -12,8 +12,11 @@ from app.services.processor import (
     extract_contacts,
     extract_pdf_metadata,
     classify_ad_candidate,
+    MARGIN_TARGET_PT,
+    crop_margin,
     heuristic_ad_regions,
     render_ad_crop,
+    render_ad_crop_with_margin,
     render_and_extract,
     sanitize_extracted_text,
 )
@@ -960,3 +963,124 @@ def test_render_ad_crop_rerenders_pdf_region_at_high_resolution():
         assert crop_image.width > full_image.width * 0.4
         assert crop_image.height > full_image.height * 0.4
         assert crop_image.width < full_image.width * 3
+
+
+def _points_from_mm(value):
+    return value / 25.4 * 72
+
+
+def test_crop_margin_uses_target_margin_when_isolated():
+    result = crop_margin(
+        (100, 100, 200, 200),
+        (0, 0, 400, 400),
+        [],
+    )
+
+    assert result["margin_mm"] == {
+        "left": 5.0,
+        "top": 5.0,
+        "right": 5.0,
+        "bottom": 5.0,
+    }
+    assert result["shortfall"] == []
+
+
+def test_crop_margin_stops_before_neighbor_with_safety_gap():
+    neighbor_gap = _points_from_mm(3)
+    result = crop_margin(
+        (100, 100, 200, 200),
+        (0, 0, 400, 400),
+        [(200 + neighbor_gap, 120, 250, 180)],
+    )
+
+    assert result["margin_mm"]["right"] == 2.8
+    assert result["shortfall"] == []
+
+
+def test_crop_margin_reports_shortfall_below_minimum_neighbor_gap():
+    neighbor_gap = _points_from_mm(2)
+    result = crop_margin(
+        (100, 100, 200, 200),
+        (0, 0, 400, 400),
+        [(200 + neighbor_gap, 120, 250, 180)],
+    )
+
+    assert result["margin_mm"]["right"] == 1.8
+    assert result["shortfall"] == ["right"]
+
+
+def test_crop_margin_reports_page_edge_shortfall():
+    result = crop_margin(
+        (100, 100, 200, 200),
+        (0, 0, 400, 200 + _points_from_mm(1)),
+        [],
+    )
+
+    assert result["margin_mm"]["bottom"] == 1.0
+    assert result["shortfall"] == ["bottom"]
+
+
+def test_crop_margin_corner_obstacle_limits_adjacent_sides():
+    result = crop_margin(
+        (100, 100, 200, 200),
+        (0, 0, 400, 400),
+        [(204, 85, 210, 99)],
+    )
+
+    assert result["margin_mm"]["right"] < 5.0
+    assert result["margin_mm"]["top"] < 5.0
+    assert result["shortfall"] == ["top", "right"]
+
+
+def test_crop_margin_ignores_obstacles_intersecting_ad():
+    result = crop_margin(
+        (100, 100, 200, 200),
+        (0, 0, 400, 400),
+        [(195, 130, 205, 170)],
+    )
+
+    assert set(result["margin_mm"].values()) == {5.0}
+    assert result["shortfall"] == []
+
+
+def test_crop_margin_ignores_obstacles_outside_extended_span():
+    result = crop_margin(
+        (100, 100, 200, 200),
+        (0, 0, 400, 400),
+        [(216, 216, 220, 220)],
+    )
+
+    assert set(result["margin_mm"].values()) == {5.0}
+    assert result["shortfall"] == []
+
+
+def test_render_ad_crop_with_margin_includes_safe_padding_without_neighbor_pixels():
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.draw_rect(fitz.Rect(100, 75, 200, 150), fill=(0, 0, 1), color=None)
+    page.draw_rect(fitz.Rect(205, 75, 245, 150), fill=(1, 0, 0), color=None)
+    pdf = document.tobytes()
+    region = {"x": 0.25, "y": 0.25, "width": 0.25, "height": 0.25}
+    neighbor = {"x": 0.5125, "y": 0.25, "width": 0.1, "height": 0.25}
+
+    crop, info = render_ad_crop_with_margin(
+        pdf,
+        1,
+        region,
+        {"blocks": [], "images": []},
+        [region, neighbor],
+        dpi=300,
+    )
+
+    expected_width_pt = 100 + MARGIN_TARGET_PT + (5 - 0.5)
+    expected_height_pt = 75 + 2 * MARGIN_TARGET_PT
+    with Image.open(io.BytesIO(crop)).convert("RGB") as crop_image:
+        assert abs(crop_image.width - expected_width_pt * 300 / 72) <= 2
+        assert abs(crop_image.height - expected_height_pt * 300 / 72) <= 2
+        assert not any(
+            red > 200 and green < 50 and blue < 50
+            for red, green, blue in crop_image.getdata()
+        )
+    assert info["margin_mm"]["right"] == 1.6
+    assert set(info) == {"crop_bbox", "margin_mm", "shortfall"}
+    assert info["shortfall"] == ["right"]

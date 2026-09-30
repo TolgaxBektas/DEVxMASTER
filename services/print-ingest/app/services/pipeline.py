@@ -1,7 +1,11 @@
 from sqlalchemy.orm import Session
 from app.models.entities import Document, Page, AdOccurrence
 from app.services.storage import storage
-from app.services.processor import heuristic_ad_regions, render_ad_crop, render_and_extract
+from app.services.processor import (
+    heuristic_ad_regions,
+    render_ad_crop_with_margin,
+    render_and_extract,
+)
 
 def process_document(db: Session, document: Document):
     document.state='PROCESSING'; db.commit()
@@ -14,9 +18,17 @@ def process_document(db: Session, document: Document):
             storage.put_bytes(img_key,p['image_bytes'],'image/png')
             page=Page(document_id=document.id,page_number=p['page_number'],image_key=img_key,text=p['text'],classification=p['classification'],ad_probability=p['ad_probability'])
             db.add(page); db.flush()
-            for index, reg in enumerate(heuristic_ad_regions(p['image_bytes'], p['text'], p.get('layout')), start=1):
+            regions = heuristic_ad_regions(p['image_bytes'], p['text'], p.get('layout'))
+            for index, reg in enumerate(regions, start=1):
                 ad_key=f'ads/{document.sha256}/page-{p["page_number"]:04d}-{index:02d}.png'
-                storage.put_bytes(ad_key, render_ad_crop(pdf, p["page_number"], reg), 'image/png')
+                crop_bytes, crop_info = render_ad_crop_with_margin(
+                    pdf,
+                    p["page_number"],
+                    reg,
+                    p.get("layout"),
+                    regions,
+                )
+                storage.put_bytes(ad_key, crop_bytes, 'image/png')
                 db.add(AdOccurrence(
                     page_id=page.id,
                     bbox={
@@ -29,6 +41,7 @@ def process_document(db: Session, document: Document):
                     extracted_json={
                         "evidence": reg.get("evidence", []),
                         "preview": reg.get("preview", ""),
+                        "crop": crop_info,
                     },
                 ))
         document.state='REVIEW_REQUIRED'; document.error=None; db.commit()
