@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { retryDelay, type BackoffOptions } from "./backoff.js";
 import type {
+  ActiveJobQuery,
   ClaimedJob,
   JobHandler,
   JobRecord,
@@ -36,7 +37,7 @@ export class LeaseQueue {
     tenantId?: string | null;
     maxAttempts?: number;
     availableAt?: Date;
-  }): Promise<JobRecord> {
+  }, executor?: unknown): Promise<JobRecord> {
     const now = this.now();
     const job: JobRecord = {
       id: randomUUID(),
@@ -53,7 +54,7 @@ export class LeaseQueue {
       createdAt: now,
       updatedAt: now,
     };
-    await this.repository.insert(job);
+    await this.repository.insert(job, executor);
     return job;
   }
 
@@ -68,6 +69,14 @@ export class LeaseQueue {
       this.leaseMs,
       this.now(),
     );
+  }
+
+  lockLease(job: ClaimedJob, executor?: unknown): Promise<boolean> {
+    return this.repository.lockLease(job.id, job.leaseToken, executor);
+  }
+
+  hasActiveJob(input: ActiveJobQuery): Promise<boolean> {
+    return this.repository.hasActive(input);
   }
 
   async complete(job: ClaimedJob): Promise<boolean> {
@@ -110,5 +119,10 @@ export function createJobHandlerContext(
   job: ClaimedJob,
   signal: AbortSignal,
 ) {
-  return { job, signal, heartbeat: () => queue.heartbeat(job) };
+  return {
+    job,
+    signal,
+    heartbeat: () => queue.heartbeat(job),
+    lockLease: (executor?: unknown) => queue.lockLease(job, executor),
+  };
 }

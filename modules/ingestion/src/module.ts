@@ -38,6 +38,13 @@ import { areaWebsiteSeeds, isRegisteredMunicipalUrl } from "./website-registry.j
 
 export const MIN_DOCUMENT_ADVERTISEMENTS = 3;
 
+export class ProcessingLeaseLostError extends Error {
+  constructor(documentId: number) {
+    super(`Lease für Dokument ${documentId} verloren; Ergebnis nicht geschrieben`);
+    this.name = "ProcessingLeaseLostError";
+  }
+}
+
 function sameSourceHost(firstUrl: string, secondUrl: string): boolean {
   try {
     const normalize = (value: string) => new URL(value).hostname.toLocaleLowerCase("de-DE").replace(/^www\./, "");
@@ -83,6 +90,7 @@ export type OccurrenceContacts = {
 type JobContext = {
   job: { tenantId: string | null };
   signal: AbortSignal;
+  lockLease?: (executor?: unknown) => Promise<boolean>;
 };
 
 export function advertisementEventIdempotencyKey(
@@ -264,7 +272,19 @@ export function createIngestionModule(deps: {
   maxUploadBytes?: number;
   transaction?: <T>(callback: (db: unknown) => Promise<T>) => Promise<T>;
   repositoryForTransaction?: (db: unknown) => IngestionRepository;
-  enqueue?: (input: { name: string; tenantId?: string | null; payload: unknown }) => Promise<unknown>;
+  enqueue?: (
+    input: {
+      name: string;
+      tenantId?: string | null;
+      payload: unknown;
+      maxAttempts?: number;
+    },
+    executor?: unknown,
+  ) => Promise<unknown>;
+  hasActiveDocumentJob?: (input: {
+    tenantId: string;
+    documentId: number;
+  }) => Promise<boolean>;
   publish(input: {
     name: string;
     tenantId: string;
@@ -861,16 +881,39 @@ export function createIngestionModule(deps: {
         name: "ingestion.processing.run",
         schedule: "daily",
         handle: async (payload, context) => {
-          const tenantId = jobTenantId(context);
+          const jobContext = context as JobContext;
+          const tenantId = jobTenantId(jobContext);
           const documentId = (payload as { documentId?: unknown }).documentId;
           const isTargeted = typeof documentId === "number";
-          const documents = typeof documentId === "number"
-            ? [await repository.getDocument(tenantId, documentId)]
-            : await repository.listDocuments(tenantId);
+          if (!isTargeted) {
+            if (!deps.enqueue || !deps.hasActiveDocumentJob) {
+              throw new Error("Sammellauf ohne Queue-Anbindung nicht möglich");
+            }
+            const pendingDocuments = await repository.listDocuments(tenantId);
+            for (const document of pendingDocuments) {
+              if (!["uploaded", "failed", "processing"].includes(document.state)) {
+                continue;
+              }
+              if (await deps.hasActiveDocumentJob({
+                tenantId,
+                documentId: document.id,
+              })) {
+                continue;
+              }
+              await deps.enqueue({
+                name: "ingestion.processing.run",
+                tenantId,
+                payload: { documentId: document.id },
+                maxAttempts: 1,
+              });
+            }
+            return;
+          }
+          const documents = [await repository.getDocument(tenantId, documentId)];
           for (const document of documents.filter((item) =>
             item.state === "uploaded"
             || item.state === "failed"
-            || (isTargeted && item.state === "processing"),
+            || item.state === "processing",
           )) {
             if (!deps.processDocument || !deps.transaction) {
               await repository.setDocumentState(tenantId, document.id, "failed", "Verarbeitung ist nicht konfiguriert");
@@ -895,6 +938,9 @@ export function createIngestionModule(deps: {
                 ? `Dokumenttor abgewiesen: ${advertisementCount} Anzeigen auf ${pages.length} Seiten; erforderlich sind mindestens ${MIN_DOCUMENT_ADVERTISEMENTS} Anzeigen.`
                 : null;
               await deps.transaction(async (db) => {
+                if (jobContext.lockLease && !(await jobContext.lockLease(db))) {
+                  throw new ProcessingLeaseLostError(document.id);
+                }
                 const txRepository = deps.repositoryForTransaction?.(db)
                   ?? createDrizzleIngestionRepository(db);
               const previousOccurrences = (await txRepository.listOccurrences(tenantId))
@@ -972,7 +1018,7 @@ export function createIngestionModule(deps: {
                     name: "ingestion.handoff.artwork",
                     tenantId,
                     payload: { occurrenceId: occurrence.id },
-                  });
+                  }, db);
                 }
               }
               if (deps.audit) {
@@ -988,6 +1034,7 @@ export function createIngestionModule(deps: {
               }
               });
             } catch (error) {
+              if (error instanceof ProcessingLeaseLostError) throw error;
               const message = error instanceof Error ? error.message : "Verarbeitung fehlgeschlagen";
               await repository.setDocumentState(tenantId, document.id, "failed", message);
               if (typeof documentId === "number") {

@@ -1,13 +1,61 @@
-import { and, asc, eq, lte, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { jobs } from "@xmaster-center/kernel";
-import type { ClaimedJob, JobRecord, QueueRepository } from "./types.js";
+import type {
+  ActiveJobQuery,
+  ClaimedJob,
+  JobRecord,
+  QueueRepository,
+} from "./types.js";
 
 type DbLike = any;
 
 export class DrizzleQueueRepository implements QueueRepository {
   constructor(private readonly db: DbLike) {}
-  async insert(job: JobRecord) {
-    await this.db.insert(jobs).values(job);
+  async insert(job: JobRecord, executor?: unknown) {
+    await (executor ?? this.db).insert(jobs).values(job);
+  }
+  async lockLease(id: string, leaseToken: string, executor?: unknown) {
+    const row = (
+      await (executor ?? this.db)
+        .select({ id: jobs.id })
+        .from(jobs)
+        .where(
+          and(
+            eq(jobs.id, id),
+            eq(jobs.leaseToken, leaseToken),
+            eq(jobs.status, "processing"),
+          ),
+        )
+        .for("update")
+        .limit(1)
+    )[0];
+    return row !== undefined;
+  }
+  async hasActive(input: ActiveJobQuery) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(input.payloadKey)) {
+      throw new Error("Invalid job payload key");
+    }
+    if (input.tenantId !== null && !/^\d+$/.test(input.tenantId)) {
+      throw new Error("Ungültige Mandanten-ID für Jobabfrage");
+    }
+    const tenantCondition = input.tenantId === null
+      ? isNull(jobs.tenantId)
+      : eq(jobs.tenantId, Number(input.tenantId));
+    const row = (
+      await this.db
+        .select({ id: jobs.id })
+        .from(jobs)
+        .where(
+          and(
+            eq(jobs.name, input.name),
+            tenantCondition,
+            inArray(jobs.status, ["pending", "processing"]),
+            sql`JSON_EXTRACT(${jobs.payload}, ${`$.${input.payloadKey}`}) = ${input.payloadValue}`,
+          ),
+        )
+        .limit(1)
+    )[0];
+    return row !== undefined;
   }
   async claim(
     now: Date,

@@ -57,6 +57,105 @@ describe("Lease-Queue", () => {
     expect(requeued?.lastError).toBeNull();
   });
 
+  it("prüft die Lease unter Sperre und lehnt einen verdrängten Token ab", async () => {
+    let now = new Date("2026-01-01T00:00:00Z");
+    const repository = new MemoryQueueRepository();
+    const queue = new LeaseQueue(repository, {
+      leaseMs: 10,
+      now: () => now,
+    });
+    const created = await queue.enqueue({ name: "lease-lock", payload: {} });
+    const firstClaim = await queue.claimNext("first");
+
+    expect(firstClaim).not.toBeNull();
+    expect(await queue.lockLease(firstClaim!)).toBe(true);
+
+    now = new Date(now.getTime() + 11);
+    const secondClaim = await queue.claimNext("second");
+
+    expect(secondClaim?.id).toBe(created.id);
+    expect(await queue.lockLease(firstClaim!)).toBe(false);
+    expect(await queue.lockLease(secondClaim!)).toBe(true);
+  });
+
+  it("findet nur aktive Jobs mit passendem Namen, Mandanten und JSON-Feld", async () => {
+    const repository = new MemoryQueueRepository();
+    const queue = new LeaseQueue(repository);
+    await queue.enqueue({
+      name: "processing.run",
+      tenantId: "1",
+      payload: { documentId: 42 },
+    });
+    const processing = await queue.enqueue({
+      name: "processing.run",
+      tenantId: "1",
+      payload: { documentId: 43 },
+    });
+    repository.jobs.set(processing.id, {
+      ...processing,
+      status: "processing",
+      leaseToken: "lease",
+      leaseExpiresAt: new Date(Date.now() + 10_000),
+    });
+    const completed = await queue.enqueue({
+      name: "processing.run",
+      tenantId: "1",
+      payload: { documentId: 44 },
+    });
+    repository.jobs.set(completed.id, { ...completed, status: "completed" });
+    const dead = await queue.enqueue({
+      name: "processing.run",
+      tenantId: "1",
+      payload: { documentId: 45 },
+    });
+    repository.jobs.set(dead.id, { ...dead, status: "dead" });
+    await queue.enqueue({
+      name: "processing.run",
+      tenantId: null,
+      payload: { documentId: 46 },
+    });
+
+    const query = {
+      name: "processing.run",
+      tenantId: "1",
+      payloadKey: "documentId",
+    };
+    expect(await queue.hasActiveJob({ ...query, payloadValue: 42 })).toBe(true);
+    expect(await queue.hasActiveJob({ ...query, payloadValue: 43 })).toBe(true);
+    expect(await queue.hasActiveJob({ ...query, payloadValue: 44 })).toBe(false);
+    expect(await queue.hasActiveJob({ ...query, payloadValue: 45 })).toBe(false);
+    expect(await queue.hasActiveJob({ ...query, payloadValue: 47 })).toBe(false);
+    expect(
+      await queue.hasActiveJob({ ...query, tenantId: "2", payloadValue: 42 }),
+    ).toBe(false);
+    expect(
+      await queue.hasActiveJob({ ...query, tenantId: null, payloadValue: 46 }),
+    ).toBe(true);
+    await expect(
+      queue.hasActiveJob({ ...query, payloadKey: "document-id", payloadValue: 42 }),
+    ).rejects.toThrow("Invalid job payload key");
+    await expect(
+      queue.hasActiveJob({ ...query, tenantId: "tenant-1", payloadValue: 42 }),
+    ).rejects.toThrow("Ungültige Mandanten-ID für Jobabfrage");
+  });
+
+  it("reicht den Transaktions-Executor beim Einreihen weiter", async () => {
+    const repository = new MemoryQueueRepository();
+    const insert = vi.spyOn(repository, "insert");
+    const queue = new LeaseQueue(repository);
+    const executor = { transaction: true };
+
+    await queue.enqueue(
+      { name: "transactional", payload: {} },
+      executor,
+    );
+
+    expect(insert).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "transactional" }),
+      executor,
+    );
+  });
+
   it("ruft bei einem endgültigen Fehler den Handler für die sichtbare Nachbearbeitung auf", async () => {
     const repository = new MemoryQueueRepository();
     const queue = new LeaseQueue(repository);
