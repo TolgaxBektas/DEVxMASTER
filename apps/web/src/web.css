@@ -73,9 +73,27 @@
 }
 .review-layout {
   display: grid;
-  grid-template-columns: minmax(220px, 0.8fr) minmax(0, 2fr);
+  min-width: 0;
+  max-width: 100%;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 2fr);
   gap: 22px;
   align-items: start;
+}
+.review-layout > * {
+  min-width: 0;
+  max-width: 100%;
+}
+.review-layout .list-row {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+.review-layout .list-row > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .review-source-tabs {
   display: flex;

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Button,
   Card,
@@ -176,17 +176,21 @@ export function reviewAreaOptions(
 ) {
   return [
     { value: "", label: `Alle Gebiete (${total})`, disabled: false },
-    ...areas.map((area) => area.area_ags === null
-      ? {
-        value: "__without_area__",
-        label: `ohne Gebiet · ${area.count}`,
-        disabled: true,
+    ...areas.map((area) => {
+      if (area.area_ags === null) {
+        return {
+          value: "__without_area__",
+          label: `ohne Gebiet · ${area.count}`,
+          disabled: true,
+        };
       }
-      : {
-        value: area.area_ags,
+      const validAgs = /^\d{5}$/.test(area.area_ags);
+      return {
+        value: validAgs ? area.area_ags : `__invalid__:${area.area_ags}`,
         label: `${area.area_name ?? "Gebiet"} (${area.area_ags}) · ${area.count}`,
-        disabled: false,
-      }),
+        disabled: !validAgs,
+      };
+    }),
   ];
 }
 
@@ -200,6 +204,18 @@ export function ignoresReviewKeyboardShortcut(tagName: string) {
   return ["INPUT", "TEXTAREA", "SELECT"].includes(tagName.toUpperCase());
 }
 
+export function shortcutsBlocked({
+  loading,
+  selectedMatches,
+  msSinceNavigation,
+}: {
+  loading: boolean;
+  selectedMatches: boolean;
+  msSinceNavigation: number;
+}): boolean {
+  return loading || !selectedMatches || msSinceNavigation < 500;
+}
+
 export function resolveSelectedReviewId(
   items: readonly Pick<Review, "id">[],
   preferredId: number | null,
@@ -208,6 +224,33 @@ export function resolveSelectedReviewId(
     return preferredId;
   }
   return items[0]?.id ?? null;
+}
+
+export function shouldResetDraft(previousId: number | null, nextId: number | null): boolean {
+  return previousId !== nextId;
+}
+
+export function reviewStatePage({
+  pageHeader,
+  sourceTabs,
+  reviewControls,
+  content,
+  showReviewControls,
+}: {
+  pageHeader: ReactNode;
+  sourceTabs: ReactNode;
+  reviewControls: ReactNode;
+  content: ReactNode;
+  showReviewControls: boolean;
+}): ReactNode {
+  return (
+    <div className="stack">
+      {pageHeader}
+      {sourceTabs}
+      {showReviewControls && reviewControls}
+      {content}
+    </div>
+  );
 }
 
 export function reviewListCaption(
@@ -414,6 +457,8 @@ export function ReviewPage({ api }: ModulePageProps) {
     queue.data?.items ?? [],
     activeTab.selectedId,
   );
+  const previousSelectedId = useRef(selectedId);
+  const lastNavigationAt = useRef(0);
   const [note, setNote] = useState("");
   const [decisionError, setDecisionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -423,15 +468,19 @@ export function ReviewPage({ api }: ModulePageProps) {
     selectedId ? { id: selectedId } : undefined,
     selectedId !== null,
   );
+  const selectedMatches = selected.data?.id === selectedId;
   const selectedIndex = useMemo(
     () => queue.data?.items.findIndex((item) => item.id === selectedId) ?? -1,
     [queue.data?.items, selectedId],
   );
 
   useEffect(() => {
+    const previousId = previousSelectedId.current;
+    previousSelectedId.current = selectedId;
+    if (!shouldResetDraft(previousId, selectedId)) return;
     setNote("");
     setDecisionError(null);
-  }, [activeSource]);
+  }, [selectedId]);
 
   useEffect(() => {
     if (
@@ -439,12 +488,14 @@ export function ReviewPage({ api }: ModulePageProps) {
       && summary.data
       && !summary.data.areas.some((area) => area.area_ags === areaAgs)
     ) {
+      lastNavigationAt.current = Date.now();
       setSourceState((current) => updateReviewArea(current, activeSource, ""));
     }
   }, [activeSource, areaAgs, summary.data]);
 
   useEffect(() => {
     if (page > 0 && page * REVIEW_PAGE_SIZE >= total) {
+      lastNavigationAt.current = Date.now();
       setSourceState((current) =>
         updateReviewPage(
           current,
@@ -496,13 +547,20 @@ export function ReviewPage({ api }: ModulePageProps) {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.target instanceof Element && ignoresReviewKeyboardShortcut(event.target.tagName)) return;
       if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (
+        shortcutsBlocked({
+          loading: queue.isFetching,
+          selectedMatches,
+          msSinceNavigation: Date.now() - lastNavigationAt.current,
+        })
+      ) return;
       if (event.key.toLowerCase() === "a") void decide("approve");
       if (event.key.toLowerCase() === "r") void decide("reject");
       if (event.key.toLowerCase() === "n") next();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [decide, next]);
+  }, [decide, next, queue.isFetching, selectedMatches]);
 
   const pageHeader = (
     <div className="page-heading">
@@ -541,11 +599,12 @@ export function ReviewPage({ api }: ModulePageProps) {
         className="ui-input"
         id="review-area"
         value={areaAgs}
-        onChange={(event) =>
+        onChange={(event) => {
+          lastNavigationAt.current = Date.now();
           setSourceState((current) =>
             updateReviewArea(current, activeSource, event.target.value),
-          )
-        }
+          );
+        }}
       >
         {areaOptions.map((option) => (
           <option key={option.value} value={option.value} disabled={option.disabled}>
@@ -555,31 +614,33 @@ export function ReviewPage({ api }: ModulePageProps) {
       </select>
       <Button
         disabled={page === 0}
-        onClick={() =>
+        onClick={() => {
+          lastNavigationAt.current = Date.now();
           setSourceState((current) => updateReviewPage(current, activeSource, Math.max(0, page - 1)))
-        }
+        }}
       >
         Vorherige
       </Button>
       <span className="form-message">{reviewPageRange(page, total)}</span>
       <Button
         disabled={(page + 1) * REVIEW_PAGE_SIZE >= total}
-        onClick={() =>
+        onClick={() => {
+          lastNavigationAt.current = Date.now();
           setSourceState((current) => updateReviewPage(current, activeSource, page + 1))
-        }
+        }}
       >
         Nächste
       </Button>
     </div>
   );
-  const statePage = (content: ReactNode, showReviewControls = false) => (
-    <div className="stack">
-      {pageHeader}
-      {sourceTabs}
-      {showReviewControls && reviewControls}
-      {content}
-    </div>
-  );
+  const statePage = (content: ReactNode, showReviewControls = Boolean(summary.data)) =>
+    reviewStatePage({
+      pageHeader,
+      sourceTabs,
+      reviewControls,
+      content,
+      showReviewControls,
+    });
 
   if (queue.isLoading || summary.isLoading) return statePage(<Skeleton />);
   if (queue.error || summary.error) {
