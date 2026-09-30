@@ -50,13 +50,20 @@ export class Worker {
         if (leaseLost || heartbeatRunning) return;
         heartbeatRunning = true;
         try {
-          const held = await this.queue.heartbeat(job);
-          if (!held) {
-            leaseLost = true;
-            controller.abort();
-            clearInterval(heartbeatInterval);
+          try {
+            const held = await this.queue.heartbeat(job);
+            if (!held) {
+              leaseLost = true;
+              controller.abort();
+              clearInterval(heartbeatInterval);
+              console.error(
+                `[worker] Lease für Job ${job.name} (${job.id}) verloren; Handler abgebrochen`,
+              );
+            }
+          } catch (error) {
             console.error(
-              `[worker] Lease für Job ${job.name} (${job.id}) verloren; Handler abgebrochen`,
+              `[worker] Herzschlag für Job ${job.name} (${job.id}) fehlgeschlagen; nächster Versuch im nächsten Intervall`,
+              error,
             );
           }
         } finally {
@@ -65,7 +72,7 @@ export class Worker {
       };
       heartbeatInterval = setInterval(
         () => void heartbeat(),
-        Math.max(1_000, Math.floor(this.queue.leaseMs / 3)),
+        Math.max(1, Math.floor(this.queue.leaseMs / 3)),
       );
       try {
         await handler.handle(

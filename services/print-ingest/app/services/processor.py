@@ -72,6 +72,7 @@ MAX_OCR_REGIONS_PER_PAGE = 12
 _CLUSTER_MAX_GAP = 8
 _IMAGE_XOBJECT_LIMIT = 400
 _IMAGE_PLACEMENT_LIMIT = 2000
+_IMAGE_DO_LIMIT = 20_000
 
 logger = logging.getLogger(__name__)
 
@@ -198,6 +199,60 @@ def sanitize_extracted_text(text: str) -> str:
     )
 
 
+def _image_placement_upper_bound(page, cap):
+    doc = page.parent
+    children_by_invoker = {}
+    for xref, _, invoker, _ in page.get_xobjects():
+        children_by_invoker.setdefault(invoker, []).append(xref)
+
+    def count_do_operators(stream):
+        count = 0
+        for _ in re.finditer(rb"\bDo\b", stream or b""):
+            count += 1
+            if count > cap:
+                return cap + 1
+        return count
+
+    visiting = set()
+    calculated = {}
+
+    def bound_for_xobject(xref):
+        if xref in visiting:
+            return cap + 1
+        if xref in calculated:
+            return calculated[xref]
+
+        visiting.add(xref)
+        do_count = count_do_operators(doc.xref_stream(xref))
+        if do_count == 0:
+            bound = 0
+        elif do_count > cap:
+            bound = cap + 1
+        else:
+            max_child = 1
+            for child in children_by_invoker.get(xref, []):
+                max_child = max(max_child, bound_for_xobject(child))
+                if do_count * max_child > cap:
+                    break
+            bound = min(cap + 1, do_count * max_child)
+        visiting.remove(xref)
+        calculated[xref] = bound
+        return bound
+
+    page_do_count = count_do_operators(page.read_contents())
+    if page_do_count > cap:
+        return cap + 1
+    if page_do_count == 0:
+        return 0
+
+    max_child = 1
+    for child in children_by_invoker.get(0, []):
+        max_child = max(max_child, bound_for_xobject(child))
+        if page_do_count * max_child > cap:
+            return cap + 1
+    return min(cap + 1, page_do_count * max_child)
+
+
 def _layout_for_page(page):
     blocks = []
     for block in page.get_text("dict").get("blocks", []):
@@ -254,16 +309,19 @@ def _layout_for_page(page):
             page_number if page_number is not None else "unknown",
             len(image_xobjects),
         )
-    elif len(images) >= _IMAGE_PLACEMENT_LIMIT:
+    elif _image_placement_upper_bound(page, _IMAGE_DO_LIMIT) > _IMAGE_DO_LIMIT:
         image_placements_truncated = True
         logger.warning(
-            "Image placements truncated: page=%s xobjects=%d reason=placement_limit",
+            "Image placements truncated: page=%s xobjects=%d reason=do_limit",
             page_number if page_number is not None else "unknown",
             len(image_xobjects),
         )
     else:
         for image in image_xobjects:
             for rect in page.get_image_rects(image[0]):
+                bbox = (float(rect.x0), float(rect.y0), float(rect.x1), float(rect.y1))
+                if bbox in image_bboxes:
+                    continue
                 if len(images) >= _IMAGE_PLACEMENT_LIMIT:
                     image_placements_truncated = True
                     logger.warning(
@@ -272,10 +330,8 @@ def _layout_for_page(page):
                         len(image_xobjects),
                     )
                     break
-                bbox = (float(rect.x0), float(rect.y0), float(rect.x1), float(rect.y1))
-                if bbox not in image_bboxes:
-                    images.append({"bbox": bbox})
-                    image_bboxes.add(bbox)
+                images.append({"bbox": bbox})
+                image_bboxes.add(bbox)
             if image_placements_truncated:
                 break
     return {
