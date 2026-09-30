@@ -141,6 +141,13 @@ input {
 .ui-button:hover {
   filter: brightness(1.1);
 }
+.ui-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.ui-button:disabled:hover {
+  filter: none;
+}
 .ui-card {
   background: #172c31;
   border: 1px solid var(--line);

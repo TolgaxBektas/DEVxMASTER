@@ -1,4 +1,4 @@
-import { isValidElement, type ReactElement, type ReactNode } from "react";
+import { createElement, isValidElement, type ReactElement, type ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 import {
   AdvertiserProofDetails,
@@ -6,7 +6,9 @@ import {
   reviewAreaOptions,
   reviewListQueryInput,
   reviewPageRange,
+  reviewStatePage,
   resolveSelectedReviewId,
+  shortcutsBlocked,
   shouldResetDraft,
   reviewTabStateFor,
   updateReviewArea,
@@ -111,6 +113,46 @@ describe("Prüfseiten-Auswahl", () => {
     expect(ignoresReviewKeyboardShortcut("SELECT")).toBe(true);
     expect(ignoresReviewKeyboardShortcut("input")).toBe(true);
     expect(ignoresReviewKeyboardShortcut("BUTTON")).toBe(false);
+  });
+
+  it("blockiert Entscheidungskürzel beim Laden, bei abweichender Auswahl und kurz nach Navigation", () => {
+    expect(shortcutsBlocked({
+      loading: true,
+      selectedMatches: true,
+      msSinceNavigation: 1_000,
+    })).toBe(true);
+    expect(shortcutsBlocked({
+      loading: false,
+      selectedMatches: false,
+      msSinceNavigation: 1_000,
+    })).toBe(true);
+    expect(shortcutsBlocked({
+      loading: false,
+      selectedMatches: true,
+      msSinceNavigation: 499,
+    })).toBe(true);
+    expect(shortcutsBlocked({
+      loading: false,
+      selectedMatches: true,
+      msSinceNavigation: 500,
+    })).toBe(false);
+  });
+
+  it("rendert die Gebietssteuerung neben einem Ladezustand", () => {
+    const page = reviewStatePage({
+      pageHeader: "Prüfung",
+      sourceTabs: "Datenquellen",
+      reviewControls: createElement("select", { id: "review-area" }),
+      content: createElement("div", { className: "ui-skeleton" }),
+      showReviewControls: true,
+    });
+
+    expect(findElement(page, "select")).toMatchObject({
+      props: { id: "review-area" },
+    });
+    expect(findElement(page, "div")).toMatchObject({
+      props: { className: "stack" },
+    });
   });
 });
 
