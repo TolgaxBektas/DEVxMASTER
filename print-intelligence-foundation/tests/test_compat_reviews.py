@@ -90,6 +90,8 @@ def test_open_review_list_contains_metadata_and_image_availability(tmp_path, mon
         assert item["page"] == 4
         assert item["company"]["name"] == "Review Test GmbH"
         assert item["company"]["verification"] == {"verified": True}
+        assert item["advertiser_proof"] == []
+        assert item["provenance"] is None
         assert item["data_source"] == "xdata_germany"
         assert item["restoration"]["review_status"] == "pending"
         assert item["restoration"]["geometry_quality_status"] == (
@@ -99,6 +101,13 @@ def test_open_review_list_contains_metadata_and_image_availability(tmp_path, mon
             "original_available": True,
             "restored_available": True,
         }
+        detail = client.get(
+            f"/api/v1/reviews/{item['id']}",
+            headers={"x-service-token": "review-token"},
+        )
+        assert detail.status_code == 200
+        assert detail.json()["advertiser_proof"] == []
+        assert detail.json()["provenance"] is None
     finally:
         app.dependency_overrides.clear()
 

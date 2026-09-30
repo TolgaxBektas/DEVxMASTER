@@ -209,6 +209,32 @@ def _image_available(storage, path: str | None) -> bool:
 def _payload(item, occurrence, page, document, company, storage) -> dict[str, Any]:
     manifest = _manifest(occurrence)
     artwork_metadata = _artwork_metadata(occurrence)
+    advertiser_proof = artwork_metadata.get("advertiser_proof")
+    if not isinstance(advertiser_proof, list) or not all(
+        isinstance(value, str) for value in advertiser_proof
+    ):
+        advertiser_proof = []
+    raw_provenance = artwork_metadata.get("provenance")
+    provenance_fields = (
+        "area_name",
+        "area_ags",
+        "area_state",
+        "source_url",
+        "document_filename",
+        "publication",
+        "edition",
+        "year",
+        "issue",
+    )
+    provenance = (
+        {
+            key: raw_provenance[key]
+            for key in provenance_fields
+            if key in raw_provenance and raw_provenance[key] is not None
+        }
+        if isinstance(raw_provenance, dict)
+        else {}
+    )
     extracted_values, evidence, verification = _contact_data(occurrence)
     return {
         "id": item.id,
@@ -219,6 +245,8 @@ def _payload(item, occurrence, page, document, company, storage) -> dict[str, An
         "document_id": document.id if document else None,
         "ad_id": occurrence.id if occurrence else None,
         "page": page.page_number if page else None,
+        "advertiser_proof": advertiser_proof,
+        "provenance": provenance or None,
         "company": {
             "id": company.id if company else None,
             "name": company.name if company else None,

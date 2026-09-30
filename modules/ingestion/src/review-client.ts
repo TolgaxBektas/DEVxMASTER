@@ -7,6 +7,18 @@ export type PifReview = {
   document_id: number | null;
   ad_id: number | null;
   page: number | null;
+  advertiser_proof?: string[];
+  provenance?: {
+    area_name?: string;
+    area_ags?: string;
+    area_state?: string;
+    source_url?: string;
+    document_filename?: string;
+    publication?: string;
+    edition?: string;
+    year?: number;
+    issue?: number;
+  } | null;
   company: {
     id: number | null;
     name: string | null;

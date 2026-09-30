@@ -8,12 +8,25 @@ import {
   useModuleQuery,
   type ModulePageProps,
 } from "@xmaster-center/ui";
+import { evidenceLabel } from "../evidence-labels.js";
 
 type Review = {
   id: number;
   reason: string;
   data_source: DataSource;
   page: number | null;
+  advertiser_proof?: string[];
+  provenance?: {
+    area_name?: string;
+    area_ags?: string;
+    area_state?: string;
+    source_url?: string;
+    document_filename?: string;
+    publication?: string;
+    edition?: string;
+    year?: number;
+    issue?: number;
+  } | null;
   company: {
     name: string | null;
     extracted_values: Record<string, unknown>;
@@ -101,6 +114,13 @@ export function resolveSelectedReviewId(
   return items[0]?.id ?? null;
 }
 
+export function reviewListCaption(
+  item: Pick<Review, "page" | "reason" | "provenance">,
+): string {
+  const area = item.provenance?.area_name;
+  return `${area ? `${area} · ` : ""}Seite ${item.page ?? "—"} · ${item.reason}`;
+}
+
 function displayValue(value: unknown): string {
   if (Array.isArray(value)) return value.join(", ");
   if (value && typeof value === "object") {
@@ -177,6 +197,67 @@ function VerificationDetails({
         <span>Quellen: {verification.sources.join(" · ")}</span>
       ) : null}
     </div>
+  );
+}
+
+export function AdvertiserProofDetails({
+  advertiserProof,
+}: {
+  advertiserProof?: string[];
+}) {
+  return (
+    <div className="verification-row">
+      <strong>Inserenten-Nachweis</strong>
+      {advertiserProof?.length ? (
+        advertiserProof.map((proof, index) => (
+          <span key={`${proof}-${index}`}>{evidenceLabel(proof)}</span>
+        ))
+      ) : (
+        <span>kein Nachweis übermittelt</span>
+      )}
+    </div>
+  );
+}
+
+function joinedDetails(values: Array<string | number | undefined>): string {
+  return values
+    .filter((value): value is string | number => value !== undefined && value !== "")
+    .map(String)
+    .join(" · ");
+}
+
+export function ReviewProvenanceRows({
+  provenance,
+}: {
+  provenance?: Review["provenance"];
+}) {
+  const area = joinedDetails([
+    provenance?.area_name,
+    provenance?.area_ags ? `AGS ${provenance.area_ags}` : undefined,
+    provenance?.area_state,
+  ]);
+  const issue = joinedDetails([
+    provenance?.publication,
+    provenance?.edition,
+    provenance?.year,
+    provenance?.issue === undefined ? undefined : `Nr. ${provenance.issue}`,
+  ]);
+  return (
+    <>
+      <div><dt>Gebiet</dt><dd>{area || "—"}</dd></div>
+      <div>
+        <dt>Quelle</dt>
+        <dd>
+          {provenance?.source_url ? (
+            <a href={provenance.source_url} target="_blank" rel="noreferrer">
+              {provenance.source_url}
+            </a>
+          ) : "—"}
+        </dd>
+      </div>
+      <div><dt>Heft</dt><dd>{issue || "—"}</dd></div>
+      <div><dt>Datei</dt><dd>{provenance?.document_filename || "—"}</dd></div>
+    </>
   );
 }
 
@@ -350,7 +431,7 @@ export function ReviewPage({ api }: ModulePageProps) {
                 onClick={() => setSelectedIds((current) => ({ ...current, [activeSource]: item.id }))}
               >
                 <strong>{item.company.name ?? "Unbekannte Firma"}</strong>
-                <span>Seite {item.page ?? "—"} · {item.reason}</span>
+                <span>{reviewListCaption(item)}</span>
               </button>
             ))}
           </div>
@@ -386,8 +467,10 @@ export function ReviewPage({ api }: ModulePageProps) {
               evidence={review.company.evidence}
             />
             <VerificationDetails verification={review.company.verification} />
+            <AdvertiserProofDetails advertiserProof={review.advertiser_proof ?? []} />
             <DeferredChannels channels={review.company.deferred_channels} />
             <dl className="detail-list">
+              <ReviewProvenanceRows provenance={review.provenance} />
               <div><dt>Seite</dt><dd>{review.page ?? "—"}</dd></div>
               <div><dt>Bounding-Box</dt><dd>{Array.isArray(review.bbox) ? review.bbox.join(" × ") : displayValue(review.bbox)}</dd></div>
               <div><dt>Review-Status</dt><dd>{review.restoration.review_status ?? "—"}</dd></div>
