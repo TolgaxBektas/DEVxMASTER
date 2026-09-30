@@ -84,6 +84,7 @@ def test_print_find_import_creates_pending_review_and_is_open(tmp_path):
             assert occurrence is not None
             assert review is not None
             assert review.status == "pending"
+            review_id = review.id
             assert review.reason == (
                 "frischer Internetfund, menschliche Freigabe erforderlich"
             )
@@ -98,11 +99,29 @@ def test_print_find_import_creates_pending_review_and_is_open(tmp_path):
         open_reviews = client.get("/api/v1/reviews/open")
         assert open_reviews.status_code == 200
         assert len(open_reviews.json()) == 1
-        assert open_reviews.json()[0]["ad_id"] == body["ad_id"]
-        assert open_reviews.json()[0]["images"] == {
+        open_review = open_reviews.json()[0]
+        assert open_review["ad_id"] == body["ad_id"]
+        assert open_review["images"] == {
             "original_available": True,
             "restored_available": False,
         }
+        assert open_review["advertiser_proof"] == ["positiv:p2", "positiv:p3"]
+        assert open_review["provenance"] == {
+            "area_name": "Musterkreis",
+            "area_ags": "09162",
+            "area_state": "Bayern",
+            "source_url": "https://example.test/amtsblatt.pdf",
+            "document_filename": "amtsblatt.pdf",
+            "publication": "Musterblatt",
+            "edition": "Ausgabe 4",
+            "year": 2026,
+            "issue": 4,
+        }
+
+        detail = client.get(f"/api/v1/reviews/{review_id}")
+        assert detail.status_code == 200
+        assert detail.json()["advertiser_proof"] == ["positiv:p2", "positiv:p3"]
+        assert detail.json()["provenance"] == open_review["provenance"]
     finally:
         app.dependency_overrides.clear()
 
