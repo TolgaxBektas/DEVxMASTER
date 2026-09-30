@@ -203,6 +203,38 @@ describe("Übergabe frischer Fundstellen", () => {
     });
   });
 
+  it("überspringt abgelehnte Fundstellen trotz Inserenten-Nachweis mit Audit-Vermerk", async () => {
+    const repository = new MemoryIngestionRepository();
+    const audit = new MemoryAuditRepository();
+    const { occurrence } = await occurrenceWithEvidence(repository, ["positiv:p2"]);
+    await repository.reviewOccurrence("1", occurrence.id, "rejected");
+    const handoff = vi.fn();
+    const module = createIngestionModule({
+      repository,
+      storage: storage(),
+      audit,
+      handoffToArtwork: handoff,
+      publish: async () => undefined,
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.handoff.artwork");
+    if (!job) throw new Error("Übergabejob fehlt");
+
+    await job.handle({ occurrenceId: occurrence.id }, context("1"));
+
+    expect(handoff).not.toHaveBeenCalled();
+    expect(audit.entries).toHaveLength(1);
+    expect(audit.entries[0]).toMatchObject({
+      action: "ingestion.occurrence.handoff",
+      entityType: "ingestion_occurrence",
+      entityId: occurrence.id,
+      actorName: "Ingestion-Worker",
+    });
+    expect(JSON.parse(audit.entries[0]?.detailsJson ?? "{}")).toEqual({
+      skipped: true,
+      reason: "Fundstelle abgelehnt",
+    });
+  });
+
   it("meldet einen fehlenden Bearbeitungsdienst verständlich", async () => {
     const repository = new MemoryIngestionRepository();
     const { occurrence } = await occurrenceWithEvidence(repository, ["positiv:p2"]);

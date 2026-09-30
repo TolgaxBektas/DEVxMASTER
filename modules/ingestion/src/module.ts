@@ -1033,6 +1033,23 @@ export function createIngestionModule(deps: {
             tenantId,
             occurrenceId,
           );
+          if (provenance.status === "rejected") {
+            if (deps.audit) {
+              await appendAudit(deps.audit, {
+                tenantId,
+                action: "ingestion.occurrence.handoff",
+                entityType: "ingestion_occurrence",
+                entityId: occurrenceId,
+                actorId: null,
+                actorName: "Ingestion-Worker",
+                detailsJson: JSON.stringify({
+                  skipped: true,
+                  reason: "Fundstelle abgelehnt",
+                }),
+              });
+            }
+            return;
+          }
           if (provenance.advertiserProof.length === 0) {
             if (deps.audit) {
               await appendAudit(deps.audit, {
