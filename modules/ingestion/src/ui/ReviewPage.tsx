@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Button,
   Card,
@@ -176,17 +176,21 @@ export function reviewAreaOptions(
 ) {
   return [
     { value: "", label: `Alle Gebiete (${total})`, disabled: false },
-    ...areas.map((area) => area.area_ags === null
-      ? {
-        value: "__without_area__",
-        label: `ohne Gebiet · ${area.count}`,
-        disabled: true,
+    ...areas.map((area) => {
+      if (area.area_ags === null) {
+        return {
+          value: "__without_area__",
+          label: `ohne Gebiet · ${area.count}`,
+          disabled: true,
+        };
       }
-      : {
-        value: area.area_ags,
+      const validAgs = /^\d{5}$/.test(area.area_ags);
+      return {
+        value: validAgs ? area.area_ags : `__invalid__:${area.area_ags}`,
         label: `${area.area_name ?? "Gebiet"} (${area.area_ags}) · ${area.count}`,
-        disabled: false,
-      }),
+        disabled: !validAgs,
+      };
+    }),
   ];
 }
 
@@ -208,6 +212,10 @@ export function resolveSelectedReviewId(
     return preferredId;
   }
   return items[0]?.id ?? null;
+}
+
+export function shouldResetDraft(previousId: number | null, nextId: number | null): boolean {
+  return previousId !== nextId;
 }
 
 export function reviewListCaption(
@@ -414,6 +422,7 @@ export function ReviewPage({ api }: ModulePageProps) {
     queue.data?.items ?? [],
     activeTab.selectedId,
   );
+  const previousSelectedId = useRef(selectedId);
   const [note, setNote] = useState("");
   const [decisionError, setDecisionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -429,9 +438,12 @@ export function ReviewPage({ api }: ModulePageProps) {
   );
 
   useEffect(() => {
+    const previousId = previousSelectedId.current;
+    previousSelectedId.current = selectedId;
+    if (!shouldResetDraft(previousId, selectedId)) return;
     setNote("");
     setDecisionError(null);
-  }, [activeSource]);
+  }, [selectedId]);
 
   useEffect(() => {
     if (

@@ -7,6 +7,7 @@ import {
   reviewListQueryInput,
   reviewPageRange,
   resolveSelectedReviewId,
+  shouldResetDraft,
   reviewTabStateFor,
   updateReviewArea,
   updateReviewPage,
@@ -51,6 +52,13 @@ describe("Prüfseiten-Auswahl", () => {
     expect(resolveSelectedReviewId([{ id: 2 }, { id: 3 }], 3)).toBe(3);
   });
 
+  it("setzt den Entwurf zurück, wenn sich der ausgewählte Fall ändert", () => {
+    expect(shouldResetDraft(2, 3)).toBe(true);
+    expect(shouldResetDraft(2, 2)).toBe(false);
+    expect(shouldResetDraft(null, 3)).toBe(true);
+    expect(shouldResetDraft(3, null)).toBe(true);
+  });
+
   it("bewahrt Gebiet, Seite und Auswahl beim Wechsel zwischen Reitern", () => {
     let state: ReviewTabState = { areaAgs: {}, page: {}, selectedIds: {} };
     state = updateReviewArea(state, "xdata_nb_high_quality", "09162");
@@ -81,15 +89,20 @@ describe("Prüfseiten-Auswahl", () => {
   it("beschriftet Gebietsauswahl und Seitenbereich", () => {
     const options = reviewAreaOptions([
       { area_ags: "09162", area_name: "Passau", count: 13 },
+      { area_ags: "0916", area_name: "Musterkreis", count: 1 },
       { area_ags: null, area_name: null, count: 2 },
-    ], 15);
+    ], 16);
 
     expect(options.map((option) => option.label)).toEqual([
-      "Alle Gebiete (15)",
+      "Alle Gebiete (16)",
       "Passau (09162) · 13",
+      "Musterkreis (0916) · 1",
       "ohne Gebiet · 2",
     ]);
-    expect(options[2]).toMatchObject({ disabled: true });
+    expect(options[1]).toMatchObject({ value: "09162", disabled: false });
+    expect(options[2]).toMatchObject({ value: "__invalid__:0916", disabled: true });
+    expect(options[3]).toMatchObject({ value: "__without_area__", disabled: true });
+    expect(new Set(options.map((option) => option.value)).size).toBe(options.length);
     expect(reviewPageRange(0, 180)).toBe("1–100 von 180");
     expect(reviewPageRange(1, 180)).toBe("101–180 von 180");
   });
