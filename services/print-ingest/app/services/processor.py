@@ -68,6 +68,8 @@ DIRECTORY_SIGNALS = re.compile(
 )
 MAX_ADS_PER_PAGE = 24
 MAX_CROP_PIXELS = 18_000_000
+MARGIN_TARGET_PT = 5 / 25.4 * 72
+MARGIN_MIN_PT = 2.5 / 25.4 * 72
 MAX_OCR_REGIONS_PER_PAGE = 12
 _CLUSTER_MAX_GAP = 8
 _IMAGE_XOBJECT_LIMIT = 400
@@ -282,7 +284,7 @@ def _layout_for_page(page):
     drawings = []
     for drawing in page.get_drawings():
         rect = drawing.get("rect")
-        if rect and rect.width > 1 and rect.height > 1:
+        if rect and (rect.width > 1 or rect.height > 1):
             drawings.append({
                 "bbox": (float(rect.x0), float(rect.y0), float(rect.x1), float(rect.y1)),
                 "fill": drawing.get("fill"),
@@ -695,6 +697,8 @@ def _has_logo_evidence(layout, box):
             return True
     for drawing in layout.get("drawings", []):
         drawing_box = drawing["bbox"]
+        if drawing_box[2] - drawing_box[0] <= 1 or drawing_box[3] - drawing_box[1] <= 1:
+            continue
         if all(abs(drawing_box[index] - box[index]) <= 1 for index in range(4)):
             continue
         overlap = _intersection(box, drawing_box)
@@ -1476,21 +1480,304 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
     return results[:MAX_ADS_PER_PAGE]
 
 
+def crop_margin(
+    ad_rect,
+    page_rect,
+    obstacles,
+    target_pt=MARGIN_TARGET_PT,
+    minimum_pt=MARGIN_MIN_PT,
+    safety_pt=0.5,
+    page_image: Image.Image | None = None,
+    edge_grace_pt=1.5,
+) -> dict:
+    x0, y0, x1, y1 = (float(value) for value in ad_rect)
+    page_x0, page_y0, page_x1, page_y1 = (float(value) for value in page_rect)
+    target_pt = max(0.0, float(target_pt))
+    minimum_pt = max(0.0, float(minimum_pt))
+    safety_pt = max(0.0, float(safety_pt))
+    edge_grace_pt = max(0.0, float(edge_grace_pt))
+    margins = {
+        "left": min(target_pt, max(0.0, x0 - page_x0)),
+        "top": min(target_pt, max(0.0, y0 - page_y0)),
+        "right": min(target_pt, max(0.0, page_x1 - x1)),
+        "bottom": min(target_pt, max(0.0, page_y1 - y1)),
+    }
+
+    for obstacle in obstacles:
+        obstacle_x0, obstacle_y0, obstacle_x1, obstacle_y1 = (
+            float(value) for value in obstacle
+        )
+        if (
+            obstacle_x1 <= x0
+            and obstacle_y1 >= y0 - target_pt
+            and obstacle_y0 <= y1 + target_pt
+        ):
+            margins["left"] = min(
+                margins["left"],
+                max(0.0, x0 - obstacle_x1 - safety_pt),
+            )
+        if (
+            obstacle_y1 <= y0
+            and obstacle_x1 >= x0 - target_pt
+            and obstacle_x0 <= x1 + target_pt
+        ):
+            margins["top"] = min(
+                margins["top"],
+                max(0.0, y0 - obstacle_y1 - safety_pt),
+            )
+        if (
+            obstacle_x0 >= x1
+            and obstacle_y1 >= y0 - target_pt
+            and obstacle_y0 <= y1 + target_pt
+        ):
+            margins["right"] = min(
+                margins["right"],
+                max(0.0, obstacle_x0 - x1 - safety_pt),
+            )
+        if (
+            obstacle_y0 >= y1
+            and obstacle_x1 >= x0 - target_pt
+            and obstacle_x0 <= x1 + target_pt
+        ):
+            margins["bottom"] = min(
+                margins["bottom"],
+                max(0.0, obstacle_y0 - y1 - safety_pt),
+            )
+
+    if page_image is not None:
+        pixels = page_image.load()
+        histogram = page_image.histogram()
+        pixel_count = sum(histogram)
+        lower_rank = max(0, (pixel_count - 1) // 2)
+        upper_rank = max(0, pixel_count // 2)
+        lower_median = upper_median = None
+        cumulative = 0
+        for gray, count in enumerate(histogram):
+            cumulative += count
+            if lower_median is None and cumulative > lower_rank:
+                lower_median = gray
+            if cumulative > upper_rank:
+                upper_median = gray
+                break
+        paper = (
+            (lower_median + upper_median) / 2
+            if pixel_count
+            else 255
+        )
+        scale = page_image.width / (page_x1 - page_x0)
+        for side in ("left", "top", "right", "bottom"):
+            maximum_margin = margins[side]
+            if maximum_margin <= 0 or scale <= 0:
+                continue
+            vertical = side in ("left", "right")
+            if vertical:
+                edge = x0 if side == "left" else x1
+                edge_px = (edge - page_x0) * scale
+                first_line = (
+                    math.floor(edge_px) - 1
+                    if side == "left"
+                    else math.ceil(edge_px)
+                )
+                step = -1 if side == "left" else 1
+                axis_size = page_image.width
+                cross_start_pt = y0 - target_pt
+                cross_end_pt = y1 + target_pt
+                cross_origin = page_y0
+                cross_size = page_image.height
+            else:
+                edge = y0 if side == "top" else y1
+                edge_px = (edge - page_y0) * scale
+                first_line = (
+                    math.floor(edge_px) - 1
+                    if side == "top"
+                    else math.ceil(edge_px)
+                )
+                step = -1 if side == "top" else 1
+                axis_size = page_image.height
+                cross_start_pt = x0 - target_pt
+                cross_end_pt = x1 + target_pt
+                cross_origin = page_x0
+                cross_size = page_image.width
+            cross_start = max(
+                0,
+                min(
+                    cross_size,
+                    math.floor((cross_start_pt - cross_origin) * scale),
+                ),
+            )
+            cross_end = max(
+                cross_start,
+                min(
+                    cross_size,
+                    math.ceil((cross_end_pt - cross_origin) * scale),
+                ),
+            )
+            line_length = cross_end - cross_start
+            if line_length <= 0:
+                continue
+            ink_threshold = max(2, 0.002 * line_length)
+            line = first_line
+            edge_ink_distance = None
+            edge_ink_skipped = False
+            while 0 <= line < axis_size:
+                distance = (
+                    (edge_px - (line + 1)) / scale
+                    if step < 0
+                    else (line - edge_px) / scale
+                )
+                if distance > maximum_margin:
+                    break
+                ink_pixels = 0
+                for cross in range(cross_start, cross_end):
+                    pixel = (
+                        pixels[line, cross]
+                        if vertical
+                        else pixels[cross, line]
+                    )
+                    if abs(pixel - paper) > 48:
+                        ink_pixels += 1
+                        if ink_pixels > ink_threshold:
+                            break
+                is_ink = ink_pixels > ink_threshold
+                if is_ink:
+                    if edge_ink_skipped or (
+                        edge_ink_distance is not None
+                        and distance > edge_grace_pt
+                    ):
+                        ink_distance = (
+                            distance
+                            if edge_ink_skipped
+                            else edge_ink_distance
+                        )
+                        margins[side] = max(0.0, ink_distance - safety_pt)
+                        break
+                    if edge_ink_distance is None:
+                        edge_ink_distance = distance
+                elif edge_ink_distance is not None:
+                    if distance <= edge_grace_pt:
+                        edge_ink_distance = None
+                        edge_ink_skipped = True
+                    else:
+                        margins[side] = max(
+                            0.0,
+                            edge_ink_distance - safety_pt,
+                        )
+                        break
+                line += step
+            if edge_ink_distance is not None:
+                margins[side] = max(0.0, edge_ink_distance - safety_pt)
+
+    crop_rect = (
+        max(page_x0, x0 - margins["left"]),
+        max(page_y0, y0 - margins["top"]),
+        min(page_x1, x1 + margins["right"]),
+        min(page_y1, y1 + margins["bottom"]),
+    )
+    return {
+        "crop_rect": crop_rect,
+        "margin_mm": {
+            side: round(value * 25.4 / 72, 1)
+            for side, value in margins.items()
+        },
+        "shortfall": [
+            side for side in ("left", "top", "right", "bottom")
+            if margins[side] < minimum_pt
+        ],
+    }
+
+
+def load_page_gray(image_bytes: bytes) -> Image.Image:
+    with Image.open(io.BytesIO(image_bytes)) as image:
+        return image.convert("L")
+
+
+def _region_rect(page, region):
+    return (
+        page.rect.x0 + region["x"] * page.rect.width,
+        page.rect.y0 + region["y"] * page.rect.height,
+        page.rect.x0 + (region["x"] + region["width"]) * page.rect.width,
+        page.rect.y0 + (region["y"] + region["height"]) * page.rect.height,
+    )
+
+
+def _render_page_rect(page, rect, dpi, max_pixels):
+    rect = fitz.Rect(*rect) & page.rect
+    scale = dpi / 72
+    pixels = max(1, rect.width * scale) * max(1, rect.height * scale)
+    if pixels > max_pixels:
+        scale *= math.sqrt(max_pixels / pixels)
+    pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), clip=rect, alpha=False)
+    return pix.tobytes("png")
+
+
 def render_ad_crop(pdf_bytes: bytes, page_number: int, bbox: dict, dpi: int = 300, max_pixels: int = MAX_CROP_PIXELS):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     try:
         page = doc[page_number - 1]
-        rect = fitz.Rect(
-            bbox["x"] * page.rect.width,
-            bbox["y"] * page.rect.height,
-            (bbox["x"] + bbox["width"]) * page.rect.width,
-            (bbox["y"] + bbox["height"]) * page.rect.height,
-        ) & page.rect
-        scale = dpi / 72
-        pixels = max(1, rect.width * scale) * max(1, rect.height * scale)
-        if pixels > max_pixels:
-            scale *= math.sqrt(max_pixels / pixels)
-        pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), clip=rect, alpha=False)
-        return pix.tobytes("png")
+        return _render_page_rect(
+            page,
+            _region_rect(page, bbox),
+            dpi,
+            max_pixels,
+        )
+    finally:
+        doc.close()
+
+
+def render_ad_crop_with_margin(
+    pdf_bytes: bytes,
+    page_number: int,
+    region: dict,
+    layout: dict | None,
+    page_regions: list[dict],
+    page_image: Image.Image | None = None,
+    dpi: int = 300,
+    max_pixels: int = MAX_CROP_PIXELS,
+) -> tuple[bytes, dict]:
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        page = doc[page_number - 1]
+        ad_rect = _region_rect(page, region)
+        obstacles = []
+        if layout:
+            obstacles.extend(
+                block["bbox"]
+                for block in layout.get("blocks", [])
+                if block.get("bbox")
+            )
+            obstacles.extend(
+                image["bbox"]
+                for image in layout.get("images", [])
+                if image.get("bbox")
+            )
+            obstacles.extend(
+                drawing["bbox"]
+                for drawing in layout.get("drawings", [])
+                if drawing.get("bbox")
+            )
+        obstacles.extend(
+            _region_rect(page, other_region)
+            for other_region in page_regions
+            if other_region is not region
+        )
+        margin_info = crop_margin(
+            ad_rect,
+            page.rect,
+            obstacles,
+            page_image=page_image,
+        )
+        crop_rect = margin_info["crop_rect"]
+        crop_bbox = {
+            "x": (crop_rect[0] - page.rect.x0) / page.rect.width,
+            "y": (crop_rect[1] - page.rect.y0) / page.rect.height,
+            "width": (crop_rect[2] - crop_rect[0]) / page.rect.width,
+            "height": (crop_rect[3] - crop_rect[1]) / page.rect.height,
+        }
+        crop_bytes = _render_page_rect(page, crop_rect, dpi, max_pixels)
+        return crop_bytes, {
+            "crop_bbox": crop_bbox,
+            "margin_mm": margin_info["margin_mm"],
+            "shortfall": margin_info["shortfall"],
+        }
     finally:
         doc.close()

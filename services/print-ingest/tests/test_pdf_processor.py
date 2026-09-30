@@ -2,7 +2,7 @@ import io
 from types import SimpleNamespace
 
 import fitz
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from app.services import processor
 from app.services.processor import (
@@ -12,8 +12,12 @@ from app.services.processor import (
     extract_contacts,
     extract_pdf_metadata,
     classify_ad_candidate,
+    MARGIN_TARGET_PT,
+    crop_margin,
     heuristic_ad_regions,
+    load_page_gray,
     render_ad_crop,
+    render_ad_crop_with_margin,
     render_and_extract,
     sanitize_extracted_text,
 )
@@ -960,3 +964,307 @@ def test_render_ad_crop_rerenders_pdf_region_at_high_resolution():
         assert crop_image.width > full_image.width * 0.4
         assert crop_image.height > full_image.height * 0.4
         assert crop_image.width < full_image.width * 3
+
+
+def _points_from_mm(value):
+    return value / 25.4 * 72
+
+
+def test_crop_margin_uses_target_margin_when_isolated():
+    result = crop_margin(
+        (100, 100, 200, 200),
+        (0, 0, 400, 400),
+        [],
+    )
+
+    assert result["margin_mm"] == {
+        "left": 5.0,
+        "top": 5.0,
+        "right": 5.0,
+        "bottom": 5.0,
+    }
+    assert result["shortfall"] == []
+
+
+def test_crop_margin_stops_before_neighbor_with_safety_gap():
+    neighbor_gap = _points_from_mm(3)
+    result = crop_margin(
+        (100, 100, 200, 200),
+        (0, 0, 400, 400),
+        [(200 + neighbor_gap, 120, 250, 180)],
+    )
+
+    assert result["margin_mm"]["right"] == 2.8
+    assert result["shortfall"] == []
+
+
+def test_crop_margin_reports_shortfall_below_minimum_neighbor_gap():
+    neighbor_gap = _points_from_mm(2)
+    result = crop_margin(
+        (100, 100, 200, 200),
+        (0, 0, 400, 400),
+        [(200 + neighbor_gap, 120, 250, 180)],
+    )
+
+    assert result["margin_mm"]["right"] == 1.8
+    assert result["shortfall"] == ["right"]
+
+
+def test_crop_margin_reports_page_edge_shortfall():
+    result = crop_margin(
+        (100, 100, 200, 200),
+        (0, 0, 400, 200 + _points_from_mm(1)),
+        [],
+    )
+
+    assert result["margin_mm"]["bottom"] == 1.0
+    assert result["shortfall"] == ["bottom"]
+
+
+def test_crop_margin_corner_obstacle_limits_adjacent_sides():
+    result = crop_margin(
+        (100, 100, 200, 200),
+        (0, 0, 400, 400),
+        [(204, 85, 210, 99)],
+    )
+
+    assert result["margin_mm"]["right"] < 5.0
+    assert result["margin_mm"]["top"] < 5.0
+    assert result["shortfall"] == ["top", "right"]
+
+
+def test_crop_margin_ignores_obstacles_intersecting_ad():
+    result = crop_margin(
+        (100, 100, 200, 200),
+        (0, 0, 400, 400),
+        [(195, 130, 205, 170)],
+    )
+
+    assert set(result["margin_mm"].values()) == {5.0}
+    assert result["shortfall"] == []
+
+
+def test_crop_margin_ignores_obstacles_outside_extended_span():
+    result = crop_margin(
+        (100, 100, 200, 200),
+        (0, 0, 400, 400),
+        [(216, 216, 220, 220)],
+    )
+
+    assert set(result["margin_mm"].values()) == {5.0}
+    assert result["shortfall"] == []
+
+
+def test_render_ad_crop_with_margin_includes_safe_padding_without_neighbor_pixels():
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.draw_rect(fitz.Rect(100, 75, 200, 150), fill=(0, 0, 1), color=None)
+    page.draw_rect(fitz.Rect(205, 75, 245, 150), fill=(1, 0, 0), color=None)
+    pdf = document.tobytes()
+    region = {"x": 0.25, "y": 0.25, "width": 0.25, "height": 0.25}
+    neighbor = {"x": 0.5125, "y": 0.25, "width": 0.1, "height": 0.25}
+
+    crop, info = render_ad_crop_with_margin(
+        pdf,
+        1,
+        region,
+        {"blocks": [], "images": []},
+        [region, neighbor],
+        dpi=300,
+    )
+
+    expected_width_pt = 100 + MARGIN_TARGET_PT + (5 - 0.5)
+    expected_height_pt = 75 + 2 * MARGIN_TARGET_PT
+    with Image.open(io.BytesIO(crop)).convert("RGB") as crop_image:
+        assert abs(crop_image.width - expected_width_pt * 300 / 72) <= 2
+        assert abs(crop_image.height - expected_height_pt * 300 / 72) <= 2
+        assert not any(
+            red > 200 and green < 50 and blue < 50
+            for red, green, blue in crop_image.getdata()
+        )
+    assert info["margin_mm"]["right"] == 1.6
+    assert set(info) == {"crop_bbox", "margin_mm", "shortfall"}
+    assert info["shortfall"] == ["right"]
+
+
+def test_crop_margin_keeps_target_on_uniformly_tinted_page():
+    page_image = Image.new("L", (1000, 750), 230)
+
+    result = crop_margin(
+        (100, 75, 200, 150),
+        (0, 0, 400, 300),
+        [],
+        page_image=page_image,
+    )
+
+    assert result["margin_mm"] == {
+        "left": 5.0,
+        "top": 5.0,
+        "right": 5.0,
+        "bottom": 5.0,
+    }
+    assert result["shortfall"] == []
+
+
+def test_render_ad_crop_with_margin_trims_scanned_neighbor_pixels():
+    scanned_page = Image.new("RGB", (1000, 750), "white")
+    draw = ImageDraw.Draw(scanned_page)
+    draw.rectangle((250, 188, 499, 374), fill="blue")
+    draw.text((514, 250), "NACHBAR", fill="black")
+    image_buffer = io.BytesIO()
+    scanned_page.save(image_buffer, format="PNG")
+
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_image(page.rect, stream=image_buffer.getvalue())
+    pdf = document.tobytes()
+    document.close()
+
+    document = fitz.open(stream=pdf, filetype="pdf")
+    page = document[0]
+    layout = _layout_for_page(page)
+    assert layout["blocks"] == []
+    page_png = page.get_pixmap(matrix=fitz.Matrix(2.5, 2.5), alpha=False).tobytes("png")
+    document.close()
+    page_image = load_page_gray(page_png)
+    region = {"x": 0.25, "y": 0.25, "width": 0.25, "height": 0.25}
+
+    crop, info = render_ad_crop_with_margin(
+        pdf,
+        1,
+        region,
+        layout,
+        [region],
+        page_image=page_image,
+    )
+
+    expected_right = 2 - 0.5 * 25.4 / 72
+    assert abs(info["margin_mm"]["right"] - expected_right) <= 0.3
+    assert info["shortfall"] == ["right"]
+    assert info["margin_mm"]["left"] == 5.0
+    assert info["margin_mm"]["top"] == 5.0
+    assert info["margin_mm"]["bottom"] == 5.0
+    with Image.open(io.BytesIO(crop)).convert("RGB") as crop_image:
+        assert not any(
+            red < 32 and green < 32 and blue < 32
+            for red, green, blue in crop_image.getdata()
+        )
+
+
+def test_render_ad_crop_with_margin_uses_thin_vector_rule_obstacle():
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.draw_rect(fitz.Rect(100, 100, 200, 150), fill=(0, 0, 1), color=None)
+    rule_gap = _points_from_mm(3)
+    page.draw_rect(
+        fitz.Rect(100, 150 + rule_gap, 200, 150 + rule_gap + 0.5),
+        fill=(0, 0, 0),
+        color=None,
+    )
+    pdf = document.tobytes()
+    layout = _layout_for_page(page)
+    document.close()
+    region = {
+        "x": 0.25,
+        "y": 100 / 300,
+        "width": 0.25,
+        "height": 50 / 300,
+    }
+
+    _crop, info = render_ad_crop_with_margin(
+        pdf,
+        1,
+        region,
+        layout,
+        [region],
+    )
+
+    expected_bottom = 3 - 0.5 * 25.4 / 72
+    assert abs(info["margin_mm"]["bottom"] - expected_bottom) <= 0.3
+    assert info["shortfall"] == []
+    assert any(drawing["bbox"][3] - drawing["bbox"][1] <= 1 for drawing in layout["drawings"])
+
+
+def test_render_ad_crop_with_margin_stops_at_neighbor_vector_frame():
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.draw_rect(fitz.Rect(100, 100, 200, 150), fill=(0, 0, 1), color=None)
+    frame_gap = _points_from_mm(1.5)
+    page.draw_rect(
+        fitz.Rect(70, 110, 100 - frame_gap, 140),
+        color=(0, 0, 0),
+        width=0.5,
+    )
+    pdf = document.tobytes()
+    layout = _layout_for_page(page)
+    document.close()
+    region = {
+        "x": 0.25,
+        "y": 100 / 300,
+        "width": 0.25,
+        "height": 50 / 300,
+    }
+
+    _crop, info = render_ad_crop_with_margin(
+        pdf,
+        1,
+        region,
+        layout,
+        [region],
+    )
+
+    assert info["margin_mm"]["left"] < 1.5
+    assert info["shortfall"] == ["left"]
+
+
+def _render_gray_page_at_180_dpi(page):
+    pixmap = page.get_pixmap(matrix=fitz.Matrix(2.5, 2.5), alpha=False)
+    return load_page_gray(pixmap.tobytes("png"))
+
+
+def test_crop_margin_ignores_own_frame_ink_within_edge_grace():
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    ad_rect = fitz.Rect(100, 100, 200, 200)
+    page.draw_rect(ad_rect, color=(0, 0, 0), width=1)
+    page_image = _render_gray_page_at_180_dpi(page)
+
+    result = crop_margin(
+        ad_rect,
+        page.rect,
+        [],
+        page_image=page_image,
+    )
+
+    assert result["margin_mm"] == {
+        "left": 5.0,
+        "top": 5.0,
+        "right": 5.0,
+        "bottom": 5.0,
+    }
+    assert result["shortfall"] == []
+    document.close()
+
+
+def test_crop_margin_keeps_abutting_neighbor_ink_despite_own_frame_grace():
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    ad_rect = fitz.Rect(100, 100, 200, 200)
+    page.draw_rect(ad_rect, color=(0, 0, 0), width=1)
+    page.draw_rect(
+        fitz.Rect(200.3, 125, 230, 175),
+        fill=(0, 0, 0),
+        color=None,
+    )
+    page_image = _render_gray_page_at_180_dpi(page)
+
+    result = crop_margin(
+        ad_rect,
+        page.rect,
+        [],
+        page_image=page_image,
+    )
+
+    assert result["margin_mm"]["right"] == 0.0
+    assert result["shortfall"] == ["right"]
+    document.close()

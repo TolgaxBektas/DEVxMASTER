@@ -35,6 +35,17 @@ class FakeStorage:
         self.objects[key] = (data, content_type)
 
 
+FAKE_CROP_INFO = {
+    "crop_bbox": {"x": 0.09, "y": 0.09, "width": 0.82, "height": 0.82},
+    "margin_mm": {"left": 5.0, "top": 5.0, "right": 5.0, "bottom": 5.0},
+    "shortfall": [],
+}
+
+
+def fake_render_ad_crop_with_margin(*_args, **_kwargs):
+    return b"crop-png", FAKE_CROP_INFO
+
+
 def test_process_requires_service_token():
     response = TestClient(app).post(
         "/api/v1/process",
@@ -47,6 +58,7 @@ def test_process_requires_service_token():
 def test_process_returns_pages_without_document_rows(monkeypatch):
     storage = FakeStorage()
     monkeypatch.setattr(stateless, "storage", storage)
+    monkeypatch.setattr(stateless, "load_page_gray", lambda _image: None)
     monkeypatch.setattr(
         stateless,
         "heuristic_ad_regions",
@@ -60,7 +72,11 @@ def test_process_returns_pages_without_document_rows(monkeypatch):
             "preview": "Muster GmbH Telefon 01234 567890 info@muster.de www.muster.de 12345  Musterstadt",
         }],
     )
-    monkeypatch.setattr(stateless, "render_ad_crop", lambda *_args: b"crop-png")
+    monkeypatch.setattr(
+        stateless,
+        "render_ad_crop_with_margin",
+        fake_render_ad_crop_with_margin,
+    )
     monkeypatch.setattr(
         stateless,
         "render_and_extract",
@@ -96,6 +112,7 @@ def test_process_returns_pages_without_document_rows(monkeypatch):
 def test_process_omits_page_image_without_ad_candidates(monkeypatch):
     storage = FakeStorage()
     monkeypatch.setattr(stateless, "storage", storage)
+    monkeypatch.setattr(stateless, "load_page_gray", lambda _image: None)
     monkeypatch.setattr(stateless, "heuristic_ad_regions", lambda *_args: [])
     monkeypatch.setattr(
         stateless,
@@ -125,6 +142,7 @@ def test_process_omits_page_image_without_ad_candidates(monkeypatch):
 
 def test_process_response_replaces_unencodable_surrogates(monkeypatch):
     monkeypatch.setattr(stateless, "storage", FakeStorage())
+    monkeypatch.setattr(stateless, "load_page_gray", lambda _image: None)
     monkeypatch.setattr(
         stateless,
         "render_and_extract",
@@ -154,6 +172,7 @@ def test_process_response_replaces_unencodable_surrogates(monkeypatch):
 def test_process_keeps_distinct_ad_keys_and_region_text(monkeypatch):
     storage = FakeStorage()
     monkeypatch.setattr(stateless, "storage", storage)
+    monkeypatch.setattr(stateless, "load_page_gray", lambda _image: None)
     monkeypatch.setattr(
         stateless,
         "heuristic_ad_regions",
@@ -178,7 +197,11 @@ def test_process_keeps_distinct_ad_keys_and_region_text(monkeypatch):
             },
         ],
     )
-    monkeypatch.setattr(stateless, "render_ad_crop", lambda *_args: b"crop-png")
+    monkeypatch.setattr(
+        stateless,
+        "render_ad_crop_with_margin",
+        fake_render_ad_crop_with_margin,
+    )
     monkeypatch.setattr(
         stateless,
         "render_and_extract",
@@ -214,6 +237,10 @@ def test_process_keeps_distinct_ad_keys_and_region_text(monkeypatch):
         {"x": 0.0, "y": 0.0, "width": 0.4, "height": 1.0, "confidence": 0.8},
         {"x": 0.6, "y": 0.0, "width": 0.4, "height": 1.0, "confidence": 0.9},
     ]
+    assert [item["crop"] for item in occurrences] == [
+        FAKE_CROP_INFO,
+        FAKE_CROP_INFO,
+    ]
     assert [item["evidence"] for item in occurrences] == [["geometry"], ["geometry"]]
     assert [item["contacts"] for item in occurrences] == [
         {
@@ -237,6 +264,7 @@ def test_process_keeps_distinct_ad_keys_and_region_text(monkeypatch):
 def test_process_does_not_use_page_text_for_contact_fields(monkeypatch):
     storage = FakeStorage()
     monkeypatch.setattr(stateless, "storage", storage)
+    monkeypatch.setattr(stateless, "load_page_gray", lambda _image: None)
     monkeypatch.setattr(
         stateless,
         "heuristic_ad_regions",
@@ -250,7 +278,11 @@ def test_process_does_not_use_page_text_for_contact_fields(monkeypatch):
             "preview": "Muster GmbH",
         }],
     )
-    monkeypatch.setattr(stateless, "render_ad_crop", lambda *_args: b"crop-png")
+    monkeypatch.setattr(
+        stateless,
+        "render_ad_crop_with_margin",
+        fake_render_ad_crop_with_margin,
+    )
     monkeypatch.setattr(
         stateless,
         "render_and_extract",
