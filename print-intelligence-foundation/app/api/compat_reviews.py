@@ -39,6 +39,11 @@ def _source_clause(data_source: str):
     return AdOccurrence.data_source == data_source
 
 
+def _validate_data_source(data_source: str | None) -> None:
+    if data_source not in {None, XDATA_NB_HIGH_QUALITY, XDATA_GERMANY}:
+        raise HTTPException(422, "invalid data source")
+
+
 def _item_query():
     return (
         select(ReviewItem, AdOccurrence, Page, Document, Company)
@@ -193,6 +198,14 @@ def _artwork_metadata(occurrence: AdOccurrence | None) -> dict[str, Any]:
         return {}
 
 
+def _area_provenance(occurrence: AdOccurrence | None) -> dict[str, Any]:
+    metadata = _artwork_metadata(occurrence)
+    if not isinstance(metadata, dict):
+        return {}
+    provenance = metadata.get("provenance")
+    return provenance if isinstance(provenance, dict) else {}
+
+
 def _bbox(value: str) -> Any:
     try:
         return json.loads(value)
@@ -311,14 +324,7 @@ def _row(session, item_id: int):
     return row
 
 
-@router.get("/open", dependencies=[Depends(require_compat_auth)])
-def open_reviews(
-    session=Depends(session_dependency),
-    storage=Depends(storage_dependency),
-    data_source: str | None = Query(None),
-):
-    if data_source not in {None, XDATA_NB_HIGH_QUALITY, XDATA_GERMANY}:
-        raise HTTPException(422, "invalid data source")
+def _open_query(data_source: str | None):
     query = (
         _item_query()
         .where(ReviewItem.status == "pending")
@@ -326,8 +332,58 @@ def open_reviews(
     )
     if data_source is not None:
         query = query.where(_source_clause(data_source))
-    rows = session.execute(query).all()
+    return query
+
+
+@router.get("/open", dependencies=[Depends(require_compat_auth)])
+def open_reviews(
+    session=Depends(session_dependency),
+    storage=Depends(storage_dependency),
+    data_source: str | None = Query(None),
+    area_ags: str | None = Query(None, pattern=r"^\d{5}$"),
+    limit: int | None = Query(None, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
+    _validate_data_source(data_source)
+    rows = session.execute(_open_query(data_source)).all()
+    if area_ags is not None:
+        rows = [
+            row
+            for row in rows
+            if _area_provenance(row[1]).get("area_ags") == area_ags
+        ]
+    rows = rows[offset : offset + limit if limit is not None else None]
     return [_payload(*row, storage) for row in rows]
+
+
+@router.get("/open/summary", dependencies=[Depends(require_compat_auth)])
+def open_reviews_summary(
+    session=Depends(session_dependency),
+    data_source: str | None = Query(None),
+):
+    _validate_data_source(data_source)
+    rows = session.execute(_open_query(data_source)).all()
+    areas: dict[str | None, dict[str, Any]] = {}
+    for row in rows:
+        provenance = _area_provenance(row[1])
+        raw_ags = provenance.get("area_ags")
+        area_ags = raw_ags if isinstance(raw_ags, str) else None
+        raw_name = provenance.get("area_name")
+        area_name = raw_name if area_ags is not None and isinstance(raw_name, str) else None
+        area = areas.setdefault(
+            area_ags,
+            {"area_ags": area_ags, "area_name": area_name, "count": 0},
+        )
+        if area_ags is not None and area["area_name"] is None:
+            area["area_name"] = area_name
+        area["count"] += 1
+    return {
+        "total": len(rows),
+        "areas": sorted(
+            areas.values(),
+            key=lambda area: (-area["count"], area["area_ags"] or ""),
+        ),
+    }
 
 
 @router.get("/{item_id}", dependencies=[Depends(require_compat_auth)])

@@ -2,6 +2,9 @@ import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 import {
   AdvertiserProofDetails,
+  ignoresReviewKeyboardShortcut,
+  reviewAreaOptions,
+  reviewPageRange,
   resolveSelectedReviewId,
   ReviewProvenanceRows,
   reviewListCaption,
@@ -40,6 +43,28 @@ describe("Prüfseiten-Auswahl", () => {
   it("fällt auf den ersten Fall zurück, wenn der gemerkte Fall nicht mehr offen ist", () => {
     expect(resolveSelectedReviewId([{ id: 2 }, { id: 3 }], 9)).toBe(2);
     expect(resolveSelectedReviewId([{ id: 2 }, { id: 3 }], 3)).toBe(3);
+  });
+
+  it("beschriftet Gebietsauswahl und Seitenbereich", () => {
+    const options = reviewAreaOptions([
+      { area_ags: "09162", area_name: "Passau", count: 13 },
+      { area_ags: null, area_name: null, count: 2 },
+    ], 15);
+
+    expect(options.map((option) => option.label)).toEqual([
+      "Alle Gebiete (15)",
+      "Passau (09162) · 13",
+      "ohne Gebiet · 2",
+    ]);
+    expect(options[2]).toMatchObject({ disabled: true });
+    expect(reviewPageRange(0, 180)).toBe("1–100 von 180");
+    expect(reviewPageRange(1, 180)).toBe("101–180 von 180");
+  });
+
+  it("unterdrückt Tastenkürzel im Gebietsauswahlfeld", () => {
+    expect(ignoresReviewKeyboardShortcut("SELECT")).toBe(true);
+    expect(ignoresReviewKeyboardShortcut("input")).toBe(true);
+    expect(ignoresReviewKeyboardShortcut("BUTTON")).toBe(false);
   });
 });
 

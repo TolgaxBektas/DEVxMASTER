@@ -75,6 +75,16 @@ def _client(tmp_path, monkeypatch):
     return TestClient(app), factory
 
 
+def _set_provenance(factory, ad_id: int, provenance: dict | None):
+    with factory() as session:
+        occurrence = session.get(AdOccurrence, ad_id)
+        assert occurrence is not None
+        occurrence.artwork_metadata_json = json.dumps(
+            {"provenance": provenance} if provenance is not None else {}
+        )
+        session.commit()
+
+
 def test_open_review_list_contains_metadata_and_image_availability(tmp_path, monkeypatch):
     client, _ = _client(tmp_path, monkeypatch)
     try:
@@ -131,6 +141,71 @@ def test_review_source_filter_separates_open_cases(tmp_path, monkeypatch):
         assert high_quality.json() == []
         assert len(germany.json()) == 1
         assert invalid.status_code == 422
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_open_review_area_filter_pagination_and_summary(tmp_path, monkeypatch):
+    client, factory = _client(tmp_path, monkeypatch)
+    try:
+        cases = [
+            ("Alpha Eins", 1, {"area_ags": "09161", "area_name": "Alpha"}),
+            ("Alpha Zwei", 2, {"area_ags": "09161", "area_name": "Alpha"}),
+            ("Beta Eins", 3, {"area_ags": "09162", "area_name": "Beta"}),
+            ("Beta Zwei", 4, {"area_ags": "09162", "area_name": "Beta"}),
+            ("Ohne Gebiet", 5, None),
+        ]
+        for name, page, provenance in cases:
+            imported = _import(client, _metadata(name, page))
+            assert imported.status_code == 200
+            _set_provenance(factory, imported.json()["ad_id"], provenance)
+
+        headers = {"x-service-token": "review-token"}
+        all_items = client.get("/api/v1/reviews/open", headers=headers).json()
+        paged = client.get(
+            "/api/v1/reviews/open?limit=2&offset=1",
+            headers=headers,
+        )
+        assert paged.status_code == 200
+        assert paged.json() == all_items[1:3]
+
+        area_page = client.get(
+            "/api/v1/reviews/open?area_ags=09162&limit=1&offset=1",
+            headers=headers,
+        )
+        assert area_page.status_code == 200
+        area_items = [
+            item for item in all_items
+            if (item["provenance"] or {}).get("area_ags") == "09162"
+        ]
+        assert area_page.json() == area_items[1:2]
+
+        invalid_area = client.get(
+            "/api/v1/reviews/open?area_ags=0916x",
+            headers=headers,
+        )
+        assert invalid_area.status_code == 422
+
+        class NoStorage:
+            def exists(self, _path):
+                raise AssertionError("summary must not check image storage")
+
+        app.dependency_overrides[storage_dependency] = lambda: NoStorage()
+        summary = client.get("/api/v1/reviews/open/summary", headers=headers)
+        assert summary.status_code == 200
+        assert summary.json() == {
+            "total": 5,
+            "areas": [
+                {"area_ags": "09161", "area_name": "Alpha", "count": 2},
+                {"area_ags": "09162", "area_name": "Beta", "count": 2},
+                {"area_ags": None, "area_name": None, "count": 1},
+            ],
+        }
+        invalid_source = client.get(
+            "/api/v1/reviews/open/summary?data_source=other",
+            headers=headers,
+        )
+        assert invalid_source.status_code == 422
     finally:
         app.dependency_overrides.clear()
 
