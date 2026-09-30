@@ -37,6 +37,33 @@ EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}")
 DOMAIN_RE = re.compile(
     r"(?:https?://)?(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+", re.I
 )
+_RUN50_ASSOCIATION_PATTERN = re.compile(
+    r"(?<!\w)e\.\s?V\.(?!\w)|\beingetragener\s+verein\b|"
+    r"\b(?:förderverein|hilfsdienst|hilfe[-\s]?ring|kreisverband|ortsverband|ortsverein|partei)\b|"
+    r"\b(?:freie\s+wähler|bündnis\s*90|die\s+grünen|die\s+linke)\b|"
+    r"(?-i:\b(?:CSU|CDU|SPD|FDP|AfD|ÖDP)\b)",
+    re.I,
+)
+_RUN50_WELFARE_PATTERN = re.compile(
+    r"\b(?:johanniter|malteser|rotes\s+kreuz|arbeiter[-\s]samariter|lebenshilfe)\b|"
+    r"(?-i:\b(?:DRK|BRK|ASB)\b)",
+    re.I,
+)
+_RUN50_PUBLIC_COMPANY_PATTERN = re.compile(r"(?-i:\bVG\b)")
+_RUN50_PUBLIC_TEXT_PATTERN = re.compile(
+    r"(?i:\b(?:markt)?gemeinde)\s+(?-i:[A-ZÄÖÜ])|"
+    r"(?i:\b(?:zweckverband|verwaltungsgemeinschaft|personalverwaltung|bürgermeister(?:in)?)\b)|"
+    r"(?i:\bwir\s+gemeinden\b)"
+)
+_RUN50_PUBLISHER_COMPANY_PATTERN = re.compile(
+    r"\b(?:verlag\w*|mediengruppe|journal|amtsblatt|mitteilungsblatt|gemeindeblatt|anzeiger)\b",
+    re.I,
+)
+_RUN50_PUBLISHER_ANY_PATTERN = re.compile(
+    r"\bwittich\b|\blw-flyerdruck\b|\bnussbaum\s+medien\b|"
+    r"\beine\s+veröffentlichung\s+der\b|\banzeigen\s+schalten\b",
+    re.I,
+)
 
 PROMPTS_DIR = Path(__file__).resolve().parents[1] / "prompts"
 DETECTOR_PROMPT_FILE = PROMPTS_DIR / "run50_detector_prompt.md"
@@ -453,6 +480,38 @@ def _crop_text(page, png, crop_info):
 
 def _has_contact(text):
     return bool(PHONE_RE.search(text) or EMAIL_RE.search(text) or DOMAIN_RE.search(text))
+
+
+def customer_exclusion(company: str, text: str) -> str | None:
+    commercially_identified = bool(
+        _LEGAL_FORM_PATTERN.search(company) or _industry_match(company)
+    )
+    if _ASSOCIATION_PATTERN.search(company) or _RUN50_ASSOCIATION_PATTERN.search(company):
+        return "veto:verein"
+    if (
+        _RUN50_WELFARE_PATTERN.search(company)
+        and not _LEGAL_FORM_PATTERN.search(company)
+        and not re.search(r"\bggmbh\b", company, re.I)
+    ):
+        return "veto:verein"
+    if (
+        _PUBLIC_SENDER_PATTERN.search(company)
+        or PUBLIC_ORIGIN_SIGNALS.search(company)
+        or _RUN50_PUBLIC_COMPANY_PATTERN.search(company)
+        or _RUN50_PUBLIC_TEXT_PATTERN.search(text)
+        or _has_strong_public_origin(text)
+    ) and not commercially_identified:
+        return "veto:behoerde"
+    if _CHURCH_SENDER_PATTERN.search(company) and not commercially_identified:
+        return "veto:kirche"
+    if (
+        _PUBLISHER_PROMOTION_PATTERN.search(text)
+        or _RUN50_PUBLISHER_COMPANY_PATTERN.search(company)
+        or _RUN50_PUBLISHER_ANY_PATTERN.search(company)
+        or _RUN50_PUBLISHER_ANY_PATTERN.search(text)
+    ):
+        return "veto:verlag"
+    return None
 
 
 def _crop_area(png):
@@ -892,22 +951,7 @@ def detect_page(
                 continue
 
             company = str(final_verdict.get("advertiser") or "")
-            exclusion = None
-            commercially_identified = bool(
-                _LEGAL_FORM_PATTERN.search(company) or _industry_match(company)
-            )
-            if _ASSOCIATION_PATTERN.search(company):
-                exclusion = "veto:verein"
-            elif (
-                _PUBLIC_SENDER_PATTERN.search(company)
-                or PUBLIC_ORIGIN_SIGNALS.search(company)
-                or _has_strong_public_origin(final_text)
-            ) and not commercially_identified:
-                exclusion = "veto:behoerde"
-            elif _CHURCH_SENDER_PATTERN.search(company) and not commercially_identified:
-                exclusion = "veto:kirche"
-            elif _PUBLISHER_PROMOTION_PATTERN.search(final_text):
-                exclusion = "veto:verlag"
+            exclusion = customer_exclusion(company, final_text)
             provenance = _ad_metadata(
                 candidate,
                 call_usage,

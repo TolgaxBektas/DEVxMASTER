@@ -19,6 +19,7 @@ from app.services.run50 import (
     DETECTOR_PROMPT_FILE,
     Run50PageResult,
     ResponsesClient,
+    customer_exclusion,
     detect_document,
     detect_page,
     is_order_form_page,
@@ -348,6 +349,40 @@ def test_customer_exclusions_and_commercial_charity_exceptions(
     else:
         assert all(item.reason != "veto:behoerde" for item in result.rejected)
         assert all(item in result.accepted[0].region["evidence"] for item in evidence)
+
+
+@pytest.mark.parametrize(
+    ("company", "text", "expected"),
+    [
+        ("Lohn- und Einkommensteuer Hilfe-Ring Deutschland e.V.", "", "veto:verein"),
+        ("Malteser Waischenfeld e.V.", "", "veto:verein"),
+        ("DIE JOHANNITER", "", "veto:verein"),
+        (
+            "Bayerisches Rotes Kreuz Kreisverband Miltenberg-Obernburg",
+            "",
+            "veto:verein",
+        ),
+        ("CSU Winzer-Neßlbach", "", "veto:verein"),
+        ("Johanniter Pflege gGmbH", "", None),
+        ("Caritas Pflegedienst", "", None),
+        ("LINUS WITTICH MEDIEN", "", "veto:verlag"),
+        ("Jobmesse Franken", "Veranstalter LINUS WITTICH Medien KG", "veto:verlag"),
+        ("anzeigen.wittich.de", "", "veto:verlag"),
+        ("VG-Creußen JOURNAL", "", "veto:behoerde"),
+        ("GÄSTEPASS", "Kostenlose Angebote der Gemeinde Pfofeld", "veto:behoerde"),
+        (
+            "Soziales Netzwerk Thierhaupten",
+            "Ihr Ansprechpartner: Marktgemeinde Thierhaupten",
+            "veto:behoerde",
+        ),
+        ("Autohaus KÜRBIS GmbH", "Ihr Partner in der Gemeinde Pfofeld", None),
+        ("Stadt-Apotheke", "", None),
+        ("Wittichenau Bäckerei", "", None),
+        ("DIVANO", "Der Ort in der Mitte der Stadt Friedberg", None),
+    ],
+)
+def test_customer_exclusion_run50_patterns(company, text, expected):
+    assert customer_exclusion(company, text) == expected
 
 
 def test_document_deduplicates_same_advertiser_by_largest_crop():
