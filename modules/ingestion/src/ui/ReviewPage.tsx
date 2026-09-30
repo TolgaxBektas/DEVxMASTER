@@ -763,7 +763,7 @@ export function ReviewPage({ api }: ModulePageProps) {
               </p>
             )}
             <label htmlFor="review-note">Notiz</label>
-            <Input id="review-note" value={note} onChange={(event) => setNote(event.target.value)} placeholder="Optionale Notiz" />
+            <Input id="review-note" value={note} onChange={(event) => setNote(event.target.value)} placeholder="Optionale Notiz" autoComplete="off" />
             {decisionError && <div className="login-error">{decisionError}</div>}
             <div className="button-row">
               <Button disabled={busy} onClick={() => void decide("approve")}>Freigeben (A)</Button>

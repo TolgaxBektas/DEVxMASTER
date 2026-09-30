@@ -163,13 +163,31 @@ the occurrence AND the lead in tenant 2 — always upload identical bytes in BOT
   - Area names repeat (Passau 09262 vs 09275, Augsburg 09761 vs 09772, Bayreuth), so always pick an area by its AGS.
   - Area, page and selected case are kept per tab. To verify, set area + page 2 + a case, switch to HQ and back.
   - Ground truth for the pages: `GET /api/v1/reviews/open?data_source=xdata_germany&area_ags=<ags>&limit=100&offset=<n>` (Bearer token, which ends in `$`, so single-quote it).
-- **Focus trap (#103):** a letter typed into the focused area `<select>` is ignored by the global shortcut
-  handler, but native typeahead changes the area (n→Neustadt, a→Augsburg, r→Regen). The list reload then
-  unmounts the select and focus falls to `BODY`, so a second key would approve or reject. In safety tests,
-  press only ONE key per focus, and check `document.activeElement.id === 'review-area'` before every key.
-- Layout quirk seen in #103: long OCR "company names" make list rows about 1,600 px wide. The rows run under
-  the detail panel and the `<Area> · Seite …` caption gets clipped. Read captions from the DOM
-  (`section h2 = 'xDATA Germany'` → buttons → `innerText` last line) instead of trusting the screenshot.
+- **Focus trap (#103, fixed by #104):** before #104 a typeahead letter in `#review-area` changed the area, the
+  reload unmounted the select and focus fell to `BODY`, so a second key could decide. Since #104 the
+  controls stay mounted during loading, focus stays on the select, and shortcuts are blocked for 500 ms
+  after navigation / while fetching (`shortcutsBlocked`). Verified on an isolated stack with `a`, `r` and
+  a fast `na` burst: 0 `focusout` events, 0 decisions. On REAL data still stay conservative (one key per
+  focus, check `document.activeElement.id === 'review-area'` first). A `focusin`/`focusout` capture
+  listener (`window.__focusLog`) is a cheap way to prove focus never left the select.
+- Since #104, options for AGS that are not exactly 5 digits are `disabled` with value `__invalid__:<ags>`
+  (clicking them or typeahead does nothing). The note field (`#review-note`) is cleared whenever the
+  selected case changes. After a decision the page auto-selects the first remaining case.
+  The note input also has `autocomplete="off"`, so Chrome no longer offers notes typed on earlier cases.
+- Layout: before #104 long names made rows ≈1,600 px wide (under the detail panel). Since #104 rows
+  wrap inside the list card (`overflow-wrap:anywhere`, so long names may break mid-word). Check with
+  `row.getBoundingClientRect().right <= card.right` and `documentElement.scrollWidth <= innerWidth`.
+- **Isolated review stack (when production must not be touched):** own MySQL container on another port
+  (e.g. `xmc-test104-mysql` :3317, migrate + seed), own PIF container from the artwork image on :8021 with
+  `STORAGE_BACKEND=filesystem STORAGE_PATH=/work/print-intelligence/data LOCAL_WORK_DIR=/work/print-intelligence/work`
+  (a relative storage path fails with `PermissionError: 'data'`) and SQLite `DATABASE_URL`; health is
+  `degraded` only because Redis is absent, which is fine for review-only. Seed cases with a Python script
+  run inside the PIF container (`cd /app`, `PYTHONPATH=/app`) that inserts Document/Page/Company/
+  AdOccurrence(`data_source='xdata_germany'`, `artwork_metadata_json.provenance.area_ags`)/ReviewItem.
+  Run API/Web from a detached worktree on other ports (Vite `server.port`/proxy in `apps/web/vite.config.ts`,
+  temporary edit; API `PORT`, `PUBLIC_APP_ORIGIN`). Prove production was untouched with
+  `/proc/<api pid>/environ` (DATABASE_URL/ARTWORK_BASE_URL), `ss -tnp | grep :3307` and
+  `docker logs --since <start> xmaster-center-artwork` (only internal `/health` lines expected).
 - No-mutation proof: record `docker logs xmaster-center-artwork | wc -l` before, then check that the
   log contains only `GET /api/v1/reviews/open|{id}|{id}/original` lines and no `POST …/decision`.
 - Load numbers to compare against (13 cases): PIF `/open` ≈35 ms / 14 kB (≈1.1 kB per case), browser
