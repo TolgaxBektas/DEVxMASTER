@@ -26,8 +26,17 @@ export type ClaimedJob = JobRecord & {
   leaseExpiresAt: Date;
 };
 
+export type ActiveJobQuery = {
+  name: string;
+  tenantId: string | null;
+  payloadKey: string;
+  payloadValue: string | number;
+};
+
 export type QueueRepository = {
-  insert(job: JobRecord): Promise<void>;
+  insert(job: JobRecord, executor?: unknown): Promise<void>;
+  lockLease(id: string, leaseToken: string, executor?: unknown): Promise<boolean>;
+  hasActive(input: ActiveJobQuery): Promise<boolean>;
   claim(
     now: Date,
     leaseMs: number,
@@ -55,6 +64,7 @@ export type QueueRepository = {
 export type JobHandlerContext = {
   job: ClaimedJob;
   heartbeat(): Promise<boolean>;
+  lockLease(executor?: unknown): Promise<boolean>;
   signal: AbortSignal;
 };
 

@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { ClaimedJob, JobRecord, QueueRepository } from "./types.js";
+import type {
+  ActiveJobQuery,
+  ClaimedJob,
+  JobRecord,
+  QueueRepository,
+} from "./types.js";
 
 export class MemoryQueueRepository implements QueueRepository {
   readonly jobs = new Map<string, JobRecord>();
@@ -19,8 +24,30 @@ export class MemoryQueueRepository implements QueueRepository {
     }
   }
 
-  async insert(job: JobRecord) {
+  async insert(job: JobRecord, _executor?: unknown) {
     this.jobs.set(job.id, { ...job });
+  }
+
+  async lockLease(id: string, leaseToken: string, _executor?: unknown) {
+    const job = this.jobs.get(id);
+    return job?.status === "processing" && job.leaseToken === leaseToken;
+  }
+
+  async hasActive(input: ActiveJobQuery) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(input.payloadKey)) {
+      throw new Error("Invalid job payload key");
+    }
+    if (input.tenantId !== null && !/^\d+$/.test(input.tenantId)) {
+      throw new Error("Ungültige Mandanten-ID für Jobabfrage");
+    }
+    return [...this.jobs.values()].some((job) =>
+      job.name === input.name
+      && job.tenantId === input.tenantId
+      && (job.status === "pending" || job.status === "processing")
+      && typeof job.payload === "object"
+      && job.payload !== null
+      && (job.payload as Record<string, unknown>)[input.payloadKey] === input.payloadValue,
+    );
   }
 
   async claim(now: Date, leaseMs: number): Promise<ClaimedJob | null> {

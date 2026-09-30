@@ -106,11 +106,12 @@ const ingestion = createIngestionModule({
     : {}),
   transaction: (callback) => db.transaction(callback),
   repositoryForTransaction: (transactionDb) => createDrizzleIngestionRepository(transactionDb),
-  enqueue: (input) => queue.enqueue({
+  enqueue: (input, executor) => queue.enqueue({
     name: input.name,
     ...(input.tenantId === undefined ? {} : { tenantId: input.tenantId }),
     payload: input.payload,
-  }),
+    ...(input.maxAttempts === undefined ? {} : { maxAttempts: input.maxAttempts }),
+  }, executor),
   publish: (input) => eventBus.publish(input),
   discoverProposals: async ({ seedPages, archiveDomains, searchTerms, maxResults, areaName }) => {
     const response = await fetch(`${env.PRINT_INGEST_BASE_URL}/api/v1/discovery/proposals`, {

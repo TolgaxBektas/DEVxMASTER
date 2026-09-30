@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   MemoryAuditRepository,
   MemoryEventRepository,
@@ -10,6 +10,7 @@ import {
   advertisementEventIdempotencyKey,
   createIngestionModule,
   isPermanentSourceFetchError,
+  ProcessingLeaseLostError,
 } from "./module.js";
 import { deriveDocumentClassification, selectRegionSource } from "./classification.js";
 import { createDrizzleIngestionRepository } from "./drizzle-repository.js";
@@ -24,6 +25,7 @@ import { areaWebsiteSeeds, websiteRegister } from "./website-registry.js";
 
 const context = (tenantId: string | null, payload: unknown) => ({
   job: { tenantId, payload },
+  lockLease: async () => true,
 });
 
 describe("Ingestion-Bestand", () => {
@@ -2138,7 +2140,206 @@ describe("Ingestion-Bestand", () => {
     expect((await repository.listOccurrences("1"))[0]?.company).toBe("Muster GmbH");
   });
 
-  it("überspringt verarbeitete Dokumente im Sammellauf", async () => {
+  it("wirft verlorene Processing-Leases ohne das Dokument fehlzusetzen", async () => {
+    const repository = new MemoryIngestionRepository();
+    const document = await repository.createUploadedDocument("1", {
+      filename: "lease.pdf",
+      sha256: "l".repeat(64),
+      storageKey: "lease",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "upload",
+    });
+    document.document.state = "processing";
+    const replaceProcessedDocument = vi.spyOn(repository, "replaceProcessedDocument");
+    const setDocumentState = vi.spyOn(repository, "setDocumentState");
+    const publish = vi.fn(async () => undefined);
+    const enqueue = vi.fn(async () => undefined);
+    const module = createIngestionModule({
+      repository,
+      repositoryForTransaction: () => repository,
+      transaction: async (callback) => callback({}),
+      processDocument: async () => [{
+        pageNumber: 1,
+        text: "Anzeige",
+        imageKey: "page.png",
+        classification: "MIXED_CONTENT",
+        adProbability: 0.9,
+        occurrences: [],
+      }],
+      publish,
+      enqueue,
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.processing.run");
+    if (!job) throw new Error("Verarbeitungsjob fehlt");
+
+    await expect(job.handle(
+      { documentId: document.document.id },
+      {
+        ...context("1", { documentId: document.document.id }),
+        lockLease: async () => false,
+      },
+    )).rejects.toBeInstanceOf(ProcessingLeaseLostError);
+
+    expect(replaceProcessedDocument).not.toHaveBeenCalled();
+    expect(setDocumentState).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+    expect((await repository.getDocument("1", document.document.id)).state).toBe("processing");
+  });
+
+  it("reiht Artwork-Übergaben mit dem Transaktions-Executor ein", async () => {
+    const repository = new MemoryIngestionRepository();
+    const document = await repository.createUploadedDocument("1", {
+      filename: "handoff.pdf",
+      sha256: "h".repeat(64),
+      storageKey: "handoff",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "upload",
+    });
+    const transactionDb = { transaction: "exact-executor" };
+    const enqueued: Array<{ input: unknown; executor?: unknown }> = [];
+    const page = {
+      pageNumber: 1,
+      text: "Anzeige",
+      imageKey: "page.png",
+      classification: "MIXED_CONTENT",
+      adProbability: 0.9,
+      occurrences: [{
+        bbox: { x: 0, y: 0, width: 1, height: 1, confidence: 0.9 },
+        imageKey: "ad.png",
+        confidence: 0.9,
+        evidence: ["positiv:company-match"],
+        company: "Muster GmbH",
+        preview: "Muster GmbH Telefon",
+      }],
+    };
+    const module = createIngestionModule({
+      repository,
+      repositoryForTransaction: () => repository,
+      transaction: async (callback) => callback(transactionDb),
+      processDocument: async () => [page],
+      publish: async () => undefined,
+      enqueue: async (input, executor) => {
+        enqueued.push({ input, executor });
+      },
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.processing.run");
+    if (!job) throw new Error("Verarbeitungsjob fehlt");
+
+    await job.handle(
+      { documentId: document.document.id },
+      context("1", { documentId: document.document.id }),
+    );
+
+    const [occurrence] = await repository.listOccurrences("1");
+    expect(enqueued).toEqual([{
+      input: {
+        name: "ingestion.handoff.artwork",
+        tenantId: "1",
+        payload: { occurrenceId: occurrence?.id },
+      },
+      executor: transactionDb,
+    }]);
+  });
+
+  it("reiht im Sammellauf nur fehlende aktive Dokument-Jobs ein", async () => {
+    const repository = new MemoryIngestionRepository();
+    const createDocument = async (filename: string, checksum: string) =>
+      repository.createUploadedDocument("1", {
+        filename,
+        sha256: checksum.repeat(64),
+        storageKey: filename,
+        sizeBytes: 10,
+        mimeType: "application/pdf",
+        origin: "upload",
+      });
+    const uploadedActive = await createDocument("active-uploaded.pdf", "a");
+    const failed = await createDocument("failed.pdf", "f");
+    const processingOrphan = await createDocument("orphan.pdf", "o");
+    const processingActive = await createDocument("active-processing.pdf", "p");
+    const processed = await createDocument("processed.pdf", "d");
+    const rejected = await createDocument("rejected.pdf", "r");
+    failed.document.state = "failed";
+    processingOrphan.document.state = "processing";
+    processingActive.document.state = "processing";
+    processed.document.state = "processed";
+    rejected.document.state = "rejected";
+    const activeIds = new Set([
+      uploadedActive.document.id,
+      processingActive.document.id,
+    ]);
+    const activeChecks: number[] = [];
+    const enqueued: Array<{
+      name: string;
+      tenantId?: string | null;
+      payload: unknown;
+      maxAttempts?: number;
+    }> = [];
+    const processDocument = vi.fn(async () => []);
+    const module = createIngestionModule({
+      repository,
+      publish: async () => undefined,
+      enqueue: async (input) => {
+        enqueued.push(input);
+      },
+      hasActiveDocumentJob: async ({ documentId }) => {
+        activeChecks.push(documentId);
+        return activeIds.has(documentId);
+      },
+      processDocument,
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.processing.run");
+    if (!job) throw new Error("Verarbeitungsjob fehlt");
+
+    await job.handle({}, context("1", {}));
+
+    expect(activeChecks).toEqual([
+      uploadedActive.document.id,
+      failed.document.id,
+      processingOrphan.document.id,
+      processingActive.document.id,
+    ]);
+    expect(enqueued).toEqual([
+      {
+        name: "ingestion.processing.run",
+        tenantId: "1",
+        payload: { documentId: failed.document.id },
+        maxAttempts: 1,
+      },
+      {
+        name: "ingestion.processing.run",
+        tenantId: "1",
+        payload: { documentId: processingOrphan.document.id },
+        maxAttempts: 1,
+      },
+    ]);
+    expect(processDocument).not.toHaveBeenCalled();
+    expect([
+      uploadedActive.document.state,
+      failed.document.state,
+      processingOrphan.document.state,
+      processingActive.document.state,
+      processed.document.state,
+      rejected.document.state,
+    ]).toEqual(["uploaded", "failed", "processing", "processing", "processed", "rejected"]);
+  });
+
+  it("lehnt Sammelläufe ohne Queue-Anbindung ab", async () => {
+    const module = createIngestionModule({
+      repository: new MemoryIngestionRepository(),
+      publish: async () => undefined,
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.processing.run");
+    if (!job) throw new Error("Verarbeitungsjob fehlt");
+
+    await expect(job.handle({}, context("1", {}))).rejects.toThrow(
+      "Sammellauf ohne Queue-Anbindung nicht möglich",
+    );
+  });
+
+  it("reiht verarbeitbare Dokumente ein und überspringt aktive Verarbeitungen", async () => {
     const repository = new MemoryIngestionRepository();
     const processing = await repository.createUploadedDocument("1", {
       filename: "laufend.pdf",
@@ -2164,10 +2365,20 @@ describe("Ingestion-Bestand", () => {
       return setDocumentState(tenantId, documentId, state, error);
     };
     const calls: number[] = [];
+    const enqueued: Array<{
+      name: string;
+      tenantId?: string | null;
+      payload: unknown;
+      maxAttempts?: number;
+    }> = [];
     const module = createIngestionModule({
       repository,
       repositoryForTransaction: () => repository,
       transaction: async (callback) => callback({}),
+      enqueue: async (input) => {
+        enqueued.push(input);
+      },
+      hasActiveDocumentJob: async ({ documentId }) => documentId === processing.document.id,
       processDocument: async ({ documentId }) => {
         calls.push(documentId);
         return [{
@@ -2185,7 +2396,16 @@ describe("Ingestion-Bestand", () => {
     if (!job) throw new Error("Verarbeitungsjob fehlt");
 
     await job.handle({}, context("1", {}));
+    for (const queued of enqueued) {
+      await job.handle(queued.payload, context("1", queued.payload));
+    }
 
+    expect(enqueued).toEqual([{
+      name: "ingestion.processing.run",
+      tenantId: "1",
+      payload: { documentId: uploaded.document.id },
+      maxAttempts: 1,
+    }]);
     expect(calls).toEqual([uploaded.document.id]);
     expect(stateChanges).toContainEqual({ documentId: uploaded.document.id, state: "processing" });
     expect(stateChanges).not.toContainEqual({ documentId: processing.document.id, state: "processing" });
@@ -2193,7 +2413,7 @@ describe("Ingestion-Bestand", () => {
     expect((await repository.getDocument("1", uploaded.document.id)).state).toBe("processed");
   });
 
-  it("setzt fehlerhafte Dokumente im Sammellauf auf Fehler und verarbeitet weitere Dokumente", async () => {
+  it("reiht Dokumente im Sammellauf ein und verarbeitet Fehler und Erfolg gezielt", async () => {
     const repository = new MemoryIngestionRepository();
     const first = await repository.createUploadedDocument("1", {
       filename: "bad.pdf",
@@ -2212,10 +2432,20 @@ describe("Ingestion-Bestand", () => {
       origin: "upload",
     });
     const calls: number[] = [];
+    const enqueued: Array<{
+      name: string;
+      tenantId?: string | null;
+      payload: unknown;
+      maxAttempts?: number;
+    }> = [];
     const module = createIngestionModule({
       repository,
       repositoryForTransaction: () => repository,
       transaction: async (callback) => callback({}),
+      enqueue: async (input) => {
+        enqueued.push(input);
+      },
+      hasActiveDocumentJob: async () => false,
       processDocument: async ({ documentId }) => {
         calls.push(documentId);
         if (documentId === first.document.id) {
@@ -2236,7 +2466,29 @@ describe("Ingestion-Bestand", () => {
     if (!job) throw new Error("Verarbeitungsjob fehlt");
 
     await job.handle({}, context("1", {}));
+    await expect(job.handle(
+      enqueued[0]!.payload,
+      context("1", enqueued[0]!.payload),
+    )).rejects.toThrow("Kaputter PDF-Text");
+    await job.handle(
+      enqueued[1]!.payload,
+      context("1", enqueued[1]!.payload),
+    );
 
+    expect(enqueued).toEqual([
+      {
+        name: "ingestion.processing.run",
+        tenantId: "1",
+        payload: { documentId: first.document.id },
+        maxAttempts: 1,
+      },
+      {
+        name: "ingestion.processing.run",
+        tenantId: "1",
+        payload: { documentId: second.document.id },
+        maxAttempts: 1,
+      },
+    ]);
     expect(calls).toEqual([first.document.id, second.document.id]);
     expect((await repository.getDocument("1", first.document.id)).state).toBe("failed");
     expect((await repository.getDocument("1", first.document.id)).error).toBe("Kaputter PDF-Text");

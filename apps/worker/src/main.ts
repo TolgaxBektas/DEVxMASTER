@@ -93,10 +93,17 @@ const ingestion = createIngestionModule({
   storage,
   transaction: (callback) => db.transaction(callback),
   repositoryForTransaction: (transactionDb) => createDrizzleIngestionRepository(transactionDb),
-  enqueue: (input) => queue.enqueue({
+  enqueue: (input, executor) => queue.enqueue({
     name: input.name,
     ...(input.tenantId === undefined ? {} : { tenantId: input.tenantId }),
     payload: input.payload,
+    ...(input.maxAttempts === undefined ? {} : { maxAttempts: input.maxAttempts }),
+  }, executor),
+  hasActiveDocumentJob: ({ tenantId, documentId }) => queue.hasActiveJob({
+    name: "ingestion.processing.run",
+    tenantId,
+    payloadKey: "documentId",
+    payloadValue: documentId,
   }),
   processDocument: async (input) => {
     if (!env.PRINT_INGEST_SERVICE_TOKEN) throw new Error("Print-Ingest-Service-Token fehlt");
