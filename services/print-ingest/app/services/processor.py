@@ -1488,12 +1488,14 @@ def crop_margin(
     minimum_pt=MARGIN_MIN_PT,
     safety_pt=0.5,
     page_image: Image.Image | None = None,
+    edge_grace_pt=1.5,
 ) -> dict:
     x0, y0, x1, y1 = (float(value) for value in ad_rect)
     page_x0, page_y0, page_x1, page_y1 = (float(value) for value in page_rect)
     target_pt = max(0.0, float(target_pt))
     minimum_pt = max(0.0, float(minimum_pt))
     safety_pt = max(0.0, float(safety_pt))
+    edge_grace_pt = max(0.0, float(edge_grace_pt))
     margins = {
         "left": min(target_pt, max(0.0, x0 - page_x0)),
         "top": min(target_pt, max(0.0, y0 - page_y0)),
@@ -1543,6 +1545,7 @@ def crop_margin(
             )
 
     if page_image is not None:
+        pixels = page_image.load()
         histogram = page_image.histogram()
         pixel_count = sum(histogram)
         lower_rank = max(0, (pixel_count - 1) // 2)
@@ -1614,6 +1617,8 @@ def crop_margin(
                 continue
             ink_threshold = max(2, 0.002 * line_length)
             line = first_line
+            edge_ink_distance = None
+            edge_ink_skipped = False
             while 0 <= line < axis_size:
                 distance = (
                     (edge_px - (line + 1)) / scale
@@ -1625,21 +1630,42 @@ def crop_margin(
                 ink_pixels = 0
                 for cross in range(cross_start, cross_end):
                     pixel = (
-                        page_image.getpixel((line, cross))
+                        pixels[line, cross]
                         if vertical
-                        else page_image.getpixel((cross, line))
+                        else pixels[cross, line]
                     )
                     if abs(pixel - paper) > 48:
                         ink_pixels += 1
                         if ink_pixels > ink_threshold:
-                            margins[side] = min(
-                                maximum_margin,
-                                max(0.0, distance - safety_pt),
-                            )
                             break
-                if margins[side] < maximum_margin:
-                    break
+                is_ink = ink_pixels > ink_threshold
+                if is_ink:
+                    if edge_ink_skipped or (
+                        edge_ink_distance is not None
+                        and distance > edge_grace_pt
+                    ):
+                        ink_distance = (
+                            distance
+                            if edge_ink_skipped
+                            else edge_ink_distance
+                        )
+                        margins[side] = max(0.0, ink_distance - safety_pt)
+                        break
+                    if edge_ink_distance is None:
+                        edge_ink_distance = distance
+                elif edge_ink_distance is not None:
+                    if distance <= edge_grace_pt:
+                        edge_ink_distance = None
+                        edge_ink_skipped = True
+                    else:
+                        margins[side] = max(
+                            0.0,
+                            edge_ink_distance - safety_pt,
+                        )
+                        break
                 line += step
+            if edge_ink_distance is not None:
+                margins[side] = max(0.0, edge_ink_distance - safety_pt)
 
     crop_rect = (
         max(page_x0, x0 - margins["left"]),

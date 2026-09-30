@@ -1215,3 +1215,56 @@ def test_render_ad_crop_with_margin_stops_at_neighbor_vector_frame():
 
     assert info["margin_mm"]["left"] < 1.5
     assert info["shortfall"] == ["left"]
+
+
+def _render_gray_page_at_180_dpi(page):
+    pixmap = page.get_pixmap(matrix=fitz.Matrix(2.5, 2.5), alpha=False)
+    return load_page_gray(pixmap.tobytes("png"))
+
+
+def test_crop_margin_ignores_own_frame_ink_within_edge_grace():
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    ad_rect = fitz.Rect(100, 100, 200, 200)
+    page.draw_rect(ad_rect, color=(0, 0, 0), width=1)
+    page_image = _render_gray_page_at_180_dpi(page)
+
+    result = crop_margin(
+        ad_rect,
+        page.rect,
+        [],
+        page_image=page_image,
+    )
+
+    assert result["margin_mm"] == {
+        "left": 5.0,
+        "top": 5.0,
+        "right": 5.0,
+        "bottom": 5.0,
+    }
+    assert result["shortfall"] == []
+    document.close()
+
+
+def test_crop_margin_keeps_abutting_neighbor_ink_despite_own_frame_grace():
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    ad_rect = fitz.Rect(100, 100, 200, 200)
+    page.draw_rect(ad_rect, color=(0, 0, 0), width=1)
+    page.draw_rect(
+        fitz.Rect(200.3, 125, 230, 175),
+        fill=(0, 0, 0),
+        color=None,
+    )
+    page_image = _render_gray_page_at_180_dpi(page)
+
+    result = crop_margin(
+        ad_rect,
+        page.rect,
+        [],
+        page_image=page_image,
+    )
+
+    assert result["margin_mm"]["right"] == 0.0
+    assert result["shortfall"] == ["right"]
+    document.close()
