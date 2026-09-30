@@ -3,6 +3,7 @@ from app.models.entities import Document, Page, AdOccurrence
 from app.services.storage import storage
 from app.services.processor import (
     heuristic_ad_regions,
+    load_page_gray,
     render_ad_crop_with_margin,
     render_and_extract,
 )
@@ -19,6 +20,7 @@ def process_document(db: Session, document: Document):
             page=Page(document_id=document.id,page_number=p['page_number'],image_key=img_key,text=p['text'],classification=p['classification'],ad_probability=p['ad_probability'])
             db.add(page); db.flush()
             regions = heuristic_ad_regions(p['image_bytes'], p['text'], p.get('layout'))
+            page_image = load_page_gray(p["image_bytes"])
             for index, reg in enumerate(regions, start=1):
                 ad_key=f'ads/{document.sha256}/page-{p["page_number"]:04d}-{index:02d}.png'
                 crop_bytes, crop_info = render_ad_crop_with_margin(
@@ -27,6 +29,7 @@ def process_document(db: Session, document: Document):
                     reg,
                     p.get("layout"),
                     regions,
+                    page_image=page_image,
                 )
                 storage.put_bytes(ad_key, crop_bytes, 'image/png')
                 db.add(AdOccurrence(

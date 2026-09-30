@@ -42,7 +42,7 @@ FAKE_CROP_INFO = {
 }
 
 
-def fake_render_ad_crop_with_margin(*_args):
+def fake_render_ad_crop_with_margin(*_args, **_kwargs):
     return b"crop-png", FAKE_CROP_INFO
 
 
@@ -58,6 +58,7 @@ def test_process_requires_service_token():
 def test_process_returns_pages_without_document_rows(monkeypatch):
     storage = FakeStorage()
     monkeypatch.setattr(stateless, "storage", storage)
+    monkeypatch.setattr(stateless, "load_page_gray", lambda _image: None)
     monkeypatch.setattr(
         stateless,
         "heuristic_ad_regions",
@@ -111,6 +112,7 @@ def test_process_returns_pages_without_document_rows(monkeypatch):
 def test_process_omits_page_image_without_ad_candidates(monkeypatch):
     storage = FakeStorage()
     monkeypatch.setattr(stateless, "storage", storage)
+    monkeypatch.setattr(stateless, "load_page_gray", lambda _image: None)
     monkeypatch.setattr(stateless, "heuristic_ad_regions", lambda *_args: [])
     monkeypatch.setattr(
         stateless,
@@ -140,6 +142,7 @@ def test_process_omits_page_image_without_ad_candidates(monkeypatch):
 
 def test_process_response_replaces_unencodable_surrogates(monkeypatch):
     monkeypatch.setattr(stateless, "storage", FakeStorage())
+    monkeypatch.setattr(stateless, "load_page_gray", lambda _image: None)
     monkeypatch.setattr(
         stateless,
         "render_and_extract",
@@ -169,6 +172,7 @@ def test_process_response_replaces_unencodable_surrogates(monkeypatch):
 def test_process_keeps_distinct_ad_keys_and_region_text(monkeypatch):
     storage = FakeStorage()
     monkeypatch.setattr(stateless, "storage", storage)
+    monkeypatch.setattr(stateless, "load_page_gray", lambda _image: None)
     monkeypatch.setattr(
         stateless,
         "heuristic_ad_regions",
@@ -260,6 +264,7 @@ def test_process_keeps_distinct_ad_keys_and_region_text(monkeypatch):
 def test_process_does_not_use_page_text_for_contact_fields(monkeypatch):
     storage = FakeStorage()
     monkeypatch.setattr(stateless, "storage", storage)
+    monkeypatch.setattr(stateless, "load_page_gray", lambda _image: None)
     monkeypatch.setattr(
         stateless,
         "heuristic_ad_regions",

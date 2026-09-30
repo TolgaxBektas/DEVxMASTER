@@ -58,6 +58,7 @@ def test_process_document_stores_crop_metadata_without_changing_detected_bbox(mo
         "shortfall": [],
     }
     monkeypatch.setattr(pipeline, "storage", storage)
+    monkeypatch.setattr(pipeline, "load_page_gray", lambda _image: None)
     monkeypatch.setattr(
         pipeline,
         "render_and_extract",
@@ -78,7 +79,7 @@ def test_process_document_stores_crop_metadata_without_changing_detected_bbox(mo
     monkeypatch.setattr(
         pipeline,
         "render_ad_crop_with_margin",
-        lambda *_args: (b"crop-png", crop_info),
+        lambda *_args, **_kwargs: (b"crop-png", crop_info),
     )
 
     result = pipeline.process_document(db, document)

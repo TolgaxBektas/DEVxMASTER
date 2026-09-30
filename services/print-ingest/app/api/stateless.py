@@ -9,6 +9,7 @@ from app.services.processor import (
     extract_contacts,
     extract_pdf_metadata,
     heuristic_ad_regions,
+    load_page_gray,
     render_ad_crop_with_margin,
     render_and_extract,
 )
@@ -82,6 +83,7 @@ def process_upload(
         text = page["text"]
         candidates = []
         regions = heuristic_ad_regions(page["image_bytes"], text, page.get("layout"))
+        page_image = load_page_gray(page["image_bytes"])
         for index, region in enumerate(regions, start=1):
             ad_key = f"{output_prefix}/ad-{number:04d}-{index:02d}.png"
             crop_bytes, crop_info = render_ad_crop_with_margin(
@@ -90,6 +92,7 @@ def process_upload(
                 region,
                 page.get("layout"),
                 regions,
+                page_image=page_image,
             )
             storage.put_bytes(ad_key, crop_bytes, "image/png")
             ad_text = " ".join(str(region.get("preview", "")).split())
