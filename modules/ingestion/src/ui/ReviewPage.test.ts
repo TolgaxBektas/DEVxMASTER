@@ -2,9 +2,18 @@ import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 import {
   AdvertiserProofDetails,
+  ignoresReviewKeyboardShortcut,
+  reviewAreaOptions,
+  reviewListQueryInput,
+  reviewPageRange,
   resolveSelectedReviewId,
+  reviewTabStateFor,
+  updateReviewArea,
+  updateReviewPage,
+  updateReviewSelection,
   ReviewProvenanceRows,
   reviewListCaption,
+  type ReviewTabState,
 } from "./ReviewPage.js";
 
 function renderedText(node: ReactNode): string {
@@ -40,6 +49,55 @@ describe("Prüfseiten-Auswahl", () => {
   it("fällt auf den ersten Fall zurück, wenn der gemerkte Fall nicht mehr offen ist", () => {
     expect(resolveSelectedReviewId([{ id: 2 }, { id: 3 }], 9)).toBe(2);
     expect(resolveSelectedReviewId([{ id: 2 }, { id: 3 }], 3)).toBe(3);
+  });
+
+  it("bewahrt Gebiet, Seite und Auswahl beim Wechsel zwischen Reitern", () => {
+    let state: ReviewTabState = { areaAgs: {}, page: {}, selectedIds: {} };
+    state = updateReviewArea(state, "xdata_nb_high_quality", "09162");
+    state = updateReviewPage(state, "xdata_nb_high_quality", 2);
+    state = updateReviewSelection(state, "xdata_nb_high_quality", 23);
+    const highQualityState = reviewTabStateFor(state, "xdata_nb_high_quality");
+
+    state = updateReviewArea(state, "xdata_germany", "09262");
+    state = updateReviewPage(state, "xdata_germany", 1);
+    state = updateReviewSelection(state, "xdata_germany", 82);
+    const germanyState = reviewTabStateFor(state, "xdata_germany");
+    const returnedHighQualityState = reviewTabStateFor(state, "xdata_nb_high_quality");
+
+    expect(germanyState).toEqual({ areaAgs: "09262", page: 1, selectedId: 82 });
+    expect(returnedHighQualityState).toEqual(highQualityState);
+    expect(reviewListQueryInput(state, "xdata_nb_high_quality")).toEqual({
+      area_ags: "09162",
+      limit: 100,
+      offset: 200,
+    });
+    expect(reviewListQueryInput(state, "xdata_germany")).toEqual({
+      area_ags: "09262",
+      limit: 100,
+      offset: 100,
+    });
+  });
+
+  it("beschriftet Gebietsauswahl und Seitenbereich", () => {
+    const options = reviewAreaOptions([
+      { area_ags: "09162", area_name: "Passau", count: 13 },
+      { area_ags: null, area_name: null, count: 2 },
+    ], 15);
+
+    expect(options.map((option) => option.label)).toEqual([
+      "Alle Gebiete (15)",
+      "Passau (09162) · 13",
+      "ohne Gebiet · 2",
+    ]);
+    expect(options[2]).toMatchObject({ disabled: true });
+    expect(reviewPageRange(0, 180)).toBe("1–100 von 180");
+    expect(reviewPageRange(1, 180)).toBe("101–180 von 180");
+  });
+
+  it("unterdrückt Tastenkürzel im Gebietsauswahlfeld", () => {
+    expect(ignoresReviewKeyboardShortcut("SELECT")).toBe(true);
+    expect(ignoresReviewKeyboardShortcut("input")).toBe(true);
+    expect(ignoresReviewKeyboardShortcut("BUTTON")).toBe(false);
   });
 });
 

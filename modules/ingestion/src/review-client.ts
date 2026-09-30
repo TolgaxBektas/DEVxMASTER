@@ -75,8 +75,23 @@ export type PifReviewDecision = {
   next_open_id: number | null;
 };
 
+export type PifReviewSummary = {
+  total: number;
+  areas: Array<{
+    area_ags: string | null;
+    area_name: string | null;
+    count: number;
+  }>;
+};
+
 export type PifReviewClient = {
-  listOpen(dataSource?: PifReview["data_source"]): Promise<PifReview[]>;
+  listOpen(options?: {
+    dataSource?: PifReview["data_source"];
+    areaAgs?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<PifReview[]>;
+  openSummary(dataSource?: PifReview["data_source"]): Promise<PifReviewSummary>;
   get(id: number): Promise<PifReview>;
   decide(id: number, decision: "approve" | "reject", note?: string): Promise<PifReviewDecision>;
   image(id: number, kind: "original" | "restored"): Promise<Uint8Array>;
@@ -106,10 +121,24 @@ export function createPifReviewClient(input: {
     return response;
   };
   return {
-    async listOpen(dataSource) {
-      const query = dataSource ? `?data_source=${encodeURIComponent(dataSource)}` : "";
-      const response = await request(`/api/v1/reviews/open${query}`);
+    async listOpen(options) {
+      const params = new URLSearchParams();
+      if (options?.dataSource) params.set("data_source", options.dataSource);
+      if (options?.areaAgs) params.set("area_ags", options.areaAgs);
+      if (options?.limit !== undefined) params.set("limit", String(options.limit));
+      if (options?.offset !== undefined) params.set("offset", String(options.offset));
+      const query = params.toString();
+      const response = await request(`/api/v1/reviews/open${query ? `?${query}` : ""}`);
       return (await response.json()) as PifReview[];
+    },
+    async openSummary(dataSource) {
+      const params = new URLSearchParams();
+      if (dataSource) params.set("data_source", dataSource);
+      const query = params.toString();
+      const response = await request(
+        `/api/v1/reviews/open/summary${query ? `?${query}` : ""}`,
+      );
+      return (await response.json()) as PifReviewSummary;
     },
     async get(id) {
       const response = await request(`/api/v1/reviews/${id}`);

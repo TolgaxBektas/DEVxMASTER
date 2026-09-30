@@ -36,6 +36,7 @@ describe("Ingestion-Bestand", () => {
 
     const reviewClient = {
       listOpen: async () => [],
+      openSummary: async () => ({ total: 0, areas: [] }),
       get: async () => {
         throw new Error("not used");
       },

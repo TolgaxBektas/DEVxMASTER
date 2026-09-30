@@ -214,6 +214,7 @@ describe("Ingestion-Prüfbilder", () => {
       reviewTenantId: "1",
       reviewClient: {
         listOpen: async () => [],
+        openSummary: async () => ({ total: 0, areas: [] }),
         get: async () => {
           throw new Error("not used");
         },

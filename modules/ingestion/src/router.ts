@@ -366,6 +366,9 @@ export function createIngestionRouter(
       list: permissionProcedure("ingestion.review.read")
         .input(z.object({
           data_source: z.enum(["xdata_nb_high_quality", "xdata_germany"]).optional(),
+          area_ags: z.string().regex(/^\d{5}$/).optional(),
+          limit: z.number().int().min(1).max(500).optional(),
+          offset: z.number().int().min(0).optional(),
         }).optional())
         .query(async ({ ctx, input }) => {
         if (!reviewClient || !reviewTenantId) {
@@ -382,8 +385,40 @@ export function createIngestionRouter(
             items: [],
           };
         }
-        return { enabled: true, items: await reviewClient.listOpen(input?.data_source) };
+        return {
+          enabled: true,
+          items: await reviewClient.listOpen({
+            ...(input?.data_source ? { dataSource: input.data_source } : {}),
+            ...(input?.area_ags ? { areaAgs: input.area_ags } : {}),
+            ...(input?.limit !== undefined ? { limit: input.limit } : {}),
+            ...(input?.offset !== undefined ? { offset: input.offset } : {}),
+          }),
+        };
       }),
+      summary: permissionProcedure("ingestion.review.read")
+        .input(z.object({
+          data_source: z.enum(["xdata_nb_high_quality", "xdata_germany"]).optional(),
+        }).optional())
+        .query(async ({ ctx, input }) => {
+          if (!reviewClient || !reviewTenantId) {
+            return {
+              enabled: false,
+              message: "Die Prüfung ist für diesen Dienst nicht konfiguriert.",
+              total: 0,
+              areas: [],
+            };
+          }
+          if (ctx.auth.tenantId !== reviewTenantId) {
+            return {
+              enabled: true,
+              message: "Für diesen Mandanten sind keine Data-Factory-Prüffälle konfiguriert.",
+              total: 0,
+              areas: [],
+            };
+          }
+          const summary = await reviewClient.openSummary(input?.data_source);
+          return { enabled: true, ...summary };
+        }),
       get: permissionProcedure("ingestion.review.read")
         .input(z.object({ id: z.number().int().positive() }))
         .query(async ({ ctx, input }) => {

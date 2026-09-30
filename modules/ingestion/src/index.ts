@@ -1,7 +1,12 @@
 export { createIngestionModule } from "./module.js";
 export { createPifProcessor } from "./pif-client.js";
 export { createPifReviewClient } from "./review-client.js";
-export type { PifReviewClient, PifReview, PifReviewDecision } from "./review-client.js";
+export type {
+  PifReviewClient,
+  PifReview,
+  PifReviewDecision,
+  PifReviewSummary,
+} from "./review-client.js";
 export { createArtworkHandoffClient } from "./artwork-handoff-client.js";
 export type { ArtworkHandoffManifest, ArtworkHandoffResult } from "./artwork-handoff-client.js";
 export { createDrizzleIngestionRepository } from "./drizzle-repository.js";

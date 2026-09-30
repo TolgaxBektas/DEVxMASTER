@@ -9,6 +9,7 @@ import {
   type ModulePageProps,
 } from "@xmaster-center/ui";
 import { evidenceLabel } from "../evidence-labels.js";
+import type { PifReviewSummary } from "../review-client.js";
 
 type Review = {
   id: number;
@@ -64,6 +65,11 @@ type ReviewQueue = {
   items: Review[];
 };
 
+type ReviewSummary = PifReviewSummary & {
+  enabled: boolean;
+  message?: string;
+};
+
 type DataSource = "xdata_nb_high_quality" | "xdata_germany";
 
 type DeferredChannel = {
@@ -78,10 +84,70 @@ type DeferredChannel = {
 
 type DecisionResult = { next_open_id: number | null };
 
+const REVIEW_PAGE_SIZE = 100;
+
 const SOURCE_LABELS: Record<DataSource, string> = {
   xdata_nb_high_quality: "xDATA-nB High Quality",
   xdata_germany: "xDATA Germany",
 };
+
+export type ReviewTabState = {
+  areaAgs: Partial<Record<DataSource, string>>;
+  page: Partial<Record<DataSource, number>>;
+  selectedIds: Partial<Record<DataSource, number | null>>;
+};
+
+export function reviewTabStateFor(state: ReviewTabState, source: DataSource) {
+  return {
+    areaAgs: state.areaAgs[source] ?? "",
+    page: state.page[source] ?? 0,
+    selectedId: state.selectedIds[source] ?? null,
+  };
+}
+
+export function updateReviewArea(
+  state: ReviewTabState,
+  source: DataSource,
+  areaAgs: string,
+): ReviewTabState {
+  return {
+    areaAgs: { ...state.areaAgs, [source]: areaAgs },
+    page: { ...state.page, [source]: 0 },
+    selectedIds: { ...state.selectedIds, [source]: null },
+  };
+}
+
+export function updateReviewPage(
+  state: ReviewTabState,
+  source: DataSource,
+  page: number,
+): ReviewTabState {
+  return {
+    ...state,
+    page: { ...state.page, [source]: page },
+    selectedIds: { ...state.selectedIds, [source]: null },
+  };
+}
+
+export function updateReviewSelection(
+  state: ReviewTabState,
+  source: DataSource,
+  id: number | null,
+): ReviewTabState {
+  return {
+    ...state,
+    selectedIds: { ...state.selectedIds, [source]: id },
+  };
+}
+
+export function reviewListQueryInput(state: ReviewTabState, source: DataSource) {
+  const { areaAgs, page } = reviewTabStateFor(state, source);
+  return {
+    ...(areaAgs ? { area_ags: areaAgs } : {}),
+    limit: REVIEW_PAGE_SIZE,
+    offset: page * REVIEW_PAGE_SIZE,
+  };
+}
 
 const FIELD_LABELS: Record<string, string> = {
   company: "Firma",
@@ -103,6 +169,36 @@ const FIELD_LABELS: Record<string, string> = {
   social: "Social-Kanäle",
   social_channels: "Social-Kanäle",
 };
+
+export function reviewAreaOptions(
+  areas: readonly PifReviewSummary["areas"][number][],
+  total: number,
+) {
+  return [
+    { value: "", label: `Alle Gebiete (${total})`, disabled: false },
+    ...areas.map((area) => area.area_ags === null
+      ? {
+        value: "__without_area__",
+        label: `ohne Gebiet · ${area.count}`,
+        disabled: true,
+      }
+      : {
+        value: area.area_ags,
+        label: `${area.area_name ?? "Gebiet"} (${area.area_ags}) · ${area.count}`,
+        disabled: false,
+      }),
+  ];
+}
+
+export function reviewPageRange(page: number, total: number, pageSize = REVIEW_PAGE_SIZE) {
+  const start = total === 0 ? 0 : page * pageSize + 1;
+  const end = total === 0 ? 0 : Math.min((page + 1) * pageSize, total);
+  return `${start}–${end} von ${total}`;
+}
+
+export function ignoresReviewKeyboardShortcut(tagName: string) {
+  return ["INPUT", "TEXTAREA", "SELECT"].includes(tagName.toUpperCase());
+}
 
 export function resolveSelectedReviewId(
   items: readonly Pick<Review, "id">[],
@@ -278,21 +374,45 @@ function DeferredChannels({ channels }: { channels: readonly DeferredChannel[] }
 
 export function ReviewPage({ api }: ModulePageProps) {
   const [activeSource, setActiveSource] = useState<DataSource>("xdata_nb_high_quality");
+  const [sourceState, setSourceState] = useState<ReviewTabState>({
+    areaAgs: {},
+    page: {},
+    selectedIds: {},
+  });
+  const activeTab = reviewTabStateFor(sourceState, activeSource);
+  const { areaAgs, page } = activeTab;
+  const highQualitySummary = useModuleQuery<ReviewSummary>(
+    api,
+    "modules.ingestion.review.summary",
+    { data_source: "xdata_nb_high_quality" },
+  );
+  const germanySummary = useModuleQuery<ReviewSummary>(
+    api,
+    "modules.ingestion.review.summary",
+    { data_source: "xdata_germany" },
+  );
+  const highQualityListInput = reviewListQueryInput(sourceState, "xdata_nb_high_quality");
+  const germanyListInput = reviewListQueryInput(sourceState, "xdata_germany");
   const highQualityQueue = useModuleQuery<ReviewQueue>(
     api,
     "modules.ingestion.review.list",
-    { data_source: "xdata_nb_high_quality" },
+    { ...highQualityListInput, data_source: "xdata_nb_high_quality" },
   );
   const germanyQueue = useModuleQuery<ReviewQueue>(
     api,
     "modules.ingestion.review.list",
-    { data_source: "xdata_germany" },
+    { ...germanyListInput, data_source: "xdata_germany" },
   );
   const queue = activeSource === "xdata_nb_high_quality" ? highQualityQueue : germanyQueue;
-  const [selectedIds, setSelectedIds] = useState<Partial<Record<DataSource, number | null>>>({});
+  const summary = activeSource === "xdata_nb_high_quality" ? highQualitySummary : germanySummary;
+  const summaryTotal = summary.data?.total ?? 0;
+  const selectedArea = areaAgs
+    ? summary.data?.areas.find((area) => area.area_ags === areaAgs)
+    : undefined;
+  const total = areaAgs ? selectedArea?.count ?? 0 : summaryTotal;
   const selectedId = resolveSelectedReviewId(
     queue.data?.items ?? [],
-    selectedIds[activeSource] ?? null,
+    activeTab.selectedId,
   );
   const [note, setNote] = useState("");
   const [decisionError, setDecisionError] = useState<string | null>(null);
@@ -313,6 +433,28 @@ export function ReviewPage({ api }: ModulePageProps) {
     setDecisionError(null);
   }, [activeSource]);
 
+  useEffect(() => {
+    if (
+      areaAgs
+      && summary.data
+      && !summary.data.areas.some((area) => area.area_ags === areaAgs)
+    ) {
+      setSourceState((current) => updateReviewArea(current, activeSource, ""));
+    }
+  }, [activeSource, areaAgs, summary.data]);
+
+  useEffect(() => {
+    if (page > 0 && page * REVIEW_PAGE_SIZE >= total) {
+      setSourceState((current) =>
+        updateReviewPage(
+          current,
+          activeSource,
+          Math.max(0, Math.ceil(total / REVIEW_PAGE_SIZE) - 1),
+        ),
+      );
+    }
+  }, [activeSource, page, total]);
+
   const decide = useCallback(async (decision: "approve" | "reject") => {
     if (selectedId === null || busy) return;
     setBusy(true);
@@ -325,7 +467,10 @@ export function ReviewPage({ api }: ModulePageProps) {
       });
       setNote("");
       await api.invalidate?.("modules.ingestion.review.list");
-      setSelectedIds((current) => ({ ...current, [activeSource]: result.next_open_id }));
+      await api.invalidate?.("modules.ingestion.review.summary");
+      setSourceState((current) =>
+        updateReviewSelection(current, activeSource, result.next_open_id),
+      );
     } catch {
       setDecisionError("Die Entscheidung konnte nicht gespeichert werden. Die Notiz wurde nicht verändert.");
     } finally {
@@ -338,15 +483,18 @@ export function ReviewPage({ api }: ModulePageProps) {
     if (!items.length) return;
     const first = items[0];
     if (!first) return;
-    setSelectedIds((current) => ({
-      ...current,
-      [activeSource]: items[(selectedIndex + 1) % items.length]?.id ?? first.id,
-    }));
+    setSourceState((current) =>
+      updateReviewSelection(
+        current,
+        activeSource,
+        items[(selectedIndex + 1) % items.length]?.id ?? first.id,
+      ),
+    );
   }, [activeSource, queue.data?.items, selectedIndex]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
+      if (event.target instanceof Element && ignoresReviewKeyboardShortcut(event.target.tagName)) return;
       if (event.ctrlKey || event.metaKey || event.altKey) return;
       if (event.key.toLowerCase() === "a") void decide("approve");
       if (event.key.toLowerCase() === "r") void decide("reject");
@@ -369,7 +517,7 @@ export function ReviewPage({ api }: ModulePageProps) {
   const sourceTabs = (
     <div className="review-source-tabs" role="tablist" aria-label="Datenquelle">
       {(Object.keys(SOURCE_LABELS) as DataSource[]).map((source) => {
-        const sourceQueue = source === "xdata_nb_high_quality" ? highQualityQueue : germanyQueue;
+        const sourceSummary = source === "xdata_nb_high_quality" ? highQualitySummary : germanySummary;
         return (
           <button
             className={activeSource === source ? "source-tab active" : "source-tab"}
@@ -379,22 +527,64 @@ export function ReviewPage({ api }: ModulePageProps) {
             aria-selected={activeSource === source}
             onClick={() => setActiveSource(source)}
           >
-            {SOURCE_LABELS[source]} ({sourceQueue.data?.items.length ?? 0})
+            {SOURCE_LABELS[source]} ({sourceSummary.data?.total ?? 0})
           </button>
         );
       })}
     </div>
   );
-  const statePage = (content: ReactNode) => (
+  const areaOptions = reviewAreaOptions(summary.data?.areas ?? [], summaryTotal);
+  const reviewControls = (
+    <div className="button-row">
+      <label htmlFor="review-area">Gebiet</label>
+      <select
+        className="ui-input"
+        id="review-area"
+        value={areaAgs}
+        onChange={(event) =>
+          setSourceState((current) =>
+            updateReviewArea(current, activeSource, event.target.value),
+          )
+        }
+      >
+        {areaOptions.map((option) => (
+          <option key={option.value} value={option.value} disabled={option.disabled}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      <Button
+        disabled={page === 0}
+        onClick={() =>
+          setSourceState((current) => updateReviewPage(current, activeSource, Math.max(0, page - 1)))
+        }
+      >
+        Vorherige
+      </Button>
+      <span className="form-message">{reviewPageRange(page, total)}</span>
+      <Button
+        disabled={(page + 1) * REVIEW_PAGE_SIZE >= total}
+        onClick={() =>
+          setSourceState((current) => updateReviewPage(current, activeSource, page + 1))
+        }
+      >
+        Nächste
+      </Button>
+    </div>
+  );
+  const statePage = (content: ReactNode, showReviewControls = false) => (
     <div className="stack">
       {pageHeader}
       {sourceTabs}
+      {showReviewControls && reviewControls}
       {content}
     </div>
   );
 
-  if (queue.isLoading) return statePage(<Skeleton />);
-  if (queue.error) return statePage(<EmptyState title="Prüffälle konnten nicht geladen werden" />);
+  if (queue.isLoading || summary.isLoading) return statePage(<Skeleton />);
+  if (queue.error || summary.error) {
+    return statePage(<EmptyState title="Prüffälle konnten nicht geladen werden" />);
+  }
   if (!queue.data?.enabled) {
     return statePage(
       <EmptyState
@@ -409,16 +599,20 @@ export function ReviewPage({ api }: ModulePageProps) {
         title="Keine offenen Prüffälle"
         description={queue.data.message ?? "Alle Fälle wurden bearbeitet."}
       />,
+      true,
     );
   }
-  if (selected.error) return statePage(<EmptyState title="Prüffall konnte nicht geladen werden" />);
-  if (selected.isLoading || !selected.data) return statePage(<Skeleton />);
+  if (selected.error) {
+    return statePage(<EmptyState title="Prüffall konnte nicht geladen werden" />, true);
+  }
+  if (selected.isLoading || !selected.data) return statePage(<Skeleton />, true);
 
   const review = selected.data;
   return (
     <div className="stack">
       {pageHeader}
       {sourceTabs}
+      {reviewControls}
       <div className="review-layout">
         <Card>
           <h2>{SOURCE_LABELS[activeSource]}</h2>
@@ -428,7 +622,11 @@ export function ReviewPage({ api }: ModulePageProps) {
                 className={item.id === review.id ? "list-row active" : "list-row"}
                 key={item.id}
                 type="button"
-                onClick={() => setSelectedIds((current) => ({ ...current, [activeSource]: item.id }))}
+                onClick={() =>
+                  setSourceState((current) =>
+                    updateReviewSelection(current, activeSource, item.id),
+                  )
+                }
               >
                 <strong>{item.company.name ?? "Unbekannte Firma"}</strong>
                 <span>{reviewListCaption(item)}</span>
