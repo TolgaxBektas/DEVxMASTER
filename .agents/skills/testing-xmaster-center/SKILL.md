@@ -139,6 +139,45 @@ the occurrence AND the lead in tenant 2 — always upload identical bytes in BOT
   and check with `select code, permissions from roles;` (JSON — use `JSON_CONTAINS`, not LIKE).
 - Extra users for the permission/tenant matrix: `secret_hash = sha256(secret + JWT_SECRET)`, so
   `printf '%s' "2208$JWT_SECRET" | sha256sum` is enough to seed `user_identities` directly.
+- **Safety trap: the review page listens to global `keydown`** — `a` = approve, `r` = reject,
+  `n` = next (see `ReviewPage.tsx`, the global keydown handler). When real cases must not be decided, NEVER
+  type into the page body (no Ctrl+F search text, no typing while the focus sits on a list item).
+  Use mouse clicks only, and type only into the address bar. Other pages (e.g.
+  `/ingestion/occurrences`) have no such handler, so Ctrl+F is fine there.
+- Default tab is `xDATA-nB High Quality`; handed-off Center finds (`center:<tenant>:<occ>`)
+  land in `xDATA Germany` and need a click on that tab.
+- Center→PIF handoff chain (operator script `scripts/uebergabe-bestand.ts --mandant <id> --gebiet <AGS> [--anwenden]`):
+  verify it as follows: `audit_log.action='ingestion.occurrence.handoff'` (entity = occurrence id) → `jobs.name='ingestion.handoff.artwork'`
+  `completed` (older `dead` jobs of the same ids can exist and are retried on purpose) → PIF SQLite
+  `docker exec xmaster-center-artwork python -c "import sqlite3; c=sqlite3.connect('/work/print-intelligence/print_intelligence.db'); ..."`
+  (`review_items` status, `ad_occurrences.artwork_path/restoration_path/artwork_metadata`).
+  The Center occurrence itself must stay `detected`.
+- Since #101 the PIF payload carries `advertiser_proof` and `provenance`. The detail view shows
+  „Inserenten-Nachweis“ (P1b/P3/P4 …) plus the rows Gebiet (`<Name> · AGS <ags> · <Land>`), Quelle (link), Heft
+  and Datei. „Belegstatus: nicht angegeben“ still appears for handed-off finds, because that row belongs to
+  the separate evidence object and says nothing about advertiser proof. Before #101 these rows were missing.
+- Since #103 the page is paged (100 per page, „1–100 von N“, „Vorherige“/„Nächste“) and has an area
+  `<select id="review-area">` whose options read `<Name> (<AGS>) · <count>`; the options come from
+  `GET :8011/api/v1/reviews/open/summary?data_source=…`. The tab counts come from the same summary per
+  source. At the time of writing the split was HQ 1 (only „ohne Gebiet“) and Germany 4907.
+  - Area names repeat (Passau 09262 vs 09275, Augsburg 09761 vs 09772, Bayreuth), so always pick an area by its AGS.
+  - Area, page and selected case are kept per tab. To verify, set area + page 2 + a case, switch to HQ and back.
+  - Ground truth for the pages: `GET /api/v1/reviews/open?data_source=xdata_germany&area_ags=<ags>&limit=100&offset=<n>` (Bearer token, which ends in `$`, so single-quote it).
+- **Focus trap (#103):** a letter typed into the focused area `<select>` is ignored by the global shortcut
+  handler, but native typeahead changes the area (n→Neustadt, a→Augsburg, r→Regen). The list reload then
+  unmounts the select and focus falls to `BODY`, so a second key would approve or reject. In safety tests,
+  press only ONE key per focus, and check `document.activeElement.id === 'review-area'` before every key.
+- Layout quirk seen in #103: long OCR "company names" make list rows about 1,600 px wide. The rows run under
+  the detail panel and the `<Area> · Seite …` caption gets clipped. Read captions from the DOM
+  (`section h2 = 'xDATA Germany'` → buttons → `innerText` last line) instead of trusting the screenshot.
+- No-mutation proof: record `docker logs xmaster-center-artwork | wc -l` before, then check that the
+  log contains only `GET /api/v1/reviews/open|{id}|{id}/original` lines and no `POST …/decision`.
+- Load numbers to compare against (13 cases): PIF `/open` ≈35 ms / 14 kB (≈1.1 kB per case), browser
+  `review.list` 32–55 ms. Since #103, with 4,908 cases: the Germany `review.list` returns 100 rows / ≈148 kB in ≈750 ms,
+  the Germany summary takes ≈380 ms, and the HQ tab is visible after ≈150 ms. Before #103 the list was unpaged. `_payload` runs one `storage.exists` (MinIO HEAD)
+  per case. Largest area by eligible finds: `09373` ≈1,250.
+- Leaving `/ingestion/occurrences` (≈6k cards) for another page can take about 60 s before the next page
+  renders. Navigation timings measured right after it are skewed, so use the resource timings.
 
 ## Login
 Local provider, user `admin`, PIN from `ADMIN_PIN` (dev value `1907`). Browser login form at
