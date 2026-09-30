@@ -31,44 +31,87 @@ export class Worker {
       }
       const handler = this.handlers.get(job.name);
       if (!handler) {
-        await this.queue.fail(job, `Kein Handler für Job ${job.name}`, 1);
+        const failed = await this.queue.fail(job, `Kein Handler für Job ${job.name}`, 1);
+        if (!failed) {
+          console.error(
+            `[worker] Lease für Job ${job.name} (${job.id}) beim Fehlschlagen nicht mehr gehalten`,
+          );
+        }
         continue;
       }
       const controller = new AbortController();
       const timer = handler.timeoutMs
         ? setTimeout(() => controller.abort(), handler.timeoutMs)
         : undefined;
+      let leaseLost = false;
+      let heartbeatRunning = false;
+      let heartbeatInterval!: ReturnType<typeof setInterval>;
+      const heartbeat = async () => {
+        if (leaseLost || heartbeatRunning) return;
+        heartbeatRunning = true;
+        try {
+          const held = await this.queue.heartbeat(job);
+          if (!held) {
+            leaseLost = true;
+            controller.abort();
+            clearInterval(heartbeatInterval);
+            console.error(
+              `[worker] Lease für Job ${job.name} (${job.id}) verloren; Handler abgebrochen`,
+            );
+          }
+        } finally {
+          heartbeatRunning = false;
+        }
+      };
+      heartbeatInterval = setInterval(
+        () => void heartbeat(),
+        Math.max(1_000, Math.floor(this.queue.leaseMs / 3)),
+      );
       try {
         await handler.handle(
           job.payload,
           createJobHandlerContext(this.queue, job, controller.signal),
         );
-        await this.queue.complete(job);
-      } catch (error) {
-        const maxAttempts = handler.maxAttempts ?? job.maxAttempts;
-        const effectiveMaxAttempts = error instanceof NonRetryableError ? 1 : maxAttempts;
-        const terminal = job.attempts >= effectiveMaxAttempts;
-        await this.queue.fail(
-          job,
-          error,
-          effectiveMaxAttempts,
-        );
-        if (terminal && handler.onFailure) {
-          try {
-            await handler.onFailure(error, createJobHandlerContext(
-              this.queue,
-              job,
-              controller.signal,
-            ));
-          } catch (failureError) {
+        if (!leaseLost) {
+          const completed = await this.queue.complete(job);
+          if (!completed) {
             console.error(
-              `[worker] terminal failure handling failed for ${job.name} ${job.id}`,
-              failureError,
+              `[worker] Lease für Job ${job.name} (${job.id}) beim Abschließen nicht mehr gehalten`,
             );
+          }
+        }
+      } catch (error) {
+        if (!leaseLost) {
+          const maxAttempts = handler.maxAttempts ?? job.maxAttempts;
+          const effectiveMaxAttempts = error instanceof NonRetryableError ? 1 : maxAttempts;
+          const terminal = job.attempts >= effectiveMaxAttempts;
+          const failed = await this.queue.fail(
+            job,
+            error,
+            effectiveMaxAttempts,
+          );
+          if (!failed) {
+            console.error(
+              `[worker] Lease für Job ${job.name} (${job.id}) beim Fehlschlagen nicht mehr gehalten`,
+            );
+          } else if (terminal && handler.onFailure) {
+            try {
+              await handler.onFailure(error, createJobHandlerContext(
+                this.queue,
+                job,
+                controller.signal,
+              ));
+            } catch (failureError) {
+              console.error(
+                `[worker] Terminale Fehlerbehandlung für Job ${job.name} (${job.id}) fehlgeschlagen`,
+                failureError,
+              );
+            }
           }
         }
       } finally {
         if (timer) clearTimeout(timer);
+        clearInterval(heartbeatInterval);
       }
     }
   }
