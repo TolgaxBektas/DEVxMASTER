@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     ocr_provider: str = 'local_tesseract'
     vision_provider: str = 'stub'
     openai_api_key: str | None = None
+    ad_detector: str = 'heuristic'
+    run50_concurrency: int = 4
     azure_document_intelligence_endpoint: str | None = None
     azure_document_intelligence_key: str | None = None
     service_token: str = 'change-me-print-ingest-token'

@@ -97,6 +97,7 @@ def test_process_returns_pages_without_document_rows(monkeypatch):
         data={"output_prefix": "tenants/1/processed/hash"},
     )
     assert response.status_code == 200
+    assert response.json()["pages"][0]["detector"] == "heuristic"
     assert response.json()["pages"][0]["occurrences"][0]["company"] == "Muster GmbH"
     assert response.json()["pages"][0]["occurrences"][0]["contacts"] == {
         "phone": "01234 567890",

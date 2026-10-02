@@ -27,6 +27,8 @@ services:
     environment:
       DATABASE_URL: sqlite:////data/print_intelligence.db
       SERVICE_TOKEN: ${PRINT_INGEST_SERVICE_TOKEN:-local-print-ingest-token}
+      AD_DETECTOR: ${AD_DETECTOR:-heuristic}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OUTBOUND_HTTP_ENABLED: "true"
       S3_ENDPOINT: http://minio:9000
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
