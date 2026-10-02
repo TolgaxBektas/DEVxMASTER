@@ -541,7 +541,9 @@ def _contained(candidate, kept):
 
 
 def _norm_name(name):
-    value = unicodedata.normalize("NFKD", (name or "").lower())
+    value = (name or "").lower()
+    value = value.replace("ä", "ae").replace("ö", "oe").replace("ü", "ue").replace("ß", "ss")
+    value = unicodedata.normalize("NFKD", value)
     value = value.encode("ascii", "ignore").decode()
     value = re.sub(r"[^a-z0-9 ]+", " ", value)
     tokens = [

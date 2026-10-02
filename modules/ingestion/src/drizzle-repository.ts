@@ -596,6 +596,7 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
           imageKey: processed.imageKey,
           classification: processed.classification,
           adProbability: processed.adProbability,
+          rejections: processed.rejections ?? null,
         });
         const pageId = Number(pageRow[0]?.insertId);
         if (!includeOccurrences) continue;
@@ -618,6 +619,7 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
             confidence: occurrence.confidence,
             evidence: occurrence.evidence ?? [],
             contacts: occurrence.contacts ?? null,
+            provenance: occurrence.provenance ?? null,
           });
           created.push({
             id: Number(occurrenceRow[0]?.insertId),

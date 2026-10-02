@@ -20,11 +20,28 @@ import {
 } from "./repository.js";
 import { documentActualityStatus, sourceActualityHint, type ActualityStatus } from "./actuality.js";
 
+type ProcessedOccurrenceProvenance = { crop?: unknown; run50?: unknown } | null;
+type MemoryOccurrenceRecord = IngestionOccurrence & {
+  provenance?: ProcessedOccurrenceProvenance;
+};
+type MemoryPageRecord = {
+  id: number;
+  documentId: number;
+  pageNumber: number | null;
+  rejections: unknown[] | null;
+};
+
+function toPublicOccurrence(occurrence: MemoryOccurrenceRecord): IngestionOccurrence {
+  const { provenance, ...publicOccurrence } = occurrence;
+  void provenance;
+  return publicOccurrence;
+}
+
 export class MemoryIngestionRepository implements IngestionRepository {
   sources: IngestionSource[] = [];
   documents: IngestionDocument[] = [];
-  occurrences: IngestionOccurrence[] = [];
-  pages: Array<{ id: number; documentId: number; pageNumber: number | null }> = [];
+  occurrences: MemoryOccurrenceRecord[] = [];
+  pages: MemoryPageRecord[] = [];
   private pageId = 0;
   classifications = new Map<string, DocumentClassification>();
   private sourceId = 0;
@@ -207,18 +224,20 @@ export class MemoryIngestionRepository implements IngestionRepository {
       actualityDecidedBy: actor,
     };
   }
-  async listOccurrences(tenantId: string) {
+  async listOccurrences(tenantId: string): Promise<IngestionOccurrence[]> {
     const documents = new Set((await this.listDocuments(tenantId)).map((document) => document.id));
-    return this.occurrences.filter((occurrence) => documents.has(occurrence.documentId));
+    return this.occurrences
+      .filter((occurrence) => documents.has(occurrence.documentId))
+      .map(toPublicOccurrence);
   }
-  async getOccurrence(tenantId: string, occurrenceId: number) {
+  async getOccurrence(tenantId: string, occurrenceId: number): Promise<IngestionOccurrence> {
     const occurrence = this.occurrences.find((item) =>
       item.id === occurrenceId
       && this.documents.some((document) =>
         document.id === item.documentId && document.tenantId === tenantId,
       ));
     if (!occurrence) throw new IngestionOccurrenceNotFoundError();
-    return occurrence;
+    return toPublicOccurrence(occurrence);
   }
   async getOccurrenceProvenance(tenantId: string, occurrenceId: number): Promise<OccurrenceProvenance> {
     const occurrence = await this.getOccurrence(tenantId, occurrenceId);
@@ -292,10 +311,17 @@ export class MemoryIngestionRepository implements IngestionRepository {
     };
   }
   async reviewOccurrence(tenantId: string, occurrenceId: number, status: "approved" | "rejected"): Promise<OccurrenceReviewResult> {
-    const occurrence = await this.getOccurrence(tenantId, occurrenceId);
-    if (occurrence.status === status) return { occurrence, changed: false };
+    const occurrence = this.occurrences.find((item) =>
+      item.id === occurrenceId
+      && this.documents.some((document) =>
+        document.id === item.documentId && document.tenantId === tenantId,
+      ));
+    if (!occurrence) throw new IngestionOccurrenceNotFoundError();
+    if (occurrence.status === status) {
+      return { occurrence: toPublicOccurrence(occurrence), changed: false };
+    }
     occurrence.status = status;
-    return { occurrence, changed: true };
+    return { occurrence: toPublicOccurrence(occurrence), changed: true };
   }
   async createUploadedDocument(tenantId: string, input: {
     filename: string;
@@ -357,6 +383,7 @@ export class MemoryIngestionRepository implements IngestionRepository {
     imageKey: string | null;
     classification: string;
     adProbability: number;
+    rejections?: unknown[] | null;
     occurrences: Array<{
       bbox: Record<string, number>;
       imageKey: string;
@@ -371,6 +398,7 @@ export class MemoryIngestionRepository implements IngestionRepository {
         postalCode: string | null;
         city: string | null;
       } | null;
+      provenance?: ProcessedOccurrenceProvenance;
     }>;
   }>, options?: { includeOccurrences?: boolean }) {
     const includeOccurrences = options?.includeOccurrences ?? true;
@@ -381,43 +409,48 @@ export class MemoryIngestionRepository implements IngestionRepository {
     for (const [occurrenceId, pageId] of this.occurrencePages) {
       if (!this.pages.some((item) => item.id === pageId)) this.occurrencePages.delete(occurrenceId);
     }
-    const created = includeOccurrences
-      ? processedPages.flatMap((page) => {
-        const pageId = ++this.pageId;
-        this.pages.push({ id: pageId, documentId: document.id, pageNumber: page.pageNumber });
-        return page.occurrences.map((item) => {
-          const fingerprint = occurrenceFingerprint({
-            pageNumber: page.pageNumber,
-            company: item.company,
-            preview: item.preview,
-            bbox: item.bbox,
-          });
-          const old = previous.find((candidate) =>
-            occurrenceFingerprint(candidate) === fingerprint,
-          );
-          const occurrence = {
-            id: ++this.occurrenceId,
-            documentId: document.id,
-            dataSource: WEB_FIND_DATA_SOURCE,
-            pageNumber: page.pageNumber,
-            company: item.company,
-            preview: item.preview,
-            status: old?.status ?? "detected",
-            bbox: item.bbox,
-            imageKey: item.imageKey,
-            confidence: item.confidence,
-            evidence: item.evidence ?? [],
-            contacts: item.contacts ?? null,
-          };
-          this.occurrencePages.set(occurrence.id, pageId);
-          return occurrence;
+    const created = processedPages.flatMap((page) => {
+      const pageId = ++this.pageId;
+      this.pages.push({
+        id: pageId,
+        documentId: document.id,
+        pageNumber: page.pageNumber,
+        rejections: page.rejections ?? null,
       });
-      })
-      : [];
+      if (!includeOccurrences) return [];
+      return page.occurrences.map((item) => {
+        const fingerprint = occurrenceFingerprint({
+          pageNumber: page.pageNumber,
+          company: item.company,
+          preview: item.preview,
+          bbox: item.bbox,
+        });
+        const old = previous.find((candidate) =>
+          occurrenceFingerprint(candidate) === fingerprint,
+        );
+        const occurrence = {
+          id: ++this.occurrenceId,
+          documentId: document.id,
+          dataSource: WEB_FIND_DATA_SOURCE,
+          pageNumber: page.pageNumber,
+          company: item.company,
+          preview: item.preview,
+          status: old?.status ?? "detected",
+          bbox: item.bbox,
+          imageKey: item.imageKey,
+          confidence: item.confidence,
+          evidence: item.evidence ?? [],
+          contacts: item.contacts ?? null,
+          provenance: item.provenance ?? null,
+        };
+        this.occurrencePages.set(occurrence.id, pageId);
+        return occurrence;
+      });
+    });
     this.occurrences.push(...created);
     document.state = "processed";
     document.error = null;
-    return created;
+    return created.map(toPublicOccurrence);
   }
 
   async setDocumentState(

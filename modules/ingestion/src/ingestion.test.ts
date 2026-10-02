@@ -1640,6 +1640,47 @@ describe("Ingestion-Bestand", () => {
     expect(publishedKeys[0]).toBe(publishedKeys[1]);
   });
 
+  it("speichert Verarbeitungsablehnungen und Fundstellenherkunft intern", async () => {
+    const repository = new MemoryIngestionRepository();
+    const document = await repository.createUploadedDocument("1", {
+      filename: "provenienz.pdf",
+      sha256: "v".repeat(64),
+      storageKey: "tenants/1/originals/v/provenienz.pdf",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "upload",
+    });
+    const rejections = [{ stage: "crop_check", reason: "crop_check_nicht_bestanden" }];
+    const provenance = {
+      crop: { margin_mm: { left: 2.5 } },
+      run50: { action: "grow", model: "gpt-5.1" },
+    };
+
+    const [created] = await repository.replaceProcessedDocument("1", document.document.id, [{
+      pageNumber: 1,
+      text: "Anzeige",
+      imageKey: "page.png",
+      classification: "MIXED_CONTENT",
+      adProbability: 0.9,
+      rejections,
+      occurrences: [{
+        bbox: { x: 0, y: 0, width: 1, height: 1, confidence: 0.9 },
+        imageKey: "ad.png",
+        confidence: 0.9,
+        evidence: ["positiv:run50"],
+        company: "Muster GmbH",
+        preview: "Muster Telefon",
+        provenance,
+      }],
+    }]);
+
+    expect(repository.pages[0]?.rejections).toEqual(rejections);
+    expect(repository.occurrences[0]?.provenance).toEqual(provenance);
+    if (!created) throw new Error("Fundstelle fehlt");
+    expect(created).not.toHaveProperty("provenance");
+    expect(await repository.getOccurrence("1", created.id)).not.toHaveProperty("provenance");
+  });
+
   it("spielt beim erneuten Lauf den Übergang nach current je Fundstelle wieder ein", async () => {
     const repository = new MemoryIngestionRepository();
     const document = await repository.createUploadedDocument("1", {

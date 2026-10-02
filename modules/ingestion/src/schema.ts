@@ -45,6 +45,7 @@ export const pages = mysqlTable("ingestion_pages", {
   imageKey: varchar("image_key", { length: 1024 }),
   classification: varchar("classification", { length: 64 }),
   adProbability: float("ad_probability"),
+  rejections: json("rejections"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 export const areas = mysqlTable("ingestion_areas", {
@@ -130,6 +131,7 @@ export const occurrences = mysqlTable("ingestion_occurrences", {
   confidence: float("confidence"),
   evidence: json("evidence"),
   contacts: json("contacts"),
+  provenance: json("provenance"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 export const ingestionSchema = { sources, areas, sourceVisits, documents, classifications, pages, occurrences };

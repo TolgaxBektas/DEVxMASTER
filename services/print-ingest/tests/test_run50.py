@@ -19,6 +19,8 @@ from app.services.run50 import (
     DETECTOR_PROMPT_FILE,
     Run50PageResult,
     ResponsesClient,
+    _norm_name,
+    _same_name,
     customer_exclusion,
     detect_document,
     detect_page,
@@ -406,6 +408,31 @@ def test_document_deduplicates_same_advertiser_by_largest_crop():
     assert results[0].accepted == []
     assert len(results[1].accepted) == 1
     assert any(item.reason == "kunde_doppelt" for item in results[0].rejected)
+
+
+def test_umlaut_name_variants_deduplicate_by_largest_crop():
+    small, large = (60, 60, 250, 220), (40, 40, 560, 600)
+    pdf = _pdf([{"ads": [small]}, {"ads": [large]}])
+    pages = [
+        {"page_number": 1, "text": "", "layout": None},
+        {"page_number": 2, "text": "", "layout": None},
+    ]
+    client = FakeClient(
+        [
+            {"advertisements": [_detector_ad(small)]},
+            {"advertisements": [_detector_ad(large)]},
+        ],
+        [_verdict("Müller Haustechnik"), _verdict("Mueller Haustechnik")],
+    )
+
+    results = detect_document(pdf, pages, client, concurrency=1)
+
+    assert _norm_name("Müller GmbH") == _norm_name("Mueller GmbH") == "mueller"
+    assert _same_name("Bäckerei Groß", "Baeckerei Gross")
+    assert results[0].accepted == []
+    assert [item.company for item in results[1].accepted] == ["Mueller Haustechnik"]
+    duplicate = next(item for item in results[0].rejected if item.stage == "dedupe")
+    assert duplicate.reason == "kunde_doppelt"
 
 
 def test_order_form_detection_requires_marker_and_two_label_canonicals():

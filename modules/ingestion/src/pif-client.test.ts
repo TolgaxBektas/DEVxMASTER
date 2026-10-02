@@ -90,6 +90,7 @@ describe("PIF-Prozessclient", () => {
         classification: "EDITORIAL",
         adProbability: 0.01,
         titleCandidates: [],
+        rejections: null,
         occurrences: [],
       },
       {
@@ -99,9 +100,100 @@ describe("PIF-Prozessclient", () => {
         classification: "ADVERTISEMENT",
         adProbability: 0.99,
         titleCandidates: [],
+        rejections: null,
         occurrences: [],
       },
     ]);
+  });
+
+  it("mappt Run50- und Zuschnittdaten als Fundstellenherkunft und Seitenablehnungen", async () => {
+    const crop = { margin_mm: { left: 2.5 } };
+    const run50 = { action: "tight_bbox", model: "gpt-5.1" };
+    const rejected = [{ stage: "detector", reason: "antwort_unlesbar" }];
+    const { url } = await startServer((_request, response) => {
+      response.setHeader("content-type", "application/json");
+      response.end(
+        JSON.stringify({
+          pages: [{
+            page_number: 1,
+            text: "Anzeige",
+            image_key: null,
+            classification: "MIXED_CONTENT",
+            ad_probability: 0.8,
+            rejected,
+            occurrences: [
+              {
+                bbox: { x: 1, y: 2, width: 3, height: 4, confidence: 0.9 },
+                image_key: "ad-1.png",
+                confidence: 0.9,
+                company: "Muster GmbH",
+                preview: "Muster",
+                crop,
+                run50,
+              },
+              {
+                bbox: { x: 5, y: 6, width: 7, height: 8, confidence: 0.8 },
+                image_key: "ad-2.png",
+                confidence: 0.8,
+                company: "Beispiel AG",
+                preview: "Beispiel",
+              },
+            ],
+          }],
+        }),
+      );
+    });
+    const processor = createPifProcessor({
+      storage: storageWithPdf(new Uint8Array([37, 80, 68, 70, 45, 49])),
+      baseUrl: url,
+      serviceToken: "token",
+    });
+
+    await expect(
+      processor({ storageKey: "original.pdf", outputPrefix: "prefix" }),
+    ).resolves.toEqual([{
+      pageNumber: 1,
+      text: "Anzeige",
+      imageKey: null,
+      classification: "MIXED_CONTENT",
+      adProbability: 0.8,
+      titleCandidates: [],
+      rejections: rejected,
+      occurrences: [
+        {
+          bbox: { x: 1, y: 2, width: 3, height: 4, confidence: 0.9 },
+          imageKey: "ad-1.png",
+          confidence: 0.9,
+          evidence: [],
+          company: "Muster GmbH",
+          preview: "Muster",
+          contacts: {
+            phone: null,
+            email: null,
+            website: null,
+            postalCode: null,
+            city: null,
+          },
+          provenance: { crop, run50 },
+        },
+        {
+          bbox: { x: 5, y: 6, width: 7, height: 8, confidence: 0.8 },
+          imageKey: "ad-2.png",
+          confidence: 0.8,
+          evidence: [],
+          company: "Beispiel AG",
+          preview: "Beispiel",
+          contacts: {
+            phone: null,
+            email: null,
+            website: null,
+            postalCode: null,
+            city: null,
+          },
+          provenance: null,
+        },
+      ],
+    }]);
   });
 
   it("reicht HTTP-Fehler an responseErrorMessage weiter", async () => {

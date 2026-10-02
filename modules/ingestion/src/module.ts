@@ -69,6 +69,7 @@ export type ProcessedPage = {
   classification: string;
   adProbability: number;
   titleCandidates?: Array<{ text: string; size: number }>;
+  rejections?: unknown[] | null;
   occurrences: Array<{
     bbox: AdBoundingBox;
     imageKey: string;
@@ -77,6 +78,7 @@ export type ProcessedPage = {
     company: string;
     preview: string;
     contacts?: OccurrenceContacts;
+    provenance?: { crop?: unknown; run50?: unknown } | null;
   }>;
 };
 export type OccurrenceContacts = {

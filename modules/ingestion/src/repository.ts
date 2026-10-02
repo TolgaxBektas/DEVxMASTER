@@ -257,6 +257,7 @@ export type IngestionRepository = {
       imageKey: string | null;
       classification: string;
       adProbability: number;
+      rejections?: unknown[] | null;
       occurrences: Array<{
         bbox: Record<string, number>;
         imageKey: string;
@@ -271,6 +272,7 @@ export type IngestionRepository = {
           postalCode: string | null;
           city: string | null;
         } | null;
+        provenance?: { crop?: unknown; run50?: unknown } | null;
       }>;
     }>,
     options?: { includeOccurrences?: boolean },
