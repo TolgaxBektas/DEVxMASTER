@@ -1418,6 +1418,45 @@ describe("Ingestion-Bestand", () => {
     });
   });
 
+  it("liefert Drizzle-Fundstellen ohne interne Provenienz zurück", async () => {
+    const occurrenceRow = {
+      id: 1202,
+      tenantId: 1,
+      documentId: 1201,
+      pageId: 77,
+      dataSource: "xdata_germany",
+      company: "Muster GmbH",
+      preview: "Muster Telefon",
+      status: "detected",
+      bbox: { x: 0, y: 0, width: 1, height: 1, confidence: 0.9 },
+      imageKey: "ad.png",
+      confidence: 0.9,
+      evidence: ["positiv:run50"],
+      contacts: null,
+      provenance: { crop: { margin_mm: { left: 2.5 } }, run50: { model: "gpt-5.1" } },
+      createdAt: new Date(),
+    };
+    const query = {
+      leftJoin: () => query,
+      where: () => query,
+      orderBy: async () => [{ occurrence: occurrenceRow, pageNumber: 1 }],
+      limit: async () => [occurrenceRow],
+    };
+    const database = {
+      select: () => ({
+        from: () => query,
+      }),
+    };
+    const repository = createDrizzleIngestionRepository(database);
+
+    const [listed] = await repository.listOccurrences("1");
+    const fetched = await repository.getOccurrence("1", occurrenceRow.id);
+
+    expect(listed).toBeDefined();
+    expect(listed).not.toHaveProperty("provenance");
+    expect(fetched).not.toHaveProperty("provenance");
+  });
+
   it("liefert den übernommenen Reviewstatus auch aus der Drizzle-Fassung zurück", async () => {
     const documentRow = {
       id: 1201,

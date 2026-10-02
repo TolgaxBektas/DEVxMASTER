@@ -385,13 +385,17 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
         .leftJoin(pages, eq(pages.id, occurrences.pageId))
         .where(eq(occurrences.tenantId, Number(tenantId)))
         .orderBy(desc(occurrences.createdAt));
-      return rows.map(({ occurrence, pageNumber }) => ({
-        ...occurrence,
-        ...(pageNumber == null ? {} : { pageNumber }),
-        bbox: readBbox(occurrence.bbox),
-        evidence: Array.isArray(occurrence.evidence) ? occurrence.evidence as string[] : [],
-        contacts: readContacts(occurrence.contacts),
-      }));
+      return rows.map(({ occurrence, pageNumber }) => {
+        const { provenance, ...publicOccurrence } = occurrence;
+        void provenance;
+        return {
+          ...publicOccurrence,
+          ...(pageNumber == null ? {} : { pageNumber }),
+          bbox: readBbox(occurrence.bbox),
+          evidence: Array.isArray(occurrence.evidence) ? occurrence.evidence as string[] : [],
+          contacts: readContacts(occurrence.contacts),
+        };
+      });
     },
     async getOccurrence(tenantId, occurrenceId) {
       const row = (await database.select().from(occurrences).where(and(
@@ -399,8 +403,10 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
         eq(occurrences.tenantId, Number(tenantId)),
       )).limit(1))[0];
       if (!row) throw new IngestionOccurrenceNotFoundError();
+      const { provenance, ...publicRow } = row;
+      void provenance;
       return {
-        ...row,
+        ...publicRow,
         bbox: readBbox(row.bbox),
         evidence: Array.isArray(row.evidence) ? row.evidence as string[] : [],
         contacts: readContacts(row.contacts),
