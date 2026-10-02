@@ -435,6 +435,11 @@ def test_umlaut_name_variants_deduplicate_by_largest_crop():
     assert duplicate.reason == "kunde_doppelt"
 
 
+def test_decomposed_umlauts_normalize_before_expansion():
+    assert _norm_name("O\u0308l AG") == _norm_name("Oel AG") == "oel"
+    assert _norm_name("Mu\u0308ller GmbH") == "mueller"
+
+
 def test_order_form_detection_requires_marker_and_two_label_canonicals():
     assert is_order_form_page(
         "Anzeigenauftrag\nFirma: Beispiel GmbH\nTel.: 01234 567890\nE-Mail: info@example.de"

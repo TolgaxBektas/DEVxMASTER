@@ -541,7 +541,7 @@ def _contained(candidate, kept):
 
 
 def _norm_name(name):
-    value = (name or "").lower()
+    value = unicodedata.normalize("NFC", (name or "")).lower()
     value = value.replace("ä", "ae").replace("ö", "oe").replace("ü", "ue").replace("ß", "ss")
     value = unicodedata.normalize("NFKD", value)
     value = value.encode("ascii", "ignore").decode()
@@ -549,7 +549,7 @@ def _norm_name(name):
     tokens = [
         token
         for token in value.split()
-        if token not in {"gmbh", "kg", "ev", "e", "v", "co", "kreisverband", "wetzlar"}
+        if token not in {"ag", "gmbh", "kg", "ev", "e", "v", "co", "kreisverband", "wetzlar"}
     ]
     return " ".join(tokens)
 
