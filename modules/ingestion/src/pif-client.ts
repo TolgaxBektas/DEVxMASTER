@@ -89,6 +89,7 @@ export function createPifProcessor(input: {
         image_key: string | null;
         classification: string;
         ad_probability: number;
+        rejected?: unknown[];
         occurrences: Array<{
           bbox: {
             x: number;
@@ -109,6 +110,8 @@ export function createPifProcessor(input: {
             postal_code?: string | null;
             city?: string | null;
           };
+          crop?: unknown;
+          run50?: unknown;
         }>;
         title_candidates?: Array<{ text: string; size: number }>;
       }>;
@@ -120,21 +123,29 @@ export function createPifProcessor(input: {
       classification: page.classification,
       adProbability: page.ad_probability,
       titleCandidates: page.title_candidates ?? [],
-      occurrences: page.occurrences.map((occurrence) => ({
-        bbox: occurrence.bbox,
-        imageKey: occurrence.image_key,
-        confidence: occurrence.confidence,
-        evidence: occurrence.evidence ?? [],
-        company: occurrence.company,
-        preview: occurrence.preview,
-        contacts: {
-          phone: occurrence.contacts?.phone ?? null,
-          email: occurrence.contacts?.email ?? null,
-          website: occurrence.contacts?.website ?? null,
-          postalCode: occurrence.contacts?.postal_code ?? null,
-          city: occurrence.contacts?.city ?? null,
-        },
-      })),
+      rejections: page.rejected ?? null,
+      occurrences: page.occurrences.map((occurrence) => {
+        const provenance = {
+          ...(occurrence.crop !== undefined ? { crop: occurrence.crop } : {}),
+          ...(occurrence.run50 !== undefined ? { run50: occurrence.run50 } : {}),
+        };
+        return {
+          bbox: occurrence.bbox,
+          imageKey: occurrence.image_key,
+          confidence: occurrence.confidence,
+          evidence: occurrence.evidence ?? [],
+          company: occurrence.company,
+          preview: occurrence.preview,
+          contacts: {
+            phone: occurrence.contacts?.phone ?? null,
+            email: occurrence.contacts?.email ?? null,
+            website: occurrence.contacts?.website ?? null,
+            postalCode: occurrence.contacts?.postal_code ?? null,
+            city: occurrence.contacts?.city ?? null,
+          },
+          provenance: Object.keys(provenance).length > 0 ? provenance : null,
+        };
+      }),
     }));
     Object.defineProperty(pages, "pdfMetadata", {
       value: result.metadata
