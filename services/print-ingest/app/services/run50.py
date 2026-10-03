@@ -41,6 +41,8 @@ _RUN50_ASSOCIATION_PATTERN = re.compile(
     r"(?<!\w)e\.\s?V\.(?!\w)|\beingetragener\s+verein\b|"
     r"\b(?:förderverein|hilfsdienst|hilfe[-\s]?ring|kreisverband|ortsverband|ortsverein|partei)\b|"
     r"\b(?:freie\s+wähler|bündnis\s*90|die\s+grünen|die\s+linke)\b|"
+    r"\b(?:wählergruppe|wählergemeinschaft|bürgerliste|freiwilligenagentur)\b|"
+    r"\bunabhängige\s+\w+\s+liste\b|"
     r"(?-i:\b(?:CSU|CDU|SPD|FDP|AfD|ÖDP)\b)",
     re.I,
 )
@@ -54,6 +56,9 @@ _RUN50_PUBLIC_TEXT_PATTERN = re.compile(
     r"(?i:\b(?:markt)?gemeinde)\s+(?-i:[A-ZÄÖÜ])|"
     r"(?i:\b(?:zweckverband|verwaltungsgemeinschaft|personalverwaltung|bürgermeister(?:in)?)\b)|"
     r"(?i:\bwir\s+gemeinden\b)"
+)
+_RUN50_PUBLIC_INSTITUTION_PATTERN = re.compile(
+    r"\bvolkshochschul\w*|(?-i:\b(?:vhs|VHS)\b)", re.I
 )
 _RUN50_PUBLISHER_COMPANY_PATTERN = re.compile(
     r"\b(?:verlag\w*|mediengruppe|journal|amtsblatt|mitteilungsblatt|gemeindeblatt|anzeiger)\b",
@@ -524,6 +529,7 @@ def customer_exclusion(company: str, text: str) -> str | None:
         _PUBLIC_SENDER_PATTERN.search(company)
         or PUBLIC_ORIGIN_SIGNALS.search(company)
         or _RUN50_PUBLIC_COMPANY_PATTERN.search(company)
+        or _RUN50_PUBLIC_INSTITUTION_PATTERN.search(company)
         or _RUN50_PUBLIC_TEXT_PATTERN.search(text)
         or _has_strong_public_origin(text)
     ) and not commercially_identified:
