@@ -195,8 +195,8 @@ def test_confidence_bbox_validation_and_fraction_units():
     detector = {
         "advertisements": [
             _detector_ad(box, confidence=0.4),
-            _detector_ad(box, bbox=[10, 20, 101, 40]),
-            _detector_ad(box, bbox=[0.1, 0.1, 0.7, 0.4]),
+            _detector_ad(box, bbox=[10, 150, 70, 350]),
+            _detector_ad(box, bbox=[10, 1001, 70, 350]),
         ]
     }
     client = FakeClient([detector], [_verdict()])
@@ -204,11 +204,50 @@ def test_confidence_bbox_validation_and_fraction_units():
     result = detect_page(pdf, 1, None, client)
 
     assert len(result.accepted) == 1
-    assert result.accepted[0].region["x"] == pytest.approx(0.1)
+    accepted = result.accepted[0]
+    assert accepted.region["x"] == pytest.approx(0.1)
+    assert accepted.region["y"] == pytest.approx(0.15)
+    assert accepted.region["width"] == pytest.approx(0.6)
+    assert accepted.region["height"] == pytest.approx(0.2)
+    assert "bbox:promille_korrigiert" in accepted.region["evidence"]
+    assert accepted.run50["bbox_promille_korrigiert"] is True
     assert [rejection.reason for rejection in result.rejected] == [
         "konfidenz_unter_0_5",
-        "bbox_werte_ueber_100",
+        "bbox_werte_ueber_1000",
     ]
+
+    fraction, _ = _run_one_page(
+        pdf,
+        _detector_ad(box, bbox=[0.1, 0.1, 0.7, 0.4]),
+        [_verdict()],
+    )
+    assert len(fraction.accepted) == 1
+    assert fraction.accepted[0].region["x"] == pytest.approx(0.1)
+
+
+def test_glyph_growth_over_limit_continues_to_crop_check():
+    document = fitz.open()
+    page = document.new_page(width=600, height=800)
+    rect = (40, 60, 300, 260)
+    page.draw_rect(fitz.Rect(*rect), color=(0, 0, 0), width=1)
+    page.insert_text(
+        (50, 100), "Telefon 01234 567890 www.muster.example", fontsize=12
+    )
+    page.insert_text(
+        (280, 180),
+        "W" * 10,
+        fontsize=64,
+    )
+    pdf = document.tobytes()
+    document.close()
+
+    result, client = _run_one_page(pdf, _detector_ad(rect), [_verdict()])
+
+    assert len(result.accepted) == 1
+    accepted = result.accepted[0]
+    assert "glyph:randschnitt_zuschnittpruefung" in accepted.region["evidence"]
+    assert accepted.run50["glyph_randschnitt"]
+    assert len([call for call in client.calls if call[2] == 1600]) == 1
 
 
 def test_malformed_bbox_is_rejected():
@@ -278,10 +317,14 @@ def test_tight_bbox_repair_and_unresolved_multiple_advertisements():
     unresolved, unresolved_client = _run_one_page(
         pdf,
         _detector_ad(rect),
-        [first, _verdict(content="multiple_advertisements", foreign=["right"])],
+        [
+            first,
+            _verdict(content="multiple_advertisements", foreign=["right"]),
+            _verdict(content="multiple_advertisements", foreign=["right"]),
+        ],
     )
     assert unresolved.rejected[0].reason == "mehrere_anzeigen_nicht_trennbar"
-    assert len([call for call in unresolved_client.calls if call[2] == 1600]) == 2
+    assert len([call for call in unresolved_client.calls if call[2] == 1600]) == 3
 
 
 def test_partial_bottom_grows_checked_crop_before_second_check():
@@ -302,6 +345,50 @@ def test_partial_bottom_grows_checked_crop_before_second_check():
         rect[3] / 800
     )
     assert len([call for call in client.calls if call[2] == 1600]) == 2
+
+
+def test_crop_check_can_grow_then_tighten_in_two_repair_rounds():
+    rect = (40, 60, 560, 600)
+    pdf = _pdf([{"ads": [rect]}])
+    result, client = _run_one_page(
+        pdf,
+        _detector_ad(rect),
+        [
+            _verdict(content="partial_advertisement", cut_off=["bottom"]),
+            _verdict(content="multiple_advertisements", foreign=["right"]),
+            _verdict("Vollständige Anzeige GmbH"),
+        ],
+    )
+
+    assert len(result.accepted) == 1
+    provenance = result.accepted[0].run50
+    assert provenance["actions"] == ["grow", "tight_bbox"]
+    assert provenance["action"] == "grow"
+    assert provenance["crop_check_second"]["content"] == "multiple_advertisements"
+    assert len(provenance["crop_check_rounds"]) == 3
+    assert len([call for call in client.calls if call[2] == 1600]) == 3
+
+
+def test_crop_check_repair_limit_rejects_after_three_partial_verdicts():
+    rect = (40, 60, 560, 600)
+    pdf = _pdf([{"ads": [rect]}])
+    result, client = _run_one_page(
+        pdf,
+        _detector_ad(rect),
+        [
+            _verdict(content="partial_advertisement", cut_off=["bottom"]),
+            _verdict(content="partial_advertisement", cut_off=["bottom"]),
+            _verdict(content="partial_advertisement", cut_off=["bottom"]),
+        ],
+    )
+
+    rejection = next(item for item in result.rejected if item.stage == "crop_check")
+    assert rejection.reason == "randschnitt_nicht_behebbar"
+    assert rejection.run50["actions"] == ["grow", "grow"]
+    assert len(rejection.run50["crop_check_rounds"]) == 3
+    assert rejection.run50["glyph_randschnitt"] == []
+    assert rejection.run50["bbox_promille_korrigiert"] is False
+    assert len([call for call in client.calls if call[2] == 1600]) == 3
 
 
 def test_editorial_is_rejected_without_second_call_and_low_confidence_fails():
@@ -367,6 +454,10 @@ def test_customer_exclusions_and_commercial_charity_exceptions(
         ("CSU Winzer-Neßlbach", "", "veto:verein"),
         ("Johanniter Pflege gGmbH", "", None),
         ("Caritas Pflegedienst", "", None),
+        ("Unabhängige Thaler Liste, Oberstaufen", "", "veto:verein"),
+        ("Freiwilligenagentur Landshut (fala)", "", "veto:verein"),
+        ("vhs Volkshochschulen Nürnberger Land", "", "veto:behoerde"),
+        ("Preisliste Autohaus Müller GmbH", "", None),
         ("LINUS WITTICH MEDIEN", "", "veto:verlag"),
         ("Jobmesse Franken", "Veranstalter LINUS WITTICH Medien KG", "veto:verlag"),
         ("anzeigen.wittich.de", "", "veto:verlag"),
