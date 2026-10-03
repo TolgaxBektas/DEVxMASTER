@@ -80,6 +80,7 @@ CROP_CHECK_PROMPT_SHA256 = hashlib.sha256(
 MODEL = "gpt-5.1"
 API_URL = "https://api.openai.com/v1/responses"
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+MAX_CROP_REPAIRS = 2
 FORM_MARKERS = (
     "bürgerinfo-broschüre",
     "buergerinfo-broschuere",
@@ -260,6 +261,10 @@ def _provenance(
     first: dict | None = None,
     second: dict | None = None,
     action: str = "none",
+    rounds: list | None = None,
+    actions: list | None = None,
+    glyph_randschnitt: list | None = None,
+    bbox_promille_korrigiert: bool = False,
 ) -> dict:
     return {
         "model": MODEL,
@@ -269,6 +274,10 @@ def _provenance(
         "crop_check_first": first,
         "crop_check_second": second,
         "action": action,
+        "crop_check_rounds": list(rounds or []),
+        "actions": list(actions or []),
+        "glyph_randschnitt": list(glyph_randschnitt or []),
+        "bbox_promille_korrigiert": bbox_promille_korrigiert,
         "usage": [dict(item) for item in usage],
     }
 
@@ -297,11 +306,14 @@ def _bbox_from_detector(value, page_rect):
             for item in value
         )
     ):
-        return None, "bbox_ungueltig"
+        return None, "bbox_ungueltig", False
     numbers = [float(item) for item in value]
-    if max(numbers) > 100:
-        return None, "bbox_werte_ueber_100"
+    if max(numbers) > 1000:
+        return None, "bbox_werte_ueber_1000", False
     unit_scale = 1.0 if max(numbers) <= 1 else 0.01
+    bbox_promille_korrigiert = any(number > 100 for number in numbers)
+    if bbox_promille_korrigiert:
+        numbers = [number / 10 if number > 100 else number for number in numbers]
     x0 = page_rect.x0 + numbers[0] * unit_scale * page_rect.width
     y0 = page_rect.y0 + numbers[1] * unit_scale * page_rect.height
     x1 = page_rect.x0 + numbers[2] * unit_scale * page_rect.width
@@ -313,8 +325,8 @@ def _bbox_from_detector(value, page_rect):
         max(page_rect.y0, min(page_rect.y1, y1)),
     )
     if rect[2] <= rect[0] or rect[3] <= rect[1]:
-        return None, "bbox_ungueltig"
-    return rect, None
+        return None, "bbox_ungueltig", bbox_promille_korrigiert
+    return rect, None, bbox_promille_korrigiert
 
 
 def _glyph_boxes(page):
@@ -439,6 +451,20 @@ def _crop_check_rect(verdict, crop_info, page_rect):
         max(page_rect.y0, min(page_rect.y1, rect[3])),
     )
     return rect if rect[2] > rect[0] and rect[3] > rect[1] else None
+
+
+def _valid_crop_verdict(verdict):
+    try:
+        confidence = float(verdict.get("confidence", 0))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    return (
+        verdict.get("content") == "single_advertisement"
+        and not verdict.get("foreign_content_sides")
+        and not verdict.get("cut_off_sides")
+        and math.isfinite(confidence)
+        and confidence >= 0.7
+    )
 
 
 def _grow_checked_rect(verdict, crop_info, page_rect):
@@ -570,7 +596,17 @@ def _same_name(first, second):
 
 
 def _ad_metadata(candidate, usage, first=None, second=None, action="none"):
-    return _provenance(candidate["detector_ad"], usage, first, second, action)
+    return _provenance(
+        candidate["detector_ad"],
+        usage,
+        first,
+        second,
+        action,
+        candidate.get("crop_check_rounds"),
+        candidate.get("actions"),
+        candidate.get("glyph_randschnitt"),
+        candidate.get("bbox_promille_korrigiert", False),
+    )
 
 
 def _rejection(page_number, candidate, stage, reason, usage, company=None, first=None, second=None, action="none"):
@@ -634,12 +670,19 @@ def detect_page(
                     )
                 )
                 continue
-            before, error = _bbox_from_detector(ad.get("bbox"), page.rect)
+            before, error, bbox_promille_korrigiert = _bbox_from_detector(
+                ad.get("bbox"), page.rect
+            )
             if error:
                 result.rejected.append(
                     _rejection(
                         page_number,
-                        {"detector_ad": ad, "company": str(ad.get("company_name") or ""), "region": None},
+                        {
+                            "detector_ad": ad,
+                            "company": str(ad.get("company_name") or ""),
+                            "region": None,
+                            "bbox_promille_korrigiert": bbox_promille_korrigiert,
+                        },
                         "postprocess",
                         error,
                         page_usage,
@@ -651,23 +694,6 @@ def detect_page(
                 grown, _growth, growth_failures = _glyph_growth(before, glyphs, page.rect)
             else:
                 grown, growth_failures = before, []
-            if growth_failures and not _is_full_page(before, page.rect):
-                result.rejected.append(
-                    _rejection(
-                        page_number,
-                        {
-                            "detector_ad": ad,
-                            "company": str(ad.get("company_name") or ""),
-                            "region": _region_from_rect(
-                                grown, page.rect, confidence, str(ad.get("company_name") or "")
-                            ),
-                        },
-                        "postprocess",
-                        "randschnitt_nicht_behebbar",
-                        page_usage,
-                    )
-                )
-                continue
             if not has_text_layer:
                 grown = before
             region = _region_from_rect(
@@ -679,6 +705,8 @@ def detect_page(
                     "company": str(ad.get("company_name") or ""),
                     "region": region,
                     "rect": grown,
+                    "glyph_randschnitt": list(growth_failures),
+                    "bbox_promille_korrigiert": bbox_promille_korrigiert,
                 }
             )
 
@@ -760,6 +788,10 @@ def detect_page(
 
         for candidate in nonoverlap:
             call_usage = [detector_usage]
+            crop_check_rounds = []
+            actions = []
+            candidate["crop_check_rounds"] = crop_check_rounds
+            candidate["actions"] = actions
             first, first_raw = client.ask(
                 CROP_CHECK_PROMPT,
                 candidate["crop_png"],
@@ -768,8 +800,7 @@ def detect_page(
             first_usage = _usage(first_raw)
             page_usage.append(first_usage)
             call_usage.append(first_usage)
-            action = "none"
-            second = None
+            crop_check_rounds.append(first)
             current_png = candidate["crop_png"]
             current_info = candidate["crop_info"]
             current_region = candidate["region"]
@@ -799,49 +830,76 @@ def detect_page(
                 )
                 continue
 
-            has_foreign = bool(first.get("foreign_content_sides"))
-            if content == "multiple_advertisements" or has_foreign:
-                action = "tight_bbox"
-                repaired_rect = _crop_check_rect(first, current_info, page.rect)
-                if repaired_rect is None:
-                    result.rejected.append(
-                        _rejection(
-                            page_number,
-                            candidate,
-                            "crop_check",
-                            "mehrere_anzeigen_nicht_trennbar",
-                            call_usage,
-                            first=first,
-                            action=action,
+            final_verdict = first
+            repairs = 0
+            repair_failed = False
+            while (
+                repairs < MAX_CROP_REPAIRS
+                and isinstance(final_verdict, dict)
+                and final_verdict.get("content") not in {"editorial", "other"}
+                and not _valid_crop_verdict(final_verdict)
+            ):
+                content = final_verdict.get("content")
+                if content == "multiple_advertisements" or final_verdict.get(
+                    "foreign_content_sides"
+                ):
+                    repair_action = "tight_bbox"
+                    repaired_rect = _crop_check_rect(final_verdict, current_info, page.rect)
+                    if repaired_rect is None:
+                        actions.append(repair_action)
+                        result.rejected.append(
+                            _rejection(
+                                page_number,
+                                {**candidate, "region": current_region},
+                                "crop_check",
+                                "mehrere_anzeigen_nicht_trennbar",
+                                call_usage,
+                                first=first,
+                                second=crop_check_rounds[1]
+                                if len(crop_check_rounds) > 1
+                                else None,
+                                action=actions[0],
+                            )
                         )
+                        repair_failed = True
+                        break
+                elif content == "partial_advertisement" or final_verdict.get(
+                    "cut_off_sides"
+                ):
+                    repair_action = "grow"
+                    repaired_rect = _grow_checked_rect(
+                        final_verdict, current_info, page.rect
                     )
-                    continue
-                current_region = _region_from_rect(
-                    repaired_rect, page.rect, candidate["region"]["confidence"], candidate["company"]
-                )
-                current_png, current_info = render_region(candidate, current_region)
-            elif content == "partial_advertisement" or first.get("cut_off_sides"):
-                action = "grow"
-                repaired_rect = _grow_checked_rect(first, current_info, page.rect)
-                if repaired_rect is None:
-                    result.rejected.append(
-                        _rejection(
-                            page_number,
-                            candidate,
-                            "crop_check",
-                            "randschnitt_nicht_behebbar",
-                            call_usage,
-                            first=first,
-                            action=action,
+                    if repaired_rect is None:
+                        actions.append(repair_action)
+                        result.rejected.append(
+                            _rejection(
+                                page_number,
+                                {**candidate, "region": current_region},
+                                "crop_check",
+                                "randschnitt_nicht_behebbar",
+                                call_usage,
+                                first=first,
+                                second=crop_check_rounds[1]
+                                if len(crop_check_rounds) > 1
+                                else None,
+                                action=actions[0],
+                            )
                         )
-                    )
-                    continue
-                current_region = _region_from_rect(
-                    repaired_rect, page.rect, candidate["region"]["confidence"], candidate["company"]
-                )
-                current_png, current_info = render_region(candidate, current_region)
+                        repair_failed = True
+                        break
+                else:
+                    break
 
-            if action != "none":
+                actions.append(repair_action)
+                repairs += 1
+                current_region = _region_from_rect(
+                    repaired_rect,
+                    page.rect,
+                    candidate["region"]["confidence"],
+                    candidate["company"],
+                )
+                current_png, current_info = render_region(candidate, current_region)
                 final_candidate = {**candidate, "region": current_region}
                 width, height = _crop_size(current_png)
                 if min(width, height) < 200 or max(width, height) < 350:
@@ -853,15 +911,22 @@ def detect_page(
                             "zuschnitt_zu_klein",
                             call_usage,
                             first=first,
-                            action=action,
+                            second=crop_check_rounds[1]
+                            if len(crop_check_rounds) > 1
+                            else None,
+                            action=actions[0],
                         )
                     )
-                    continue
-                second, second_raw = client.ask(CROP_CHECK_PROMPT, current_png, 1600)
-                second_usage = _usage(second_raw)
-                page_usage.append(second_usage)
-                call_usage.append(second_usage)
-                if not isinstance(second, dict):
+                    repair_failed = True
+                    break
+                next_verdict, next_raw = client.ask(
+                    CROP_CHECK_PROMPT, current_png, 1600
+                )
+                next_usage = _usage(next_raw)
+                page_usage.append(next_usage)
+                call_usage.append(next_usage)
+                crop_check_rounds.append(next_verdict)
+                if not isinstance(next_verdict, dict):
                     result.rejected.append(
                         _rejection(
                             page_number,
@@ -870,15 +935,21 @@ def detect_page(
                             "crop_check_antwort_unlesbar",
                             call_usage,
                             first=first,
-                            second=second,
-                            action=action,
+                            second=crop_check_rounds[1]
+                            if len(crop_check_rounds) > 1
+                            else None,
+                            action=actions[0],
                         )
                     )
-                    continue
-                final_verdict = second
-            else:
-                final_verdict = first
-                final_candidate = candidate
+                    repair_failed = True
+                    break
+                final_verdict = next_verdict
+
+            if repair_failed:
+                continue
+            first_action = actions[0] if actions else "none"
+            second = crop_check_rounds[1] if len(crop_check_rounds) > 1 else None
+            final_candidate = {**candidate, "region": current_region}
 
             if final_verdict.get("content") in {"editorial", "other"}:
                 result.rejected.append(
@@ -890,7 +961,7 @@ def detect_page(
                         call_usage,
                         first=first,
                         second=second,
-                        action=action,
+                        action=first_action,
                     )
                 )
                 continue
@@ -898,19 +969,14 @@ def detect_page(
                 crop_confidence = float(final_verdict.get("confidence", 0))
             except (TypeError, ValueError):
                 crop_confidence = 0.0
-            valid = (
-                final_verdict.get("content") == "single_advertisement"
-                and not final_verdict.get("foreign_content_sides")
-                and not final_verdict.get("cut_off_sides")
-                and math.isfinite(crop_confidence)
-                and crop_confidence >= 0.7
-            )
+            valid = _valid_crop_verdict(final_verdict)
             if not valid:
+                last_action = actions[-1] if actions else "none"
                 reason = (
                     "mehrere_anzeigen_nicht_trennbar"
-                    if action == "tight_bbox"
+                    if last_action == "tight_bbox"
                     else "randschnitt_nicht_behebbar"
-                    if action == "grow"
+                    if last_action == "grow"
                     else "crop_check_nicht_bestanden"
                 )
                 result.rejected.append(
@@ -923,14 +989,14 @@ def detect_page(
                         company=str(final_verdict.get("advertiser") or ""),
                         first=first,
                         second=second,
-                        action=action,
+                        action=first_action,
                     )
                 )
                 continue
 
             final_text = (
                 _crop_text(page, current_png, current_info)
-                if action != "none"
+                if actions
                 else candidate["text"]
             )
             if not _has_contact(final_text):
@@ -947,7 +1013,7 @@ def detect_page(
                         company=str(final_verdict.get("advertiser") or ""),
                         first=first,
                         second=second,
-                        action=action,
+                        action=first_action,
                     )
                 )
                 continue
@@ -959,7 +1025,7 @@ def detect_page(
                 call_usage,
                 first,
                 second,
-                action,
+                first_action,
             )
             if exclusion:
                 result.rejected.append(
@@ -975,6 +1041,10 @@ def detect_page(
                 continue
 
             evidence = ["positiv:run50", "positiv:p3"]
+            if candidate["bbox_promille_korrigiert"]:
+                evidence.append("bbox:promille_korrigiert")
+            if candidate["glyph_randschnitt"]:
+                evidence.append("glyph:randschnitt_zuschnittpruefung")
             if _CHARITY_PATTERN.search(company):
                 evidence.append("hinweis:traeger")
             if current_info.get("shortfall"):
