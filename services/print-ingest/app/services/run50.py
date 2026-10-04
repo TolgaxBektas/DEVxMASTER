@@ -756,25 +756,6 @@ def detect_page(
                 continue
             rendered.append(candidate)
 
-        nonoverlap = []
-        for candidate in sorted(rendered, key=lambda item: -item["crop_area"]):
-            if any(
-                _contained(candidate["rect"], old["rect"])
-                or _iou(candidate["rect"], old["rect"]) > 0.4
-                for old in nonoverlap
-            ):
-                result.rejected.append(
-                    _rejection(
-                        page_number,
-                        candidate,
-                        "overlap",
-                        "ueberlappung",
-                        page_usage,
-                    )
-                )
-            else:
-                nonoverlap.append(candidate)
-
         def render_region(candidate, region):
             regions = list(page_regions)
             original_index = next(
@@ -792,7 +773,23 @@ def detect_page(
                 page_image=page_image,
             )
 
-        for candidate in nonoverlap:
+        accepted_rects = []
+        for candidate in sorted(rendered, key=lambda item: -item["crop_area"]):
+            if any(
+                _contained(candidate["rect"], rect) or _iou(candidate["rect"], rect) > 0.4
+                for rect in accepted_rects
+            ):
+                result.rejected.append(
+                    _rejection(
+                        page_number,
+                        candidate,
+                        "overlap",
+                        "ueberlappung",
+                        page_usage,
+                    )
+                )
+                continue
+
             call_usage = [detector_usage]
             crop_check_rounds = []
             actions = []
@@ -810,6 +807,7 @@ def detect_page(
             current_png = candidate["crop_png"]
             current_info = candidate["crop_info"]
             current_region = candidate["region"]
+            current_rect = candidate["rect"]
 
             if not isinstance(first, dict):
                 result.rejected.append(
@@ -905,6 +903,7 @@ def detect_page(
                     candidate["region"]["confidence"],
                     candidate["company"],
                 )
+                current_rect = repaired_rect
                 current_png, current_info = render_region(candidate, current_region)
                 final_candidate = {**candidate, "region": current_region}
                 width, height = _crop_size(current_png)
@@ -977,14 +976,17 @@ def detect_page(
                 crop_confidence = 0.0
             valid = _valid_crop_verdict(final_verdict)
             if not valid:
-                last_action = actions[-1] if actions else "none"
-                reason = (
-                    "mehrere_anzeigen_nicht_trennbar"
-                    if last_action == "tight_bbox"
-                    else "randschnitt_nicht_behebbar"
-                    if last_action == "grow"
-                    else "crop_check_nicht_bestanden"
-                )
+                content = final_verdict.get("content")
+                if content == "multiple_advertisements" or final_verdict.get(
+                    "foreign_content_sides"
+                ):
+                    reason = "mehrere_anzeigen_nicht_trennbar"
+                elif content == "partial_advertisement" or final_verdict.get(
+                    "cut_off_sides"
+                ):
+                    reason = "randschnitt_nicht_behebbar"
+                else:
+                    reason = "crop_check_nicht_bestanden"
                 result.rejected.append(
                     _rejection(
                         page_number,
@@ -1069,6 +1071,7 @@ def detect_page(
                     run50=provenance,
                 )
             )
+            accepted_rects.append(current_rect)
         return result
     finally:
         if page_image is not None:
