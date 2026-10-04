@@ -296,6 +296,29 @@ def test_contained_box_is_rejected_as_overlap():
     assert len([call for call in client.calls if call[2] == 1600]) == 1
 
 
+def test_rejected_outer_box_does_not_suppress_inner_advertisement():
+    outer = (40, 40, 550, 650)
+    inner = (300, 250, 500, 500)
+    pdf = _pdf([{"ads": [outer, inner]}])
+    client = FakeClient(
+        [{"advertisements": [_detector_ad(outer), _detector_ad(inner)]}],
+        [
+            _verdict(content="editorial"),
+            _verdict("Inner Customer GmbH"),
+        ],
+    )
+
+    result = detect_page(pdf, 1, None, client)
+
+    assert [item.company for item in result.accepted] == ["Inner Customer GmbH"]
+    assert any(
+        rejection.reason == "redaktionell_keine_anzeige"
+        for rejection in result.rejected
+    )
+    assert not any(rejection.stage == "overlap" for rejection in result.rejected)
+    assert len([call for call in client.calls if call[2] == 1600]) == 2
+
+
 def test_tight_bbox_repair_and_unresolved_multiple_advertisements():
     rect = (40, 60, 560, 600)
     pdf = _pdf([{"ads": [rect]}])
@@ -388,6 +411,44 @@ def test_crop_check_repair_limit_rejects_after_three_partial_verdicts():
     assert len(rejection.run50["crop_check_rounds"]) == 3
     assert rejection.run50["glyph_randschnitt"] == []
     assert rejection.run50["bbox_promille_korrigiert"] is False
+    assert len([call for call in client.calls if call[2] == 1600]) == 3
+
+
+def test_final_partial_verdict_controls_rejection_after_tight_bbox_repair():
+    rect = (40, 60, 560, 600)
+    pdf = _pdf([{"ads": [rect]}])
+    result, client = _run_one_page(
+        pdf,
+        _detector_ad(rect),
+        [
+            _verdict(content="partial_advertisement", cut_off=["right"]),
+            _verdict(content="multiple_advertisements", foreign=["right"]),
+            _verdict(content="partial_advertisement", cut_off=["right"]),
+        ],
+    )
+
+    rejection = next(item for item in result.rejected if item.stage == "crop_check")
+    assert rejection.reason == "randschnitt_nicht_behebbar"
+    assert rejection.run50["actions"] == ["grow", "tight_bbox"]
+    assert len([call for call in client.calls if call[2] == 1600]) == 3
+
+
+def test_final_multiple_verdict_controls_rejection_after_grow_repair():
+    rect = (40, 60, 560, 600)
+    pdf = _pdf([{"ads": [rect]}])
+    result, client = _run_one_page(
+        pdf,
+        _detector_ad(rect),
+        [
+            _verdict(content="multiple_advertisements", foreign=["right"]),
+            _verdict(content="partial_advertisement", cut_off=["right"]),
+            _verdict(content="multiple_advertisements", foreign=["right"]),
+        ],
+    )
+
+    rejection = next(item for item in result.rejected if item.stage == "crop_check")
+    assert rejection.reason == "mehrere_anzeigen_nicht_trennbar"
+    assert rejection.run50["actions"] == ["tight_bbox", "grow"]
     assert len([call for call in client.calls if call[2] == 1600]) == 3
 
 
