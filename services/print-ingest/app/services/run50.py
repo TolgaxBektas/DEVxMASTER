@@ -776,8 +776,10 @@ def detect_page(
         accepted_rects = []
         for candidate in sorted(rendered, key=lambda item: -item["crop_area"]):
             if any(
-                _contained(candidate["rect"], rect) or _iou(candidate["rect"], rect) > 0.4
-                for rect in accepted_rects
+                _contained(candidate["rect"], final)
+                or _iou(candidate["rect"], final) > 0.4
+                or _iou(candidate["rect"], original) > 0.4
+                for original, final in accepted_rects
             ):
                 result.rejected.append(
                     _rejection(
@@ -1002,6 +1004,26 @@ def detect_page(
                 )
                 continue
 
+            if any(
+                _contained(current_rect, final)
+                or _contained(final, current_rect)
+                or _iou(current_rect, final) > 0.4
+                for _, final in accepted_rects
+            ):
+                result.rejected.append(
+                    _rejection(
+                        page_number,
+                        final_candidate,
+                        "overlap",
+                        "ueberlappung",
+                        call_usage,
+                        first=first,
+                        second=second,
+                        action=first_action,
+                    )
+                )
+                continue
+
             final_text = (
                 _crop_text(page, current_png, current_info)
                 if actions
@@ -1071,7 +1093,7 @@ def detect_page(
                     run50=provenance,
                 )
             )
-            accepted_rects.append(current_rect)
+            accepted_rects.append((candidate["rect"], current_rect))
         return result
     finally:
         if page_image is not None:
