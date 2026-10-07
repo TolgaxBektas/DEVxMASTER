@@ -86,6 +86,7 @@ MODEL = "gpt-5.1"
 API_URL = "https://api.openai.com/v1/responses"
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 MAX_CROP_REPAIRS = 2
+DUPLICATE_DETECTION_IOU = 0.9
 FORM_MARKERS = (
     "bürgerinfo-broschüre",
     "buergerinfo-broschuere",
@@ -778,7 +779,7 @@ def detect_page(
             if any(
                 _contained(candidate["rect"], final)
                 or _iou(candidate["rect"], final) > 0.4
-                or _iou(candidate["rect"], original) > 0.4
+                or _iou(candidate["rect"], original) > DUPLICATE_DETECTION_IOU
                 for original, final in accepted_rects
             ):
                 result.rejected.append(
@@ -1017,6 +1018,7 @@ def detect_page(
                         "overlap",
                         "ueberlappung",
                         call_usage,
+                        company=str(final_verdict.get("advertiser") or ""),
                         first=first,
                         second=second,
                         action=first_action,
