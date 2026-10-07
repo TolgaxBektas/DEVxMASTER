@@ -342,6 +342,50 @@ def test_identical_detector_boxes_are_rejected_after_first_box_is_tightened():
     assert len([call for call in client.calls if call[2] == 1600]) == 2
 
 
+def test_overlapping_original_boxes_are_not_duplicates_after_tightening():
+    first = (40, 40, 560, 640)
+    second = (270, 40, 560, 640)
+    pdf = _pdf([{"ads": [first, second]}])
+    first_tight_verdict = _verdict(
+        "First Advertiser GmbH",
+        content="multiple_advertisements",
+        foreign=["right"],
+        tight_bbox=[0, 0, 40, 100],
+    )
+    client = FakeClient(
+        [{"advertisements": [_detector_ad(first), _detector_ad(second)]}],
+        [
+            first_tight_verdict,
+            _verdict("First Advertiser GmbH"),
+            _verdict("Second Advertiser GmbH"),
+        ],
+    )
+
+    result = detect_page(pdf, 1, None, client)
+
+    assert [item.company for item in result.accepted] == [
+        "First Advertiser GmbH",
+        "Second Advertiser GmbH",
+    ]
+    assert not any(rejection.stage == "overlap" for rejection in result.rejected)
+    assert len([call for call in client.calls if call[2] == 1600]) == 3
+
+    def rect_from_region(region):
+        return (
+            region["x"] * 600,
+            region["y"] * 800,
+            (region["x"] + region["width"]) * 600,
+            (region["y"] + region["height"]) * 800,
+        )
+
+    first_final = rect_from_region(result.accepted[0].region)
+    second_final = rect_from_region(result.accepted[1].region)
+    assert 0.4 < run50._iou(first, second) < 0.9
+    assert not run50._contained(second_final, first_final)
+    assert not run50._contained(first_final, second_final)
+    assert run50._iou(first_final, second_final) <= 0.4
+
+
 def test_repaired_boxes_are_checked_for_overlap_before_acceptance():
     first = (40, 40, 560, 760)
     second = (40, 40, 300, 400)
@@ -358,7 +402,12 @@ def test_repaired_boxes_are_checked_for_overlap_before_acceptance():
     )
     client = FakeClient(
         [{"advertisements": [_detector_ad(first), _detector_ad(second)]}],
-        [tight_verdict, _verdict(), second_tight_verdict, _verdict()],
+        [
+            tight_verdict,
+            _verdict(),
+            second_tight_verdict,
+            _verdict("Second Crop Advertiser GmbH"),
+        ],
     )
 
     result = detect_page(pdf, 1, None, client)
@@ -370,6 +419,7 @@ def test_repaired_boxes_are_checked_for_overlap_before_acceptance():
         if rejection.stage == "overlap"
     )
     assert overlap.reason == "ueberlappung"
+    assert overlap.company == "Second Crop Advertiser GmbH"
     assert len([call for call in client.calls if call[2] == 1600]) == 4
 
     def rect_from_region(region):
