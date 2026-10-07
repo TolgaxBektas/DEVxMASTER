@@ -386,6 +386,65 @@ def test_overlapping_original_boxes_are_not_duplicates_after_tightening():
     assert run50._iou(first_final, second_final) <= 0.4
 
 
+def test_neighbour_overlapping_tightened_final_box_is_crop_checked():
+    first = (40, 40, 560, 640)
+    second = (100, 40, 560, 640)
+    document = fitz.open()
+    page = document.new_page(width=600, height=800)
+    for rect in (first, second):
+        page.draw_rect(fitz.Rect(*rect), color=(0, 0, 0), width=1)
+    page.insert_text((220, 70), "First Advertiser GmbH", fontsize=12)
+    page.insert_text((220, 100), "Telefon 01234 567890", fontsize=10)
+    page.insert_text((340, 70), "Second Advertiser GmbH", fontsize=12)
+    page.insert_text((340, 100), "Telefon 09876 543210", fontsize=10)
+    pdf = document.tobytes()
+    document.close()
+    first_tight_verdict = _verdict(
+        content="multiple_advertisements",
+        foreign=["right"],
+        tight_bbox=[2.6, 0, 53.5, 100],
+    )
+    second_tight_verdict = _verdict(
+        content="multiple_advertisements",
+        foreign=["left"],
+        tight_bbox=[48, 0, 97, 100],
+    )
+    client = FakeClient(
+        [{"advertisements": [_detector_ad(first), _detector_ad(second)]}],
+        [
+            first_tight_verdict,
+            _verdict("First Advertiser GmbH"),
+            second_tight_verdict,
+            _verdict("Second Advertiser GmbH"),
+        ],
+    )
+
+    result = detect_page(pdf, 1, None, client)
+
+    assert [item.company for item in result.accepted] == [
+        "First Advertiser GmbH",
+        "Second Advertiser GmbH",
+    ]
+    assert not any(rejection.stage == "overlap" for rejection in result.rejected)
+    assert len([call for call in client.calls if call[2] == 1600]) == 4
+
+    def rect_from_region(region):
+        return (
+            region["x"] * 600,
+            region["y"] * 800,
+            (region["x"] + region["width"]) * 600,
+            (region["y"] + region["height"]) * 800,
+        )
+
+    first_final = rect_from_region(result.accepted[0].region)
+    second_final = rect_from_region(result.accepted[1].region)
+    assert 0.4 < run50._iou(first, second) < 0.9
+    assert run50._iou(second, first_final) > 0.4
+    assert not run50._contained(second_final, first_final)
+    assert not run50._contained(first_final, second_final)
+    assert run50._iou(first_final, second_final) <= 0.4
+
+
 def test_repaired_boxes_are_checked_for_overlap_before_acceptance():
     first = (40, 40, 560, 760)
     second = (40, 40, 300, 400)
