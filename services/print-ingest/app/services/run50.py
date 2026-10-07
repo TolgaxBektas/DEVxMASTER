@@ -778,7 +778,7 @@ def detect_page(
         for candidate in sorted(rendered, key=lambda item: -item["crop_area"]):
             if any(
                 _contained(candidate["rect"], final)
-                or _iou(candidate["rect"], final) > 0.4
+                or _iou(candidate["rect"], final) > DUPLICATE_DETECTION_IOU
                 or _iou(candidate["rect"], original) > DUPLICATE_DETECTION_IOU
                 for original, final in accepted_rects
             ):
