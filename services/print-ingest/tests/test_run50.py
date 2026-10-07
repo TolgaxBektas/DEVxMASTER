@@ -319,6 +319,79 @@ def test_rejected_outer_box_does_not_suppress_inner_advertisement():
     assert len([call for call in client.calls if call[2] == 1600]) == 2
 
 
+def test_identical_detector_boxes_are_rejected_after_first_box_is_tightened():
+    rect = (40, 40, 550, 650)
+    pdf = _pdf([{"ads": [rect]}])
+    tight_verdict = _verdict(
+        content="multiple_advertisements",
+        foreign=["right"],
+        tight_bbox=[0, 0, 45, 15],
+    )
+    client = FakeClient(
+        [{"advertisements": [_detector_ad(rect), _detector_ad(rect)]}],
+        [tight_verdict, _verdict()],
+    )
+
+    result = detect_page(pdf, 1, None, client)
+
+    assert len(result.accepted) == 1
+    assert any(
+        rejection.stage == "overlap" and rejection.reason == "ueberlappung"
+        for rejection in result.rejected
+    )
+    assert len([call for call in client.calls if call[2] == 1600]) == 2
+
+
+def test_repaired_boxes_are_checked_for_overlap_before_acceptance():
+    first = (40, 40, 560, 760)
+    second = (40, 40, 300, 400)
+    pdf = _pdf([{"ads": [first, second]}])
+    tight_verdict = _verdict(
+        content="multiple_advertisements",
+        foreign=["right"],
+        tight_bbox=[0, 0, 45, 15],
+    )
+    second_tight_verdict = _verdict(
+        content="multiple_advertisements",
+        foreign=["right"],
+        tight_bbox=[0, 0, 95, 95],
+    )
+    client = FakeClient(
+        [{"advertisements": [_detector_ad(first), _detector_ad(second)]}],
+        [tight_verdict, _verdict(), second_tight_verdict, _verdict()],
+    )
+
+    result = detect_page(pdf, 1, None, client)
+
+    assert len(result.accepted) == 1
+    overlap = next(
+        rejection
+        for rejection in result.rejected
+        if rejection.stage == "overlap"
+    )
+    assert overlap.reason == "ueberlappung"
+    assert len([call for call in client.calls if call[2] == 1600]) == 4
+
+    def rect_from_region(region):
+        return (
+            region["x"] * 600,
+            region["y"] * 800,
+            (region["x"] + region["width"]) * 600,
+            (region["y"] + region["height"]) * 800,
+        )
+
+    first_final = rect_from_region(result.accepted[0].region)
+    second_final = rect_from_region(overlap.region)
+    assert run50._iou(first, second) <= 0.4
+    assert not run50._contained(second, first_final)
+    assert run50._iou(second, first_final) <= 0.4
+    assert (
+        run50._contained(second_final, first_final)
+        or run50._contained(first_final, second_final)
+        or run50._iou(second_final, first_final) > 0.4
+    )
+
+
 def test_tight_bbox_repair_and_unresolved_multiple_advertisements():
     rect = (40, 60, 560, 600)
     pdf = _pdf([{"ads": [rect]}])
