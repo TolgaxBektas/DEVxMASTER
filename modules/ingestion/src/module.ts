@@ -947,6 +947,15 @@ export function createIngestionModule(deps: {
                   ?? createDrizzleIngestionRepository(db);
               const previousOccurrences = (await txRepository.listOccurrences(tenantId))
                 .filter((item) => item.documentId === document.id);
+              if (deps.enqueue && deps.reviewClient && previousOccurrences.length > 0) {
+                await deps.enqueue({
+                  name: "ingestion.review.withdraw",
+                  tenantId,
+                  payload: {
+                    occurrenceIds: previousOccurrences.map((item) => item.id),
+                  },
+                }, db);
+              }
               const previousStatus = document.actualityStatus;
               await txRepository.upsertDerivedClassification(
                 tenantId,
@@ -1067,6 +1076,40 @@ export function createIngestionModule(deps: {
         },
       },
       {
+        name: "ingestion.review.withdraw",
+        handle: async (payload, context) => {
+          if (!deps.reviewClient) {
+            throw new Error("Prüfdienst für Review-Rückzug ist nicht konfiguriert");
+          }
+          const tenantId = jobTenantId(context);
+          const numericTenantId = Number(tenantId);
+          if (!Number.isInteger(numericTenantId) || numericTenantId <= 0) {
+            throw new Error("Ungültige Mandantenkennung für Review-Rückzug");
+          }
+          const occurrenceIds = (payload as { occurrenceIds?: unknown }).occurrenceIds;
+          if (!Array.isArray(occurrenceIds)
+            || occurrenceIds.some((id) =>
+              typeof id !== "number" || !Number.isInteger(id) || id <= 0
+            )) {
+            throw new Error("Fundstellen für Review-Rückzug fehlen oder sind ungültig");
+          }
+          const withdrawn = await deps.reviewClient.withdraw(
+            numericTenantId,
+            occurrenceIds,
+          );
+          if (deps.audit) {
+            await appendAudit(deps.audit, {
+              tenantId,
+              action: "ingestion.review.withdrawn",
+              entityType: "ingestion_review",
+              actorId: null,
+              actorName: "Ingestion-Worker",
+              detailsJson: JSON.stringify({ withdrawn }),
+            });
+          }
+        },
+      },
+      {
         name: "ingestion.handoff.artwork",
         handle: async (payload, context) => {
           const tenantId = jobTenantId(context);
@@ -1142,6 +1185,10 @@ export function createIngestionModule(deps: {
             evidence: provenance.evidence,
             provenance: {
               data_source: provenance.dataSource,
+              detector: provenance.provenance
+                && Object.prototype.hasOwnProperty.call(provenance.provenance, "run50")
+                ? "run50"
+                : "heuristic",
               center_tenant_id: numericTenantId,
               center_occurrence_id: provenance.occurrenceId,
               document_sha256: provenance.document.sha256,

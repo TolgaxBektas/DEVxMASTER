@@ -241,6 +241,9 @@ export class MemoryIngestionRepository implements IngestionRepository {
   }
   async getOccurrenceProvenance(tenantId: string, occurrenceId: number): Promise<OccurrenceProvenance> {
     const occurrence = await this.getOccurrence(tenantId, occurrenceId);
+    const storedOccurrence = this.occurrences.find((item) =>
+      item.id === occurrence.id && item.documentId === occurrence.documentId,
+    );
     const document = this.documents.find((item) => item.id === occurrence.documentId && item.tenantId === tenantId);
     if (!document) throw new IngestionOccurrenceNotFoundError();
     const source = document.sourceId == null
@@ -279,6 +282,7 @@ export class MemoryIngestionRepository implements IngestionRepository {
       : null;
     return {
       occurrenceId: occurrence.id,
+      provenance: storedOccurrence?.provenance ?? null,
       dataSource: occurrence.dataSource,
       company: occurrence.company,
       preview: occurrence.preview,

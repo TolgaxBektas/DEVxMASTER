@@ -1,12 +1,12 @@
 import json
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
-from pydantic import BaseModel
-from sqlalchemy import and_, case, func, or_, select
+from pydantic import BaseModel, Field, PositiveInt
+from sqlalchemy import and_, case, func, or_, select, update
 
 from app.api.auth import require_compat_auth
 from app.api.dependencies import session_dependency, storage_dependency
@@ -21,6 +21,11 @@ router = APIRouter(prefix="/api/v1/reviews", tags=["compatibility-review"])
 class ReviewDecision(BaseModel):
     decision: str
     note: str | None = None
+
+
+class ReviewWithdrawal(BaseModel):
+    center_tenant_id: PositiveInt
+    center_occurrence_ids: list[PositiveInt] = Field(max_length=2000)
 
 
 def _data_source(
@@ -206,6 +211,11 @@ def _area_provenance(occurrence: AdOccurrence | None) -> dict[str, Any]:
     return provenance if isinstance(provenance, dict) else {}
 
 
+def _detector_provenance(occurrence: AdOccurrence | None) -> str:
+    detector = _area_provenance(occurrence).get("detector")
+    return detector if detector in {"heuristic", "run50"} else "heuristic"
+
+
 def _bbox(value: str) -> Any:
     try:
         return json.loads(value)
@@ -232,6 +242,7 @@ def _payload(item, occurrence, page, document, company, storage) -> dict[str, An
         "area_name",
         "area_ags",
         "area_state",
+        "detector",
         "source_url",
         "document_filename",
         "publication",
@@ -341,6 +352,7 @@ def open_reviews(
     storage=Depends(storage_dependency),
     data_source: str | None = Query(None),
     area_ags: str | None = Query(None, pattern=r"^\d{5}$"),
+    detector: Literal["heuristic", "run50"] | None = Query(None),
     limit: int | None = Query(None, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ):
@@ -352,6 +364,11 @@ def open_reviews(
             for row in rows
             if _area_provenance(row[1]).get("area_ags") == area_ags
         ]
+    if detector is not None:
+        rows = [
+            row for row in rows
+            if _detector_provenance(row[1]) == detector
+        ]
     rows = rows[offset : offset + limit if limit is not None else None]
     return [_payload(*row, storage) for row in rows]
 
@@ -360,9 +377,15 @@ def open_reviews(
 def open_reviews_summary(
     session=Depends(session_dependency),
     data_source: str | None = Query(None),
+    detector: Literal["heuristic", "run50"] | None = Query(None),
 ):
     _validate_data_source(data_source)
     rows = session.execute(_open_query(data_source)).all()
+    if detector is not None:
+        rows = [
+            row for row in rows
+            if _detector_provenance(row[1]) == detector
+        ]
     areas: dict[str | None, dict[str, Any]] = {}
     for row in rows:
         provenance = _area_provenance(row[1])
@@ -384,6 +407,33 @@ def open_reviews_summary(
             key=lambda area: (-area["count"], area["area_ags"] or ""),
         ),
     }
+
+
+@router.post("/withdraw", dependencies=[Depends(require_compat_auth)])
+def withdraw_reviews(
+    payload: ReviewWithdrawal,
+    session=Depends(session_dependency),
+):
+    occurrence_keys = [
+        f"center:{payload.center_tenant_id}:{occurrence_id}"
+        for occurrence_id in set(payload.center_occurrence_ids)
+    ]
+    if not occurrence_keys:
+        return {"withdrawn": 0}
+    result = session.execute(
+        update(ReviewItem)
+        .where(
+            ReviewItem.status == "pending",
+            ReviewItem.ad_id.in_(
+                select(AdOccurrence.id).where(
+                    AdOccurrence.occurrence_key.in_(occurrence_keys)
+                )
+            ),
+        )
+        .values(status="withdrawn")
+    )
+    session.commit()
+    return {"withdrawn": result.rowcount or 0}
 
 
 @router.get("/{item_id}", dependencies=[Depends(require_compat_auth)])

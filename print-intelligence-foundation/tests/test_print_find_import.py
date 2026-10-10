@@ -126,6 +126,26 @@ def test_print_find_import_creates_pending_review_and_is_open(tmp_path):
         app.dependency_overrides.clear()
 
 
+def test_print_find_import_persists_detector_provenance(tmp_path):
+    client, factory = _client(tmp_path)
+    try:
+        manifest = _manifest()
+        manifest["provenance"]["detector"] = "run50"
+        response = client.post("/imports/print-find", files=_files(manifest))
+        assert response.status_code == 200
+        ad_id = response.json()["ad_id"]
+        with factory() as session:
+            occurrence = session.get(AdOccurrence, ad_id)
+            assert occurrence is not None
+            metadata = json.loads(occurrence.artwork_metadata_json)
+            assert metadata["provenance"]["detector"] == "run50"
+        review = client.get("/api/v1/reviews/open")
+        assert review.status_code == 200
+        assert review.json()[0]["provenance"]["detector"] == "run50"
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_print_find_import_deduplicates_and_keeps_decision(tmp_path):
     client, factory = _client(tmp_path)
     try:

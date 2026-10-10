@@ -11,6 +11,7 @@ import { createConfiguredStorage } from "@xmaster-center/integrations";
 import {
   createArtworkHandoffClient,
   createPifProcessor,
+  createPifReviewClient,
 } from "@xmaster-center/module-ingestion";
 import {
   DrizzleQueueRepository,
@@ -91,6 +92,14 @@ const ingestion = createIngestionModule({
   db,
   audit,
   storage,
+  ...(env.ARTWORK_SERVICE_TOKEN
+    ? {
+        reviewClient: createPifReviewClient({
+          baseUrl: env.ARTWORK_BASE_URL,
+          serviceToken: env.ARTWORK_SERVICE_TOKEN,
+        }),
+      }
+    : {}),
   transaction: (callback) => db.transaction(callback),
   repositoryForTransaction: (transactionDb) => createDrizzleIngestionRepository(transactionDb),
   enqueue: (input, executor) => queue.enqueue({

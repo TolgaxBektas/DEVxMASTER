@@ -210,6 +210,164 @@ def test_open_review_area_filter_pagination_and_summary(tmp_path, monkeypatch):
         app.dependency_overrides.clear()
 
 
+def test_detector_filter_defaults_missing_provenance_to_heuristic(tmp_path, monkeypatch):
+    client, factory = _client(tmp_path, monkeypatch)
+    try:
+        cases = [
+            ("Legacy", 1, {"area_ags": "09161", "area_name": "Legacy"}),
+            (
+                "Heuristic",
+                2,
+                {
+                    "area_ags": "09162",
+                    "area_name": "Heuristic",
+                    "detector": "heuristic",
+                },
+            ),
+            (
+                "Run50",
+                3,
+                {
+                    "area_ags": "09162",
+                    "area_name": "Run50",
+                    "detector": "run50",
+                },
+            ),
+        ]
+        for name, page, provenance in cases:
+            imported = _import(client, _metadata(name, page))
+            assert imported.status_code == 200
+            _set_provenance(factory, imported.json()["ad_id"], provenance)
+
+        headers = {"x-service-token": "review-token"}
+        run50 = client.get(
+            "/api/v1/reviews/open?detector=run50",
+            headers=headers,
+        )
+        heuristic = client.get(
+            "/api/v1/reviews/open?detector=heuristic",
+            headers=headers,
+        )
+        assert [item["company"]["name"] for item in run50.json()] == ["Run50"]
+        assert [item["company"]["name"] for item in heuristic.json()] == [
+            "Legacy",
+            "Heuristic",
+        ]
+
+        run50_summary = client.get(
+            "/api/v1/reviews/open/summary?detector=run50",
+            headers=headers,
+        )
+        heuristic_summary = client.get(
+            "/api/v1/reviews/open/summary?detector=heuristic",
+            headers=headers,
+        )
+        assert run50_summary.json() == {
+            "total": 1,
+            "areas": [
+                {"area_ags": "09162", "area_name": "Run50", "count": 1},
+            ],
+        }
+        assert heuristic_summary.json()["total"] == 2
+
+        assert client.get(
+            "/api/v1/reviews/open?detector=other",
+            headers=headers,
+        ).status_code == 422
+        assert client.get(
+            "/api/v1/reviews/open/summary?detector=other",
+            headers=headers,
+        ).status_code == 422
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_withdraw_reviews_is_pending_only_idempotent_and_leaves_no_next_case(
+    tmp_path, monkeypatch
+):
+    client, factory = _client(tmp_path, monkeypatch)
+    headers = {"x-service-token": "review-token"}
+    try:
+        review_ids = {}
+        for center_id, name in [
+            (501, "Already approved"),
+            (502, "Withdraw one"),
+            (503, "Withdraw two"),
+            (504, "Remaining pending"),
+        ]:
+            imported = _import(client, _metadata(name, center_id))
+            assert imported.status_code == 200
+            review_id = imported.json()["ad_id"]
+            review_ids[center_id] = review_id
+            with factory() as session:
+                occurrence = session.get(AdOccurrence, review_id)
+                assert occurrence is not None
+                occurrence.occurrence_key = f"center:7:{center_id}"
+                session.commit()
+
+        approved = client.post(
+            f"/api/v1/reviews/{review_ids[501]}/decision",
+            headers=headers,
+            json={"decision": "approve"},
+        )
+        assert approved.status_code == 200
+
+        body = {
+            "center_tenant_id": 7,
+            "center_occurrence_ids": [501, 502, 503],
+        }
+        withdrawn = client.post(
+            "/api/v1/reviews/withdraw",
+            headers=headers,
+            json=body,
+        )
+        assert withdrawn.status_code == 200
+        assert withdrawn.json() == {"withdrawn": 2}
+        repeated = client.post(
+            "/api/v1/reviews/withdraw",
+            headers=headers,
+            json=body,
+        )
+        assert repeated.json() == {"withdrawn": 0}
+
+        assert client.get(
+            f"/api/v1/reviews/{review_ids[501]}",
+            headers=headers,
+        ).json()["status"] == "approved"
+        remaining = client.post(
+            f"/api/v1/reviews/{review_ids[504]}/decision",
+            headers=headers,
+            json={"decision": "approve"},
+        )
+        assert remaining.status_code == 200
+        assert remaining.json()["next_open_id"] is None
+        assert client.get("/api/v1/reviews/open", headers=headers).json() == []
+        assert client.get(
+            "/api/v1/reviews/open/summary",
+            headers=headers,
+        ).json()["total"] == 0
+        assert client.post(
+            "/api/v1/reviews/withdraw",
+            headers=headers,
+            json={"center_tenant_id": 0, "center_occurrence_ids": [1]},
+        ).status_code == 422
+        assert client.post(
+            "/api/v1/reviews/withdraw",
+            headers=headers,
+            json={"center_tenant_id": 7, "center_occurrence_ids": [0]},
+        ).status_code == 422
+        assert client.post(
+            "/api/v1/reviews/withdraw",
+            headers=headers,
+            json={
+                "center_tenant_id": 7,
+                "center_occurrence_ids": list(range(1, 2002)),
+            },
+        ).status_code == 422
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_case_source_stays_germany_when_company_is_high_quality(tmp_path, monkeypatch):
     client, factory = _client(tmp_path, monkeypatch)
     try:

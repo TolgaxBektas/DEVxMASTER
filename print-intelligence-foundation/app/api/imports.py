@@ -45,6 +45,7 @@ class PrintFindProvenance(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     data_source: Literal["xdata_nb_high_quality", "xdata_germany"] = XDATA_GERMANY
+    detector: Literal["heuristic", "run50"] | None = None
     center_tenant_id: PositiveInt
     center_occurrence_id: PositiveInt
     document_sha256: str = Field(min_length=64, max_length=64)

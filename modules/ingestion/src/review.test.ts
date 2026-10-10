@@ -41,6 +41,7 @@ function setup(tenantId = "1") {
     openSummary: vi.fn(async () => ({ total: 1, areas: [] })),
     get: vi.fn(async () => review),
     decide: vi.fn(async () => ({ id: 7, status: "approved", note: null, next_open_id: null })),
+    withdraw: vi.fn(async () => 0),
     image: vi.fn(async () => new Uint8Array([1, 2, 3])),
   };
   const context: AuthContext = {
@@ -71,17 +72,19 @@ describe("Ingestion-Prüfung", () => {
     });
   });
 
-  it("reicht den Quellfilter an die Data Factory weiter", async () => {
+  it("reicht Quell- und Erkennungsfilter an die Data Factory weiter", async () => {
     const { caller, client } = setup();
     await caller.review.list({
       data_source: "xdata_germany",
       area_ags: "09162",
+      detector: "run50",
       limit: 100,
       offset: 200,
     });
     expect(client.listOpen).toHaveBeenCalledWith({
       dataSource: "xdata_germany",
       areaAgs: "09162",
+      detector: "run50",
       limit: 100,
       offset: 200,
     });
@@ -89,12 +92,15 @@ describe("Ingestion-Prüfung", () => {
 
   it("liefert Zusammenfassung für konfigurierte Prüffälle", async () => {
     const { caller, client } = setup();
-    await expect(caller.review.summary({ data_source: "xdata_germany" })).resolves.toMatchObject({
+    await expect(caller.review.summary({
+      data_source: "xdata_germany",
+      detector: "run50",
+    })).resolves.toMatchObject({
       enabled: true,
       total: 1,
       areas: [],
     });
-    expect(client.openSummary).toHaveBeenCalledWith("xdata_germany");
+    expect(client.openSummary).toHaveBeenCalledWith("xdata_germany", "run50");
   });
 
   it("grenzt fremde Mandanten ab", async () => {
@@ -166,7 +172,7 @@ describe("Ingestion-Prüfung", () => {
     }
   });
 
-  it("überträgt Gebietsfilter, Seitengröße und Offset als Queryparameter", async () => {
+  it("überträgt Prüfungsfilter, Seitengröße und Offset als Queryparameter", async () => {
     const requests: string[] = [];
     vi.stubGlobal("fetch", vi.fn(async (url: string) => {
       requests.push(url);
@@ -183,22 +189,55 @@ describe("Ingestion-Prüfung", () => {
       await client.listOpen({
         dataSource: "xdata_germany",
         areaAgs: "09162",
+        detector: "run50",
         limit: 100,
         offset: 200,
       });
-      await client.openSummary("xdata_germany");
+      await client.openSummary("xdata_germany", "run50");
 
       const listUrl = new URL(requests[0] ?? "");
       expect(listUrl.pathname).toBe("/api/v1/reviews/open");
       expect([...listUrl.searchParams.entries()]).toEqual([
         ["data_source", "xdata_germany"],
         ["area_ags", "09162"],
+        ["detector", "run50"],
         ["limit", "100"],
         ["offset", "200"],
       ]);
       const summaryUrl = new URL(requests[1] ?? "");
       expect(summaryUrl.pathname).toBe("/api/v1/reviews/open/summary");
       expect(summaryUrl.searchParams.get("data_source")).toBe("xdata_germany");
+      expect(summaryUrl.searchParams.get("detector")).toBe("run50");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("teilt Review-Rückzüge in Anfragen mit höchstens 2.000 IDs", async () => {
+    const requests: Array<{ url: string; body: unknown }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      requests.push({
+        url,
+        body: JSON.parse(String(init?.body ?? "{}")),
+      });
+      const idCount = (requests.at(-1)?.body as { center_occurrence_ids: number[] })
+        .center_occurrence_ids.length;
+      return new Response(JSON.stringify({ withdrawn: idCount }), { status: 200 });
+    }));
+    try {
+      const client = createPifReviewClient({
+        baseUrl: "http://pif.test",
+        serviceToken: "test-token",
+      });
+      await expect(client.withdraw(7, Array.from({ length: 2001 }, (_, index) => index + 1)))
+        .resolves.toBe(2001);
+      expect(requests).toHaveLength(2);
+      expect(requests.map(({ body }) =>
+        (body as { center_occurrence_ids: number[] }).center_occurrence_ids.length,
+      )).toEqual([2000, 1]);
+      expect(requests.map(({ body }) =>
+        (body as { center_tenant_id: number }).center_tenant_id,
+      )).toEqual([7, 7]);
     } finally {
       vi.unstubAllGlobals();
     }

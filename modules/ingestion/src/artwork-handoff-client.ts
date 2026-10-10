@@ -6,6 +6,7 @@ export type ArtworkHandoffManifest = {
   evidence: string[];
   provenance: {
     data_source: string;
+    detector: "heuristic" | "run50";
     center_tenant_id: number;
     center_occurrence_id: number;
     document_sha256: string;

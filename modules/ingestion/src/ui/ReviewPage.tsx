@@ -21,6 +21,7 @@ type Review = {
     area_name?: string;
     area_ags?: string;
     area_state?: string;
+    detector?: "heuristic" | "run50";
     source_url?: string;
     document_filename?: string;
     publication?: string;
@@ -93,6 +94,7 @@ const SOURCE_LABELS: Record<DataSource, string> = {
 
 export type ReviewTabState = {
   areaAgs: Partial<Record<DataSource, string>>;
+  detector: Partial<Record<DataSource, "" | "run50">>;
   page: Partial<Record<DataSource, number>>;
   selectedIds: Partial<Record<DataSource, number | null>>;
 };
@@ -100,6 +102,7 @@ export type ReviewTabState = {
 export function reviewTabStateFor(state: ReviewTabState, source: DataSource) {
   return {
     areaAgs: state.areaAgs[source] ?? "",
+    detector: state.detector[source] ?? "",
     page: state.page[source] ?? 0,
     selectedId: state.selectedIds[source] ?? null,
   };
@@ -111,7 +114,21 @@ export function updateReviewArea(
   areaAgs: string,
 ): ReviewTabState {
   return {
+    ...state,
     areaAgs: { ...state.areaAgs, [source]: areaAgs },
+    page: { ...state.page, [source]: 0 },
+    selectedIds: { ...state.selectedIds, [source]: null },
+  };
+}
+
+export function updateReviewDetector(
+  state: ReviewTabState,
+  source: DataSource,
+  detector: "" | "run50",
+): ReviewTabState {
+  return {
+    ...state,
+    detector: { ...state.detector, [source]: detector },
     page: { ...state.page, [source]: 0 },
     selectedIds: { ...state.selectedIds, [source]: null },
   };
@@ -141,12 +158,18 @@ export function updateReviewSelection(
 }
 
 export function reviewListQueryInput(state: ReviewTabState, source: DataSource) {
-  const { areaAgs, page } = reviewTabStateFor(state, source);
+  const { areaAgs, detector, page } = reviewTabStateFor(state, source);
   return {
     ...(areaAgs ? { area_ags: areaAgs } : {}),
+    ...(detector ? { detector } : {}),
     limit: REVIEW_PAGE_SIZE,
     offset: page * REVIEW_PAGE_SIZE,
   };
+}
+
+export function reviewSummaryQueryInput(state: ReviewTabState, source: DataSource) {
+  const detector = reviewTabStateFor(state, source).detector;
+  return detector ? { detector } : {};
 }
 
 const FIELD_LABELS: Record<string, string> = {
@@ -419,20 +442,27 @@ export function ReviewPage({ api }: ModulePageProps) {
   const [activeSource, setActiveSource] = useState<DataSource>("xdata_nb_high_quality");
   const [sourceState, setSourceState] = useState<ReviewTabState>({
     areaAgs: {},
+    detector: {},
     page: {},
     selectedIds: {},
   });
   const activeTab = reviewTabStateFor(sourceState, activeSource);
-  const { areaAgs, page } = activeTab;
+  const { areaAgs, detector, page } = activeTab;
   const highQualitySummary = useModuleQuery<ReviewSummary>(
     api,
     "modules.ingestion.review.summary",
-    { data_source: "xdata_nb_high_quality" },
+    {
+      data_source: "xdata_nb_high_quality",
+      ...reviewSummaryQueryInput(sourceState, "xdata_nb_high_quality"),
+    },
   );
   const germanySummary = useModuleQuery<ReviewSummary>(
     api,
     "modules.ingestion.review.summary",
-    { data_source: "xdata_germany" },
+    {
+      data_source: "xdata_germany",
+      ...reviewSummaryQueryInput(sourceState, "xdata_germany"),
+    },
   );
   const highQualityListInput = reviewListQueryInput(sourceState, "xdata_nb_high_quality");
   const germanyListInput = reviewListQueryInput(sourceState, "xdata_germany");
@@ -611,6 +641,25 @@ export function ReviewPage({ api }: ModulePageProps) {
             {option.label}
           </option>
         ))}
+      </select>
+      <label htmlFor="review-detector">Erkennung</label>
+      <select
+        className="ui-input"
+        id="review-detector"
+        value={detector}
+        onChange={(event) => {
+          lastNavigationAt.current = Date.now();
+          setSourceState((current) =>
+            updateReviewDetector(
+              current,
+              activeSource,
+              event.target.value as "" | "run50",
+            ),
+          );
+        }}
+      >
+        <option value="">Alle Funde</option>
+        <option value="run50">Nur neue Anzeigenerkennung (Run50)</option>
       </select>
       <Button
         disabled={page === 0}
