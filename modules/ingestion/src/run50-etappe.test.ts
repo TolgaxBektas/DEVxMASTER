@@ -46,34 +46,37 @@ describe("Run50-Etappenplanung", () => {
     expect(run50EtappeTargetPages(1, 0.1)).toBe(1);
   });
 
-  it("wählt deterministisch rundenweise nach AGS und SHA-256 bis zum Ziel", () => {
-    const candidate = (
-      documentId: number,
-      ags: string,
-      sha256: string,
-      pages: number,
-    ): Run50EtappeCandidate => ({
-      documentId,
-      ags,
-      areaName: `Gebiet ${ags}`,
-      pages,
-      filename: `${documentId}.pdf`,
-      sha256,
-    });
-    const candidates = [
-      candidate(2, "00100", "b", 3),
-      candidate(9, "00100", "a", 1),
-      candidate(1, "00100", "a", 4),
-      candidate(4, "00200", "z", 1),
-      candidate(3, "00200", "a", 5),
-      candidate(6, "00200", "zz", 100),
-      candidate(5, "00300", "a", 2),
-    ];
+  const candidates: Run50EtappeCandidate[] = Array.from({ length: 10 }, (_, index) => ({
+    documentId: index + 1,
+    ags: "09162",
+    areaName: "Passau",
+    pages: 1,
+    filename: `${index + 1}.pdf`,
+    sha256: String(index + 1).padStart(64, "0"),
+  }));
 
-    const selected = selectRun50EtappeDocuments(candidates, 15);
-    expect(selected.map((item) => item.documentId)).toEqual([1, 3, 5, 9, 4, 2]);
-    expect(selected.reduce((total, item) => total + item.pages, 0)).toBe(16);
-    expect(selected.some((item) => item.documentId === 6)).toBe(false);
-    expect(selectRun50EtappeDocuments(candidates, 0)).toEqual([]);
+  it("ist für dieselbe Etappe deterministisch und variiert zwischen Etappen", () => {
+    const firstEtappe = selectRun50EtappeDocuments(candidates, 10, "stage-1")
+      .map((item) => item.documentId);
+    expect(selectRun50EtappeDocuments(candidates, 10, "stage-1").map((item) => item.documentId))
+      .toEqual(firstEtappe);
+    expect(selectRun50EtappeDocuments(candidates, 10, "stage-2").map((item) => item.documentId))
+      .not.toEqual(firstEtappe);
+  });
+
+  it("stoppt unmittelbar, sobald die Zielseitenzahl erreicht ist", () => {
+    const selected = selectRun50EtappeDocuments(
+      candidates.map((item) => ({ ...item, pages: 2 })),
+      3,
+      "stage-1",
+    );
+    expect(selected).toHaveLength(2);
+    expect(selected.reduce((total, item) => total + item.pages, 0)).toBe(4);
+  });
+
+  it("gibt bei einem unerreichbaren Ziel alle Kandidaten zurück und bei Ziel höchstens null keine", () => {
+    expect(selectRun50EtappeDocuments(candidates, 11, "stage-1")).toHaveLength(10);
+    expect(selectRun50EtappeDocuments(candidates, 0, "stage-1")).toEqual([]);
+    expect(selectRun50EtappeDocuments(candidates, -1, "stage-1")).toEqual([]);
   });
 });

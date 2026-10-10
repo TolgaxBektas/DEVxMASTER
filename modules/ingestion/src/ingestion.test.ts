@@ -1757,6 +1757,14 @@ describe("Ingestion-Bestand", () => {
       processDocument: async ({ documentId }) =>
         documentId === acceptedDocument.document.id ? acceptedPages : rejectedPages,
       publish: async () => undefined,
+      reviewClient: {
+        listOpen: async () => [],
+        openSummary: async () => ({ total: 0, areas: [] }),
+        get: async () => { throw new Error("not used"); },
+        decide: async () => { throw new Error("not used"); },
+        withdraw: async () => 0,
+        image: async () => new Uint8Array(),
+      },
       enqueue,
     });
     const job = module.jobs.find((item) => item.name === "ingestion.processing.run");
@@ -1783,6 +1791,62 @@ describe("Ingestion-Bestand", () => {
     }, transactionExecutor);
     expect((await repository.getDocument("1", rejectedDocument.document.id)).state)
       .toBe("rejected");
+  });
+
+  it("reiht keinen Rückzug ein, wenn kein Prüfdienst konfiguriert ist", async () => {
+    const repository = new MemoryIngestionRepository();
+    const document = await repository.createUploadedDocument("1", {
+      filename: "ohne-pruefdienst.pdf",
+      sha256: "y".repeat(64),
+      storageKey: "ohne-pruefdienst",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "upload",
+    });
+    await repository.replaceProcessedDocument("1", document.document.id, [{
+      pageNumber: 1,
+      text: "Alte Anzeige",
+      imageKey: "old.png",
+      classification: "MIXED_CONTENT",
+      adProbability: 0.9,
+      occurrences: [{
+        bbox: { x: 0, y: 0, width: 1, height: 1, confidence: 0.9 },
+        imageKey: "old-ad.png",
+        confidence: 0.9,
+        evidence: ["positiv:p2"],
+        company: "Alt GmbH",
+        preview: "Alt GmbH Telefon",
+      }],
+    }]);
+    document.document.state = "uploaded";
+    const transactionExecutor = {};
+    const enqueue = vi.fn(async (_input: unknown, _executor?: unknown) => undefined);
+    const module = createIngestionModule({
+      repository,
+      repositoryForTransaction: () => repository,
+      transaction: async (callback) => callback(transactionExecutor),
+      processDocument: async () => [{
+        pageNumber: 1,
+        text: "Keine Anzeige",
+        imageKey: "new.png",
+        classification: "EDITORIAL",
+        adProbability: 0.1,
+        occurrences: [],
+      }],
+      publish: async () => undefined,
+      enqueue,
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.processing.run");
+    if (!job) throw new Error("Verarbeitungsjob fehlt");
+
+    await job.handle(
+      { documentId: document.document.id },
+      context("1", { documentId: document.document.id }),
+    );
+
+    expect(enqueue.mock.calls.some(([input]) =>
+      (input as { name?: string }).name === "ingestion.review.withdraw"
+    )).toBe(false);
   });
 
   it("führt den Rückzugsjob mit Audit aus und scheitert ohne Prüfdienst sichtbar", async () => {

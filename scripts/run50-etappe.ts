@@ -98,7 +98,7 @@ async function main() {
       areaName: row.areaName,
       pages: Number(row.pages),
     }));
-    const selected = selectRun50EtappeDocuments(candidates, targetPages);
+    const selected = selectRun50EtappeDocuments(candidates, targetPages, etappe);
     const selectedPages = selected.reduce((sum, item) => sum + item.pages, 0);
 
     console.log(`Etappe: ${etappe}`);

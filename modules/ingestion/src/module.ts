@@ -947,7 +947,7 @@ export function createIngestionModule(deps: {
                   ?? createDrizzleIngestionRepository(db);
               const previousOccurrences = (await txRepository.listOccurrences(tenantId))
                 .filter((item) => item.documentId === document.id);
-              if (deps.enqueue && previousOccurrences.length > 0) {
+              if (deps.enqueue && deps.reviewClient && previousOccurrences.length > 0) {
                 await deps.enqueue({
                   name: "ingestion.review.withdraw",
                   tenantId,

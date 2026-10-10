@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export type Run50EtappeArguments = {
   tenantId: number;
   etappe: string;
@@ -87,41 +89,25 @@ export function run50EtappeTargetPages(totalProcessedPages: number, anteil: numb
 export function selectRun50EtappeDocuments(
   candidates: Run50EtappeCandidate[],
   targetPages: number,
+  etappe: string,
 ): Run50EtappeCandidate[] {
   if (targetPages <= 0) return [];
-  const byArea = new Map<string, Run50EtappeCandidate[]>();
-  for (const candidate of candidates) {
-    const documents = byArea.get(candidate.ags) ?? [];
-    documents.push(candidate);
-    byArea.set(candidate.ags, documents);
-  }
-
-  const areas = [...byArea.keys()].sort();
-  for (const documents of byArea.values()) {
-    documents.sort((left, right) =>
-      left.sha256 < right.sha256 ? -1
-        : left.sha256 > right.sha256 ? 1
-          : left.documentId - right.documentId,
-    );
-  }
-
-  const nextIndex = new Map(areas.map((ags) => [ags, 0]));
+  const orderedCandidates = candidates.map((candidate) => ({
+    candidate,
+    order: createHash("sha256")
+      .update(`${etappe}:${candidate.sha256}`)
+      .digest("hex"),
+  })).sort((left, right) =>
+    left.order < right.order ? -1
+      : left.order > right.order ? 1
+        : left.candidate.documentId - right.candidate.documentId,
+  );
   const selected: Run50EtappeCandidate[] = [];
   let selectedPages = 0;
-  while (selectedPages < targetPages) {
-    let addedInRound = false;
-    for (const ags of areas) {
-      const documents = byArea.get(ags) ?? [];
-      const index = nextIndex.get(ags) ?? 0;
-      const candidate = documents[index];
-      if (!candidate) continue;
-      selected.push(candidate);
-      selectedPages += candidate.pages;
-      nextIndex.set(ags, index + 1);
-      addedInRound = true;
-      if (selectedPages >= targetPages) return selected;
-    }
-    if (!addedInRound) break;
+  for (const { candidate } of orderedCandidates) {
+    selected.push(candidate);
+    selectedPages += candidate.pages;
+    if (selectedPages >= targetPages) return selected;
   }
   return selected;
 }
