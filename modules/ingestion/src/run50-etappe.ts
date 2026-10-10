@@ -5,6 +5,7 @@ export type Run50EtappeArguments = {
   etappe: string;
   anteil: number;
   apply: boolean;
+  maxPages?: number;
 };
 
 export type Run50EtappeCandidate = {
@@ -20,6 +21,7 @@ export function parseRun50EtappeArguments(args: string[]): Run50EtappeArguments 
   let tenantValue: string | undefined;
   let etappe: string | undefined;
   let anteilValue: string | undefined;
+  let maxPagesValue: string | undefined;
   let apply = false;
   let applySeen = false;
 
@@ -31,7 +33,7 @@ export function parseRun50EtappeArguments(args: string[]): Run50EtappeArguments 
       applySeen = true;
       continue;
     }
-    if (!["--mandant", "--etappe", "--anteil"].includes(argument ?? "")) {
+    if (!["--mandant", "--etappe", "--anteil", "--max-seiten"].includes(argument ?? "")) {
       throw new Error(`Unbekanntes Argument: ${argument}`);
     }
 
@@ -51,11 +53,16 @@ export function parseRun50EtappeArguments(args: string[]): Run50EtappeArguments 
         throw new Error("--etappe darf nur einmal angegeben werden.");
       }
       etappe = value;
-    } else {
+    } else if (argument === "--anteil") {
       if (anteilValue !== undefined) {
         throw new Error("--anteil darf nur einmal angegeben werden.");
       }
       anteilValue = value;
+    } else {
+      if (maxPagesValue !== undefined) {
+        throw new Error("--max-seiten darf nur einmal angegeben werden.");
+      }
+      maxPagesValue = value;
     }
   }
 
@@ -79,7 +86,21 @@ export function parseRun50EtappeArguments(args: string[]): Run50EtappeArguments 
     throw new Error("Der Anteil muss eine Zahl größer 0 und höchstens 100 sein.");
   }
 
-  return { tenantId, etappe, anteil, apply };
+  let maxPages: number | undefined;
+  if (maxPagesValue !== undefined) {
+    maxPages = Number(maxPagesValue);
+    if (!/^\d+$/.test(maxPagesValue) || !Number.isSafeInteger(maxPages) || maxPages <= 0) {
+      throw new Error("Die maximale Seitenzahl muss eine positive Ganzzahl sein.");
+    }
+  }
+
+  return {
+    tenantId,
+    etappe,
+    anteil,
+    apply,
+    ...(maxPages === undefined ? {} : { maxPages }),
+  };
 }
 
 export function run50EtappeTargetPages(totalProcessedPages: number, anteil: number): number {
@@ -90,9 +111,13 @@ export function selectRun50EtappeDocuments(
   candidates: Run50EtappeCandidate[],
   targetPages: number,
   etappe: string,
+  maxPages?: number,
 ): Run50EtappeCandidate[] {
   if (targetPages <= 0) return [];
-  const orderedCandidates = candidates.map((candidate) => ({
+  const eligibleCandidates = candidates.filter((candidate) =>
+    maxPages === undefined || candidate.pages <= maxPages
+  );
+  const orderedCandidates = eligibleCandidates.map((candidate) => ({
     candidate,
     order: createHash("sha256")
       .update(`${etappe}:${candidate.sha256}`)
