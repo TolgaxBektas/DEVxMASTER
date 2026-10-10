@@ -29,7 +29,7 @@ import {
 } from "../modules/ingestion/src/run50-etappe.ts";
 
 async function main() {
-  const { tenantId, etappe, anteil, apply } =
+  const { tenantId, etappe, anteil, apply, maxPages } =
     parseRun50EtappeArguments(process.argv.slice(2));
   const factory = createDbFactory(parseEnv());
 
@@ -98,12 +98,17 @@ async function main() {
       areaName: row.areaName,
       pages: Number(row.pages),
     }));
-    const selected = selectRun50EtappeDocuments(candidates, targetPages, etappe);
+    const oversizedCandidateCount = maxPages === undefined
+      ? 0
+      : candidates.filter((candidate) => candidate.pages > maxPages).length;
+    const selected = selectRun50EtappeDocuments(candidates, targetPages, etappe, maxPages);
     const selectedPages = selected.reduce((sum, item) => sum + item.pages, 0);
 
     console.log(`Etappe: ${etappe}`);
     console.log(`Anteil: ${anteil}%`);
     console.log(`Zielseiten: ${targetPages}`);
+    console.log(`Max. Seiten je Heft: ${maxPages ?? "—"}`);
+    console.log(`Ausgeschlossen (zu groß): ${oversizedCandidateCount}`);
     console.log(`Dokumente: ${selected.length}`);
     console.log(`Seiten: ${selectedPages}`);
     console.log(`Gebiete: ${new Set(selected.map((item) => item.ags)).size}`);

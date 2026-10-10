@@ -24,6 +24,12 @@ describe("Run50-Etappenplanung", () => {
       "--anteil", "5.5",
       "--anwenden",
     ]).apply).toBe(true);
+    expect(parseRun50EtappeArguments([
+      "--mandant", "7",
+      "--etappe", "stage-1",
+      "--anteil", "5",
+      "--max-seiten", "120",
+    ]).maxPages).toBe(120);
   });
 
   it.each([
@@ -36,6 +42,10 @@ describe("Run50-Etappenplanung", () => {
     [["--mandant", "1", "--etappe", "s", "--anteil", "1e1"], "Anteil"],
     [["--mandant", "1", "--etappe", "s", "--etappe", "other", "--anteil", "5"], "darf nur einmal"],
     [["--mandant", "1", "--etappe", "s", "--anteil", "5", "--anwenden", "--anwenden"], "darf nur einmal"],
+    [["--mandant", "1", "--etappe", "s", "--anteil", "5", "--max-seiten"], "--max-seiten"],
+    [["--mandant", "1", "--etappe", "s", "--anteil", "5", "--max-seiten", "0"], "positive Ganzzahl"],
+    [["--mandant", "1", "--etappe", "s", "--anteil", "5", "--max-seiten", "12.5"], "positive Ganzzahl"],
+    [["--mandant", "1", "--etappe", "s", "--anteil", "5", "--max-seiten", "12", "--max-seiten", "20"], "darf nur einmal"],
     [["--mandant", "1", "--etappe", "s", "--anteil", "5", "--unbekannt"], "Unbekanntes"],
   ])("lehnt ungültige Argumente ab", (args, message) => {
     expect(() => parseRun50EtappeArguments(args)).toThrow(message);
@@ -72,6 +82,22 @@ describe("Run50-Etappenplanung", () => {
     );
     expect(selected).toHaveLength(2);
     expect(selected.reduce((total, item) => total + item.pages, 0)).toBe(4);
+  });
+
+  it("schließt Hefte über dem Seitenlimit vor der Auswahl aus", () => {
+    const selected = selectRun50EtappeDocuments([
+      ...candidates,
+      {
+        documentId: 11,
+        ags: "09162",
+        areaName: "Passau",
+        pages: 550,
+        filename: "4119.pdf",
+        sha256: "f".repeat(64),
+      },
+    ], 11, "stage-1", 200);
+    expect(selected).toHaveLength(10);
+    expect(selected.every((item) => item.pages <= 200)).toBe(true);
   });
 
   it("gibt bei einem unerreichbaren Ziel alle Kandidaten zurück und bei Ziel höchstens null keine", () => {
