@@ -12,6 +12,7 @@ export type PifReview = {
     area_name?: string;
     area_ags?: string;
     area_state?: string;
+    detector?: "heuristic" | "run50";
     source_url?: string;
     document_filename?: string;
     publication?: string;
@@ -88,12 +89,17 @@ export type PifReviewClient = {
   listOpen(options?: {
     dataSource?: PifReview["data_source"];
     areaAgs?: string;
+    detector?: "heuristic" | "run50";
     limit?: number;
     offset?: number;
   }): Promise<PifReview[]>;
-  openSummary(dataSource?: PifReview["data_source"]): Promise<PifReviewSummary>;
+  openSummary(
+    dataSource?: PifReview["data_source"],
+    detector?: "heuristic" | "run50",
+  ): Promise<PifReviewSummary>;
   get(id: number): Promise<PifReview>;
   decide(id: number, decision: "approve" | "reject", note?: string): Promise<PifReviewDecision>;
+  withdraw(tenantId: number, occurrenceIds: number[]): Promise<number>;
   image(id: number, kind: "original" | "restored"): Promise<Uint8Array>;
 };
 
@@ -125,20 +131,41 @@ export function createPifReviewClient(input: {
       const params = new URLSearchParams();
       if (options?.dataSource) params.set("data_source", options.dataSource);
       if (options?.areaAgs) params.set("area_ags", options.areaAgs);
+      if (options?.detector) params.set("detector", options.detector);
       if (options?.limit !== undefined) params.set("limit", String(options.limit));
       if (options?.offset !== undefined) params.set("offset", String(options.offset));
       const query = params.toString();
       const response = await request(`/api/v1/reviews/open${query ? `?${query}` : ""}`);
       return (await response.json()) as PifReview[];
     },
-    async openSummary(dataSource) {
+    async openSummary(dataSource, detector) {
       const params = new URLSearchParams();
       if (dataSource) params.set("data_source", dataSource);
+      if (detector) params.set("detector", detector);
       const query = params.toString();
       const response = await request(
         `/api/v1/reviews/open/summary${query ? `?${query}` : ""}`,
       );
       return (await response.json()) as PifReviewSummary;
+    },
+    async withdraw(tenantId, occurrenceIds) {
+      let withdrawn = 0;
+      for (let offset = 0; offset < occurrenceIds.length; offset += 2000) {
+        const response = await request("/api/v1/reviews/withdraw", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            center_tenant_id: tenantId,
+            center_occurrence_ids: occurrenceIds.slice(offset, offset + 2000),
+          }),
+        });
+        const result = (await response.json()) as { withdrawn?: unknown };
+        if (typeof result.withdrawn !== "number") {
+          throw new Error("Prüfdienst hat eine ungültige Rückzugsmeldung geliefert");
+        }
+        withdrawn += result.withdrawn;
+      }
+      return withdrawn;
     },
     async get(id) {
       const response = await request(`/api/v1/reviews/${id}`);

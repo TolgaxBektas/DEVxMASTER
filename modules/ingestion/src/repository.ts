@@ -157,6 +157,7 @@ export type IngestionOccurrence = {
 };
 export type OccurrenceProvenance = {
   occurrenceId: number;
+  provenance: { run50?: unknown } | null;
   dataSource: string;
   company: string;
   preview?: string;

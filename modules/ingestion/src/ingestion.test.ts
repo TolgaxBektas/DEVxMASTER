@@ -45,6 +45,7 @@ describe("Ingestion-Bestand", () => {
       decide: async () => {
         throw new Error("not used");
       },
+      withdraw: async () => 0,
       image: async () => new Uint8Array(),
     };
     const configured = createIngestionModule({
@@ -1679,6 +1680,148 @@ describe("Ingestion-Bestand", () => {
     expect(publishedKeys[0]).toBe(publishedKeys[1]);
   });
 
+  it("reiht den Rückzug alter Review-Fälle bei Annahme und Dokumenttor-Ablehnung transaktional ein", async () => {
+    const repository = new MemoryIngestionRepository();
+    const acceptedDocument = await repository.createUploadedDocument("1", {
+      filename: "akzeptiert.pdf",
+      sha256: "w".repeat(64),
+      storageKey: "akzeptiert",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "upload",
+    });
+    const rejectedDocument = await repository.createUploadedDocument("1", {
+      filename: "abgelehnt.pdf",
+      sha256: "x".repeat(64),
+      storageKey: "abgelehnt",
+      sizeBytes: 10,
+      mimeType: "application/pdf",
+      origin: "source",
+    });
+    const oldPage = (company: string) => ({
+      pageNumber: 1,
+      text: company,
+      imageKey: `${company}.png`,
+      classification: "MIXED_CONTENT",
+      adProbability: 0.9,
+      occurrences: [{
+        bbox: { x: 0, y: 0, width: 1, height: 1, confidence: 0.9 },
+        imageKey: `${company}-ad.png`,
+        confidence: 0.9,
+        evidence: ["positiv:p2"],
+        company,
+        preview: `${company} Telefon`,
+      }],
+    });
+    const oldAccepted = await repository.replaceProcessedDocument(
+      "1",
+      acceptedDocument.document.id,
+      [oldPage("Alt GmbH")],
+    );
+    const oldRejected = await repository.replaceProcessedDocument(
+      "1",
+      rejectedDocument.document.id,
+      [oldPage("Alt Verein")],
+    );
+    acceptedDocument.document.state = "uploaded";
+    rejectedDocument.document.state = "uploaded";
+    const acceptedPages = [{
+      pageNumber: 1,
+      text: "Neue Anzeigen",
+      imageKey: "new.png",
+      classification: "MIXED_CONTENT",
+      adProbability: 0.9,
+      occurrences: [1, 2, 3].map((index) => ({
+        bbox: { x: index, y: 0, width: 1, height: 1, confidence: 0.9 },
+        imageKey: `new-${index}.png`,
+        confidence: 0.9,
+        evidence: ["positiv:p2"],
+        company: `Neu ${index} GmbH`,
+        preview: "Telefon",
+      })),
+    }];
+    const rejectedPages = [{
+      pageNumber: 1,
+      text: "Keine Anzeigen",
+      imageKey: "empty.png",
+      classification: "EDITORIAL",
+      adProbability: 0.1,
+      occurrences: [],
+    }];
+    const transactionExecutor = {};
+    const enqueue = vi.fn(async () => undefined);
+    const module = createIngestionModule({
+      repository,
+      repositoryForTransaction: () => repository,
+      transaction: async (callback) => callback(transactionExecutor),
+      processDocument: async ({ documentId }) =>
+        documentId === acceptedDocument.document.id ? acceptedPages : rejectedPages,
+      publish: async () => undefined,
+      enqueue,
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.processing.run");
+    if (!job) throw new Error("Verarbeitungsjob fehlt");
+
+    await job.handle(
+      { documentId: acceptedDocument.document.id },
+      context("1", { documentId: acceptedDocument.document.id }),
+    );
+    await job.handle(
+      { documentId: rejectedDocument.document.id },
+      context("1", { documentId: rejectedDocument.document.id }),
+    );
+
+    expect(enqueue).toHaveBeenCalledWith({
+      name: "ingestion.review.withdraw",
+      tenantId: "1",
+      payload: { occurrenceIds: oldAccepted.map((item) => item.id) },
+    }, transactionExecutor);
+    expect(enqueue).toHaveBeenCalledWith({
+      name: "ingestion.review.withdraw",
+      tenantId: "1",
+      payload: { occurrenceIds: oldRejected.map((item) => item.id) },
+    }, transactionExecutor);
+    expect((await repository.getDocument("1", rejectedDocument.document.id)).state)
+      .toBe("rejected");
+  });
+
+  it("führt den Rückzugsjob mit Audit aus und scheitert ohne Prüfdienst sichtbar", async () => {
+    const audit = new MemoryAuditRepository();
+    const reviewClient = {
+      listOpen: async () => [],
+      openSummary: async () => ({ total: 0, areas: [] }),
+      get: async () => { throw new Error("not used"); },
+      decide: async () => { throw new Error("not used"); },
+      withdraw: vi.fn(async () => 2),
+      image: async () => new Uint8Array(),
+    };
+    const module = createIngestionModule({
+      repository: new MemoryIngestionRepository(),
+      publish: async () => undefined,
+      reviewClient,
+      audit,
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.review.withdraw");
+    if (!job) throw new Error("Review-Rückzugsjob fehlt");
+    await job.handle({ occurrenceIds: [11, 12, 13] }, context("1", {}));
+    expect(reviewClient.withdraw).toHaveBeenCalledWith(1, [11, 12, 13]);
+    expect(audit.entries).toHaveLength(1);
+    expect(audit.entries[0]).toMatchObject({
+      action: "ingestion.review.withdrawn",
+      tenantId: "1",
+    });
+    expect(JSON.parse(audit.entries[0]?.detailsJson ?? "{}")).toEqual({ withdrawn: 2 });
+
+    const unconfigured = createIngestionModule({
+      repository: new MemoryIngestionRepository(),
+      publish: async () => undefined,
+    }).jobs.find((item) => item.name === "ingestion.review.withdraw");
+    if (!unconfigured) throw new Error("Review-Rückzugsjob fehlt");
+    await expect(
+      unconfigured.handle({ occurrenceIds: [11] }, context("1", {})),
+    ).rejects.toThrow("Prüfdienst für Review-Rückzug ist nicht konfiguriert");
+  });
+
   it("speichert Verarbeitungsablehnungen und Fundstellenherkunft intern", async () => {
     const repository = new MemoryIngestionRepository();
     const document = await repository.createUploadedDocument("1", {
@@ -2322,6 +2465,69 @@ describe("Ingestion-Bestand", () => {
       },
       executor: transactionDb,
     }]);
+  });
+
+  it("überträgt Run50-Provenienz oder den Heuristik-Standard im Artwork-Manifest", async () => {
+    const repository = new MemoryIngestionRepository();
+    const occurrenceIds: number[] = [];
+    for (const [index, run50] of [true, false].entries()) {
+      const document = await repository.createUploadedDocument("1", {
+        filename: `provenienz-${index}.pdf`,
+        sha256: String(index + 1).repeat(64),
+        storageKey: `provenienz-${index}`,
+        sizeBytes: 10,
+        mimeType: "application/pdf",
+        origin: "upload",
+      });
+      const [occurrence] = await repository.replaceProcessedDocument(
+        "1",
+        document.document.id,
+        [{
+          pageNumber: 4,
+          text: "Anzeige",
+          imageKey: `page-${index}.png`,
+          classification: "MIXED_CONTENT",
+          adProbability: 0.9,
+          occurrences: [{
+            bbox: { x: 0, y: 0, width: 1, height: 1, confidence: 0.9 },
+            imageKey: `ad-${index}.png`,
+            confidence: 0.9,
+            evidence: ["positiv:company-match"],
+            company: "Muster GmbH",
+            preview: "Muster GmbH Telefon",
+            ...(run50 ? { provenance: { run50: { model: "run50" } } } : {}),
+          }],
+        }],
+      );
+      if (!occurrence) throw new Error("Fundstelle fehlt");
+      occurrenceIds.push(occurrence.id);
+    }
+
+    const detectors: string[] = [];
+    const module = createIngestionModule({
+      repository,
+      publish: async () => undefined,
+      storage: {
+        put: async () => undefined,
+        get: async () => new Uint8Array([1]),
+        presignGet: async () => "memory://image",
+      },
+      handoffToArtwork: async ({ manifest }) => {
+        detectors.push(manifest.provenance.detector);
+        return {
+          documentId: 1,
+          adId: detectors.length,
+          reviewStatus: "pending",
+          deduplicated: false,
+        };
+      },
+    });
+    const job = module.jobs.find((item) => item.name === "ingestion.handoff.artwork");
+    if (!job) throw new Error("Artwork-Übergabejob fehlt");
+    for (const occurrenceId of occurrenceIds) {
+      await job.handle({ occurrenceId }, context("1", { occurrenceId }));
+    }
+    expect(detectors).toEqual(["run50", "heuristic"]);
   });
 
   it("reiht im Sammellauf nur fehlende aktive Dokument-Jobs ein", async () => {

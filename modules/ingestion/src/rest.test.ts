@@ -221,6 +221,7 @@ describe("Ingestion-Prüfbilder", () => {
         decide: async () => {
           throw new Error("not used");
         },
+        withdraw: async () => 0,
         image: async () => expected,
       },
     });

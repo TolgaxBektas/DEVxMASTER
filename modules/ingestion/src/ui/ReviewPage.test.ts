@@ -5,6 +5,7 @@ import {
   ignoresReviewKeyboardShortcut,
   reviewAreaOptions,
   reviewListQueryInput,
+  reviewSummaryQueryInput,
   reviewPageRange,
   reviewStatePage,
   resolveSelectedReviewId,
@@ -12,6 +13,7 @@ import {
   shouldResetDraft,
   reviewTabStateFor,
   updateReviewArea,
+  updateReviewDetector,
   updateReviewPage,
   updateReviewSelection,
   ReviewProvenanceRows,
@@ -62,7 +64,7 @@ describe("Prüfseiten-Auswahl", () => {
   });
 
   it("bewahrt Gebiet, Seite und Auswahl beim Wechsel zwischen Reitern", () => {
-    let state: ReviewTabState = { areaAgs: {}, page: {}, selectedIds: {} };
+    let state: ReviewTabState = { areaAgs: {}, detector: {}, page: {}, selectedIds: {} };
     state = updateReviewArea(state, "xdata_nb_high_quality", "09162");
     state = updateReviewPage(state, "xdata_nb_high_quality", 2);
     state = updateReviewSelection(state, "xdata_nb_high_quality", 23);
@@ -74,7 +76,12 @@ describe("Prüfseiten-Auswahl", () => {
     const germanyState = reviewTabStateFor(state, "xdata_germany");
     const returnedHighQualityState = reviewTabStateFor(state, "xdata_nb_high_quality");
 
-    expect(germanyState).toEqual({ areaAgs: "09262", page: 1, selectedId: 82 });
+    expect(germanyState).toEqual({
+      areaAgs: "09262",
+      detector: "",
+      page: 1,
+      selectedId: 82,
+    });
     expect(returnedHighQualityState).toEqual(highQualityState);
     expect(reviewListQueryInput(state, "xdata_nb_high_quality")).toEqual({
       area_ags: "09162",
@@ -85,6 +92,34 @@ describe("Prüfseiten-Auswahl", () => {
       area_ags: "09262",
       limit: 100,
       offset: 100,
+    });
+  });
+
+  it("filtert Liste und Zusammenfassung nach Run50 und setzt die Seite zurück", () => {
+    let state: ReviewTabState = { areaAgs: {}, detector: {}, page: {}, selectedIds: {} };
+    state = updateReviewArea(state, "xdata_nb_high_quality", "09162");
+    state = updateReviewPage(state, "xdata_nb_high_quality", 3);
+    state = updateReviewSelection(state, "xdata_nb_high_quality", 23);
+    state = updateReviewDetector(state, "xdata_nb_high_quality", "run50");
+
+    expect(reviewTabStateFor(state, "xdata_nb_high_quality")).toEqual({
+      areaAgs: "09162",
+      detector: "run50",
+      page: 0,
+      selectedId: null,
+    });
+    expect(reviewListQueryInput(state, "xdata_nb_high_quality")).toEqual({
+      area_ags: "09162",
+      detector: "run50",
+      limit: 100,
+      offset: 0,
+    });
+    expect(reviewSummaryQueryInput(state, "xdata_nb_high_quality")).toEqual({
+      detector: "run50",
+    });
+    expect(reviewListQueryInput(state, "xdata_germany")).toEqual({
+      limit: 100,
+      offset: 0,
     });
   });
 

@@ -10,6 +10,7 @@ const manifest: ArtworkHandoffManifest = {
   evidence: ["geometry", "positiv:p2"],
   provenance: {
     data_source: "xdata_germany",
+    detector: "heuristic",
     center_tenant_id: 1,
     center_occurrence_id: 2,
     document_sha256: "a".repeat(64),

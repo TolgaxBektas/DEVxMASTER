@@ -463,6 +463,11 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
         : null;
       return {
         occurrenceId: row.occurrence.id,
+        provenance: row.occurrence.provenance
+          && typeof row.occurrence.provenance === "object"
+          && !Array.isArray(row.occurrence.provenance)
+          ? row.occurrence.provenance as { run50?: unknown }
+          : null,
         dataSource: row.occurrence.dataSource,
         company: row.occurrence.company,
         preview: row.occurrence.preview,
