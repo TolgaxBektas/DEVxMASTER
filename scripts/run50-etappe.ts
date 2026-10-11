@@ -32,6 +32,7 @@ import {
   parseRun50EtappeArguments,
   parseRun50EtappeDocumentList,
   parseRun50EtappeExclusionList,
+  run50EtappePeriodEndYear,
   run50EtappeTargetPages,
   isRun50EtappeYearEligible,
   selectRun50EtappeDocuments,
@@ -210,7 +211,7 @@ async function main() {
       filename: row.filename,
       ags: row.ags,
       areaName: row.areaName,
-      periodEndYear: row.periodEndYear,
+      periodEndYear: run50EtappePeriodEndYear(row.periodEndYear, row.filename),
       pages: Number(row.pages),
     }));
     const areaLessDocumentIds = candidates

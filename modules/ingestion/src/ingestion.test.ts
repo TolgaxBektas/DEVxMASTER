@@ -12,7 +12,11 @@ import {
   isPermanentSourceFetchError,
   ProcessingLeaseLostError,
 } from "./module.js";
-import { deriveDocumentClassification, selectRegionSource } from "./classification.js";
+import {
+  deriveDocumentClassification,
+  filenamePeriodEndYear,
+  selectRegionSource,
+} from "./classification.js";
 import { createDrizzleIngestionRepository } from "./drizzle-repository.js";
 import { classifications, documents, occurrences, pages } from "./schema.js";
 import { classificationCorrectionSchema, createIngestionRouter } from "./router.js";
@@ -20,7 +24,11 @@ import {
   IngestionOccurrenceNotFoundError,
   periodIncludesYear,
 } from "./repository.js";
-import { actualityMaxAgeYears, documentActualityStatus } from "./actuality.js";
+import {
+  actualityMaxAgeYears,
+  documentActualityStatus,
+  sourceActualityHint,
+} from "./actuality.js";
 import { areaWebsiteSeeds, websiteRegister } from "./website-registry.js";
 
 const context = (tenantId: string | null, payload: unknown) => ({
@@ -794,6 +802,11 @@ describe("Ingestion-Bestand", () => {
     }
   });
 
+  it("erkennt ein Jahr in der URL mit Unterstrich", () => {
+    expect(sourceActualityHint({ url: "https://example.org/Blatt_2022.pdf" }, 2026))
+      .toBe("outdated");
+  });
+
   it("hält Aktualitätsentscheidung und Jahreskorrektur in der Speicherfassung synchron", async () => {
     const repository = new MemoryIngestionRepository();
     const document = await repository.createUploadedDocument("1", {
@@ -892,6 +905,36 @@ describe("Ingestion-Bestand", () => {
     expect(result.periodEndYear).toBe(2020);
     expect(result.typeConfidence).toBeGreaterThan(0.9);
     expect(result.editionLabel).toBe("Ausgabe 2020");
+  });
+
+  it.each([
+    { filename: "Mitteilungsblatt_Oktober_2022.pdf", year: 2022 },
+    { filename: "Obernzenn_09_2023.pdf", year: 2023 },
+    { filename: "003_Maerz_2023_150.pdf", year: 2023 },
+    { filename: "Mitteilungsblatt072015_reduz.pdf", year: 2015 },
+    { filename: "Mitteilungsblatt-2024-03.pdf", year: 2024 },
+    { filename: "1325.pdf", year: null },
+    { filename: "220524-Wegweiser Stadt Landshut_ukrainisch.pdf", year: null },
+    { filename: "familienwegweiser_internet.pdf", year: null },
+  ])("erkennt Jahreszahlen in Dateinamen ($filename)", ({ filename, year }) => {
+    expect(filenamePeriodEndYear(filename)).toBe(year);
+  });
+
+  it("leitet das Zeitraumende ohne Seitentext aus dem Dateinamen ab", () => {
+    expect(deriveDocumentClassification({
+      filename: "Mitteilungsblatt_Juni_2023.pdf",
+      pages: [],
+    })).toMatchObject({
+      periodEndYear: 2023,
+      periodSource: "filename",
+    });
+    expect(deriveDocumentClassification({
+      filename: "Mitteilungsblatt072015_reduz.pdf",
+      pages: [],
+    })).toMatchObject({
+      periodEndYear: 2015,
+      periodSource: "filename",
+    });
   });
 
   it("liefert die Regionsherkunft aus der verwendeten Evidenz oder leer", () => {

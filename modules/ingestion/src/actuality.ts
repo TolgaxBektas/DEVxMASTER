@@ -27,7 +27,7 @@ export function sourceActualityHint(
 ): ActualityStatus | null {
   if (!metadata) return null;
   const text = Object.values(metadata).filter((value): value is string => typeof value === "string").join(" ");
-  const years = [...text.matchAll(/\b(20\d{2})\b/g)].map((match) => Number(match[1]));
+  const years = [...text.matchAll(/(?<!\d)(20\d{2})(?!\d)/g)].map((match) => Number(match[1]));
   if (!years.length) return null;
   return documentActualityStatus({ periodEndYear: Math.max(...years), periodStartYear: Math.min(...years) }, currentYear, maxAgeYears);
 }
