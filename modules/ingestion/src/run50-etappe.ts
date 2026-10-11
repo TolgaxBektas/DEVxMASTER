@@ -6,22 +6,88 @@ export type Run50EtappeArguments = {
   anteil: number;
   apply: boolean;
   maxPages?: number;
+  exclusionFile?: string;
 };
 
 export type Run50EtappeCandidate = {
   documentId: number;
-  ags: string;
-  areaName: string;
+  ags: string | null;
+  areaName: string | null;
+  areaLabel: string;
+  areaOrigin: "quelle" | "anzeigen" | "offen";
   pages: number;
   filename: string;
   sha256: string;
 };
+
+export type Run50EtappeContact = {
+  city: string | null;
+  postalCode: string | null;
+};
+
+function normalizeRun50EtappeCity(city: string | null): string | null {
+  const normalized = city?.trim().replace(/\s+/g, " ") ?? "";
+  return normalized || null;
+}
+
+export function deriveRun50EtappeAreaFromContacts(
+  contacts: Run50EtappeContact[],
+): { city: string; postalCode: string | null; votes: number; total: number } | null {
+  const cityVotes = new Map<string, number>();
+  const normalizedContacts = contacts.flatMap((contact) => {
+    const city = normalizeRun50EtappeCity(contact.city);
+    return city ? [{ city, postalCode: contact.postalCode?.trim() ?? "" }] : [];
+  });
+  for (const { city } of normalizedContacts) {
+    cityVotes.set(city, (cityVotes.get(city) ?? 0) + 1);
+  }
+
+  const [city, votes] = [...cityVotes.entries()].sort((left, right) =>
+    right[1] - left[1] || (left[0] < right[0] ? -1 : left[0] > right[0] ? 1 : 0),
+  )[0] ?? [];
+  if (city === undefined || votes === undefined) return null;
+
+  const postalCodeVotes = new Map<string, number>();
+  for (const contact of normalizedContacts) {
+    if (contact.city !== city || !/^\d{5}$/.test(contact.postalCode)) continue;
+    postalCodeVotes.set(
+      contact.postalCode,
+      (postalCodeVotes.get(contact.postalCode) ?? 0) + 1,
+    );
+  }
+  const [postalCode] = [...postalCodeVotes.entries()].sort((left, right) =>
+    right[1] - left[1] || (left[0] < right[0] ? -1 : left[0] > right[0] ? 1 : 0),
+  )[0] ?? [];
+
+  return {
+    city,
+    postalCode: postalCode ?? null,
+    votes,
+    total: normalizedContacts.length,
+  };
+}
+
+export function parseRun50EtappeExclusionList(text: string): Set<number> {
+  const documentIds = new Set<number>();
+  for (const [index, line] of text.split(/\r?\n/).entries()) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const match = /^(\d+)(?=\s|#|$)/.exec(trimmed);
+    const documentId = match ? Number(match[1]) : Number.NaN;
+    if (!Number.isSafeInteger(documentId) || documentId <= 0) {
+      throw new Error(`Ungültige Dokument-ID in Zeile ${index + 1}.`);
+    }
+    documentIds.add(documentId);
+  }
+  return documentIds;
+}
 
 export function parseRun50EtappeArguments(args: string[]): Run50EtappeArguments {
   let tenantValue: string | undefined;
   let etappe: string | undefined;
   let anteilValue: string | undefined;
   let maxPagesValue: string | undefined;
+  let exclusionFile: string | undefined;
   let apply = false;
   let applySeen = false;
 
@@ -33,7 +99,13 @@ export function parseRun50EtappeArguments(args: string[]): Run50EtappeArguments 
       applySeen = true;
       continue;
     }
-    if (!["--mandant", "--etappe", "--anteil", "--max-seiten"].includes(argument ?? "")) {
+    if (![
+      "--mandant",
+      "--etappe",
+      "--anteil",
+      "--max-seiten",
+      "--ausschliessen",
+    ].includes(argument ?? "")) {
       throw new Error(`Unbekanntes Argument: ${argument}`);
     }
 
@@ -58,11 +130,16 @@ export function parseRun50EtappeArguments(args: string[]): Run50EtappeArguments 
         throw new Error("--anteil darf nur einmal angegeben werden.");
       }
       anteilValue = value;
-    } else {
+    } else if (argument === "--max-seiten") {
       if (maxPagesValue !== undefined) {
         throw new Error("--max-seiten darf nur einmal angegeben werden.");
       }
       maxPagesValue = value;
+    } else {
+      if (exclusionFile !== undefined) {
+        throw new Error("--ausschliessen darf nur einmal angegeben werden.");
+      }
+      exclusionFile = value;
     }
   }
 
@@ -100,6 +177,7 @@ export function parseRun50EtappeArguments(args: string[]): Run50EtappeArguments 
     anteil,
     apply,
     ...(maxPages === undefined ? {} : { maxPages }),
+    ...(exclusionFile === undefined ? {} : { exclusionFile }),
   };
 }
 
