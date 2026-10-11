@@ -3,10 +3,11 @@ import { createHash } from "node:crypto";
 export type Run50EtappeArguments = {
   tenantId: number;
   etappe: string;
-  anteil: number;
+  anteil?: number;
   apply: boolean;
   maxPages?: number;
   exclusionFile?: string;
+  documentFile?: string;
 };
 
 export type Run50EtappeCandidate = {
@@ -82,12 +83,40 @@ export function parseRun50EtappeExclusionList(text: string): Set<number> {
   return documentIds;
 }
 
+export function parseRun50EtappeDocumentList(text: string): number[] {
+  const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/);
+  const headerIndex = lines.findIndex((line) => line.trim().length > 0);
+  if (headerIndex < 0) return [];
+
+  const header = lines[headerIndex]!.split("\t").map((column) => column.trim());
+  const documentIdColumn = header.indexOf("document_id");
+  const isTsv = documentIdColumn >= 0;
+  const firstDataLine = isTsv ? headerIndex + 1 : 0;
+  const documentIds = new Set<number>();
+
+  for (let index = firstDataLine; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    if (!line.trim()) continue;
+    const value = isTsv
+      ? line.split("\t")[documentIdColumn]?.trim() ?? ""
+      : line.trim();
+    const documentId = /^\d+$/.test(value) ? Number(value) : Number.NaN;
+    if (!Number.isSafeInteger(documentId) || documentId <= 0) {
+      throw new Error(`Ungültige Dokument-ID in Zeile ${index + 1}.`);
+    }
+    documentIds.add(documentId);
+  }
+
+  return [...documentIds];
+}
+
 export function parseRun50EtappeArguments(args: string[]): Run50EtappeArguments {
   let tenantValue: string | undefined;
   let etappe: string | undefined;
   let anteilValue: string | undefined;
   let maxPagesValue: string | undefined;
   let exclusionFile: string | undefined;
+  let documentFile: string | undefined;
   let apply = false;
   let applySeen = false;
 
@@ -105,6 +134,7 @@ export function parseRun50EtappeArguments(args: string[]): Run50EtappeArguments 
       "--anteil",
       "--max-seiten",
       "--ausschliessen",
+      "--dokumente",
     ].includes(argument ?? "")) {
       throw new Error(`Unbekanntes Argument: ${argument}`);
     }
@@ -135,11 +165,16 @@ export function parseRun50EtappeArguments(args: string[]): Run50EtappeArguments 
         throw new Error("--max-seiten darf nur einmal angegeben werden.");
       }
       maxPagesValue = value;
-    } else {
+    } else if (argument === "--ausschliessen") {
       if (exclusionFile !== undefined) {
         throw new Error("--ausschliessen darf nur einmal angegeben werden.");
       }
       exclusionFile = value;
+    } else {
+      if (documentFile !== undefined) {
+        throw new Error("--dokumente darf nur einmal angegeben werden.");
+      }
+      documentFile = value;
     }
   }
 
@@ -147,20 +182,26 @@ export function parseRun50EtappeArguments(args: string[]): Run50EtappeArguments 
   if (etappe === undefined || !etappe.trim()) {
     throw new Error("Pflichtargument --etappe <name> fehlt.");
   }
-  if (anteilValue === undefined) {
-    throw new Error("Pflichtargument --anteil <prozent> fehlt.");
+  if (anteilValue !== undefined && documentFile !== undefined) {
+    throw new Error("--anteil und --dokumente schließen sich gegenseitig aus.");
+  }
+  if (anteilValue === undefined && documentFile === undefined) {
+    throw new Error("Pflichtargument --anteil <prozent> oder --dokumente <datei> fehlt.");
   }
 
   const tenantId = Number(tenantValue);
   if (!/^\d+$/.test(tenantValue) || !Number.isSafeInteger(tenantId) || tenantId <= 0) {
     throw new Error("Die Mandantenkennung muss eine positive Ganzzahl sein.");
   }
-  if (!/^(?:\d+(?:\.\d+)?|\.\d+)$/.test(anteilValue)) {
-    throw new Error("Der Anteil muss eine Zahl größer 0 und höchstens 100 sein.");
-  }
-  const anteil = Number(anteilValue);
-  if (!Number.isFinite(anteil) || anteil <= 0 || anteil > 100) {
-    throw new Error("Der Anteil muss eine Zahl größer 0 und höchstens 100 sein.");
+  let anteil: number | undefined;
+  if (anteilValue !== undefined) {
+    if (!/^(?:\d+(?:\.\d+)?|\.\d+)$/.test(anteilValue)) {
+      throw new Error("Der Anteil muss eine Zahl größer 0 und höchstens 100 sein.");
+    }
+    anteil = Number(anteilValue);
+    if (!Number.isFinite(anteil) || anteil <= 0 || anteil > 100) {
+      throw new Error("Der Anteil muss eine Zahl größer 0 und höchstens 100 sein.");
+    }
   }
 
   let maxPages: number | undefined;
@@ -174,10 +215,11 @@ export function parseRun50EtappeArguments(args: string[]): Run50EtappeArguments 
   return {
     tenantId,
     etappe,
-    anteil,
     apply,
+    ...(anteil === undefined ? {} : { anteil }),
     ...(maxPages === undefined ? {} : { maxPages }),
     ...(exclusionFile === undefined ? {} : { exclusionFile }),
+    ...(documentFile === undefined ? {} : { documentFile }),
   };
 }
 

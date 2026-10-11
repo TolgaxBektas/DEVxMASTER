@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import {
   and,
   asc,
+  desc,
   eq,
   inArray,
   notExists,
@@ -27,6 +28,7 @@ import {
 import {
   deriveRun50EtappeAreaFromContacts,
   parseRun50EtappeArguments,
+  parseRun50EtappeDocumentList,
   parseRun50EtappeExclusionList,
   run50EtappeTargetPages,
   selectRun50EtappeDocuments,
@@ -53,11 +55,14 @@ function parseOccurrenceContacts(value: unknown): Run50EtappeContact | null {
 }
 
 async function main() {
-  const { tenantId, etappe, anteil, apply, maxPages, exclusionFile } =
+  const { tenantId, etappe, anteil, apply, maxPages, exclusionFile, documentFile } =
     parseRun50EtappeArguments(process.argv.slice(2));
   const excludedDocumentIds = exclusionFile
     ? parseRun50EtappeExclusionList(await readFile(exclusionFile, "utf8"))
     : new Set<number>();
+  const documentIds = documentFile
+    ? parseRun50EtappeDocumentList(await readFile(documentFile, "utf8"))
+    : undefined;
   const factory = createDbFactory(parseEnv());
 
   try {
@@ -80,7 +85,64 @@ async function main() {
       (total, row) => total + (excludedDocumentIds.has(row.documentId) ? 0 : Number(row.pages)),
       0,
     );
-    const targetPages = run50EtappeTargetPages(totalProcessedPages, anteil);
+    const targetPages = anteil === undefined
+      ? undefined
+      : run50EtappeTargetPages(totalProcessedPages, anteil);
+    const listedDocumentRows = documentIds === undefined || documentIds.length === 0
+      ? []
+      : await db.select({
+          documentId: documents.id,
+          state: documents.state,
+          pages: sql<number>`COUNT(${pages.id})`,
+        })
+          .from(documents)
+          .leftJoin(pages, eq(pages.documentId, documents.id))
+          .where(and(
+            eq(documents.tenantId, tenantId),
+            inArray(documents.id, documentIds),
+          ))
+          .groupBy(documents.id, documents.state);
+    const listedDocumentById = new Map(
+      listedDocumentRows.map((row) => [row.documentId, row]),
+    );
+    const approvedDocumentIds = documentIds === undefined || documentIds.length === 0
+      ? new Set<number>()
+      : new Set((await db.select({ documentId: occurrences.documentId })
+          .from(occurrences)
+          .where(and(
+            eq(occurrences.tenantId, tenantId),
+            inArray(occurrences.documentId, documentIds),
+            eq(occurrences.status, "approved"),
+          )))
+        .map((row) => row.documentId));
+    const run50AuditRows = documentIds === undefined || documentIds.length === 0
+      ? []
+      : await db.select({
+          documentId: auditLog.entityId,
+          detailsJson: auditLog.detailsJson,
+        })
+          .from(auditLog)
+          .where(and(
+            eq(auditLog.tenantId, tenantId),
+            eq(auditLog.action, "ingestion.run50_etappe.document"),
+            inArray(auditLog.entityId, documentIds.map(String)),
+          ))
+          .orderBy(desc(auditLog.id));
+    const stagedDocumentById = new Map<number, string>();
+    for (const row of run50AuditRows) {
+      const documentId = Number(row.documentId);
+      if (!Number.isSafeInteger(documentId) || stagedDocumentById.has(documentId)) continue;
+      let etappeName = "unbekannt";
+      try {
+        const details = JSON.parse(row.detailsJson ?? "") as { etappe?: unknown };
+        if (typeof details.etappe === "string" && details.etappe.trim()) {
+          etappeName = details.etappe;
+        }
+      } catch {
+        etappeName = "unbekannt";
+      }
+      stagedDocumentById.set(documentId, etappeName);
+    }
     const rows = await db.select({
       documentId: documents.id,
       sha256: documents.sha256,
@@ -102,6 +164,11 @@ async function main() {
       .where(and(
         eq(documents.tenantId, tenantId),
         eq(documents.state, "processed"),
+        ...(documentIds === undefined
+          ? []
+          : [documentIds.length > 0
+            ? inArray(documents.id, documentIds)
+            : sql`1 = 0`]),
         ...(excludedDocumentIds.size > 0
           ? [notInArray(documents.id, [...excludedDocumentIds])]
           : []),
@@ -186,12 +253,37 @@ async function main() {
     const oversizedCandidateCount = maxPages === undefined
       ? 0
       : candidatesWithArea.filter((candidate) => candidate.pages > maxPages).length;
-    const selected = selectRun50EtappeDocuments(
-      candidatesWithArea,
-      targetPages,
-      etappe,
-      maxPages,
+    const candidatesById = new Map(
+      candidatesWithArea.map((candidate) => [candidate.documentId, candidate]),
     );
+    const selected = documentIds === undefined
+      ? selectRun50EtappeDocuments(
+        candidatesWithArea,
+        targetPages ?? 0,
+        etappe,
+        maxPages,
+      )
+      : documentIds.flatMap((documentId) => {
+        const candidate = candidatesById.get(documentId);
+        return candidate && (maxPages === undefined || candidate.pages <= maxPages)
+          ? [candidate]
+          : [];
+      });
+    const selectedDocumentIds = new Set(selected.map((candidate) => candidate.documentId));
+    const unselectedDocumentIds = documentIds?.filter((documentId) =>
+      !selectedDocumentIds.has(documentId)
+    ) ?? [];
+    const reasonForUnselectedDocument = (documentId: number): string => {
+      const document = listedDocumentById.get(documentId);
+      if (!document) return "unbekannt";
+      const stagedEtappe = stagedDocumentById.get(documentId);
+      if (stagedEtappe !== undefined) return `bereits in Etappe ${stagedEtappe}`;
+      if (document.state !== "processed") return "nicht processed";
+      if (approvedDocumentIds.has(documentId)) return "bereits freigegebene Anzeige";
+      if (excludedDocumentIds.has(documentId)) return "Ausschlussliste";
+      if (maxPages !== undefined && Number(document.pages) > maxPages) return "zu groß";
+      return "unbekannt";
+    };
     const selectedPages = selected.reduce((sum, item) => sum + item.pages, 0);
     const distinctAreaCount = new Set(selected
       .filter((candidate) => candidate.areaOrigin !== "offen")
@@ -200,8 +292,8 @@ async function main() {
     const openAreaCount = selected.filter((candidate) => candidate.areaOrigin === "offen").length;
 
     console.log(`Etappe: ${etappe}`);
-    console.log(`Anteil: ${anteil}%`);
-    console.log(`Zielseiten: ${targetPages}`);
+    console.log(`Anteil: ${anteil === undefined ? "Dokumentenliste" : `${anteil}%`}`);
+    console.log(`Zielseiten: ${targetPages ?? "—"}`);
     console.log(`Max. Seiten je Heft: ${maxPages ?? "—"}`);
     console.log(`Ausgeschlossen (Liste): ${excludedFromStock.length}`);
     console.log(`Ausgeschlossen (zu groß): ${oversizedCandidateCount}`);
@@ -212,6 +304,17 @@ async function main() {
       `Davon ohne Quellgebiet: ${fromAdsCount + openAreaCount} (aus Anzeigen: ${fromAdsCount}, offen: ${openAreaCount})`,
     );
     console.log(`Geschätzte Kosten: ${(selectedPages * 0.021).toFixed(2)} USD`);
+    if (documentIds !== undefined) {
+      console.log("Nicht ausgewählt:");
+      if (unselectedDocumentIds.length === 0) {
+        console.log("Keine");
+      } else {
+        console.log(["document_id", "Grund"].join("\t"));
+        for (const documentId of unselectedDocumentIds) {
+          console.log(`${documentId}\t${reasonForUnselectedDocument(documentId)}`);
+        }
+      }
+    }
     console.log(["document_id", "gebiet", "gebiet_herkunft", "pages", "filename"].join("\t"));
     for (const candidate of selected) {
       console.log([
@@ -231,14 +334,6 @@ async function main() {
         const applied = await db.transaction(async (transaction) => {
           const stillEligible = await transaction.select({ id: documents.id })
             .from(documents)
-            .innerJoin(sources, and(
-              eq(sources.id, documents.sourceId!),
-              eq(sources.tenantId, tenantId),
-            ))
-            .innerJoin(areas, and(
-              eq(areas.id, sources.areaId!),
-              eq(areas.tenantId, tenantId),
-            ))
             .where(and(
               eq(documents.id, candidate.documentId),
               eq(documents.tenantId, tenantId),
