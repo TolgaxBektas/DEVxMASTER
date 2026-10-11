@@ -1610,6 +1610,8 @@ def complete_ad_rect(
 
         ink_threshold = max(2, 0.002 * line_length)
         clean_run = 0.0
+        clean_before_ink = 0.0
+        frame_mode = False
         last_ink_edge = None
         saw_ink = False
         while 0 <= line < axis_size:
@@ -1632,16 +1634,20 @@ def complete_ad_rect(
             strip.close()
             ink_pixels = sum(histogram[:low_cut]) + sum(histogram[high_cut:])
             if ink_pixels > ink_threshold:
+                if last_ink_edge is None and clean_before_ink + 1e-9 >= gutter_pt:
+                    if ink_pixels < 0.8 * line_length:
+                        return current_edge, False
+                    frame_mode = True
                 clean_run = 0.0
                 saw_ink = True
                 last_ink_edge = line_edge
             else:
-                clean_run += 1 / scale
-                if (
-                    last_ink_edge is not None
-                    and clean_run + 1e-9 >= gutter_pt
-                ):
-                    return last_ink_edge, False
+                if last_ink_edge is None:
+                    clean_before_ink += 1 / scale
+                else:
+                    clean_run += 1 / scale
+                    if frame_mode or clean_run + 1e-9 >= gutter_pt:
+                        return last_ink_edge, False
             line += step
 
         reached_page = not (0 <= line < axis_size)
@@ -1649,7 +1655,13 @@ def complete_ad_rect(
             return (page_edge if saw_ink else current_edge), False
         if saw_ink or (
             limit_reason == "neighbor"
-            and clean_run + 1e-9 < gutter_pt
+            and (
+                clean_before_ink
+                if last_ink_edge is None
+                else clean_run
+            )
+            + 1e-9
+            < gutter_pt
         ):
             return original[indexes[side]], True
         return current_edge, False

@@ -1079,6 +1079,42 @@ def test_complete_ad_rect_leaves_clean_edges_unchanged():
     assert result["incomplete_edges"] == []
 
 
+def test_complete_ad_rect_ignores_ordinary_ink_after_a_clean_gutter():
+    page_image = Image.new("L", (400, 300), 255)
+    ad_rect = (100, 100, 200, 200)
+    ImageDraw.Draw(page_image).rectangle((212, 140, 220, 160), fill=0)
+
+    result = complete_ad_rect(
+        ad_rect,
+        (0, 0, 400, 300),
+        [],
+        page_image,
+    )
+
+    assert result["rect"] == ad_rect
+    assert result["incomplete_edges"] == []
+
+
+def test_complete_ad_rect_does_not_include_a_partial_neighbor_frame():
+    page_image = Image.new("L", (400, 300), 255)
+    ad_rect = (100, 100, 200, 200)
+    ImageDraw.Draw(page_image).rectangle(
+        (209, 130, 249, 170),
+        outline=0,
+        width=2,
+    )
+
+    result = complete_ad_rect(
+        ad_rect,
+        (0, 0, 400, 300),
+        [],
+        page_image,
+    )
+
+    assert result["rect"] == ad_rect
+    assert result["incomplete_edges"] == []
+
+
 def test_complete_ad_rect_without_page_image_is_unchanged():
     ad_rect = (100, 80, 200, 180)
 
