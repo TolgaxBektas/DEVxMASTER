@@ -1484,6 +1484,10 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
 
 def _paper_gray(page_image: Image.Image) -> float:
     histogram = page_image.histogram()
+    bright_mode = max(range(160, 256), key=histogram.__getitem__)
+    if histogram[bright_mode]:
+        return float(bright_mode)
+
     pixel_count = sum(histogram)
     lower_rank = max(0, (pixel_count - 1) // 2)
     upper_rank = max(0, pixel_count // 2)

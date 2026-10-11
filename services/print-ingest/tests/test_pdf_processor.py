@@ -9,6 +9,7 @@ from app.services.processor import (
     _add_candidate_without_nested_duplicates,
     _image_placement_upper_bound,
     _layout_for_page,
+    _paper_gray,
     complete_ad_rect,
     extract_contacts,
     extract_pdf_metadata,
@@ -971,6 +972,18 @@ def _points_from_mm(value):
     return value / 25.4 * 72
 
 
+def test_paper_gray_uses_the_bright_histogram_mode_and_dark_median_fallback():
+    page_image = Image.new("L", (10, 10), 120)
+    page_image.putdata([120] * 70 + [250] * 30)
+
+    assert _paper_gray(page_image) == 250
+
+    dark_page = Image.new("L", (10, 10))
+    dark_page.putdata([80] * 50 + [120] * 50)
+
+    assert _paper_gray(dark_page) == 100
+
+
 def test_complete_ad_rect_includes_the_full_frame():
     page_image = Image.new("L", (400, 300), 255)
     ImageDraw.Draw(page_image).rectangle(
@@ -1077,6 +1090,41 @@ def test_complete_ad_rect_leaves_clean_edges_unchanged():
         "bottom": 0.0,
     }
     assert result["incomplete_edges"] == []
+
+
+def test_dark_page_background_does_not_count_clean_white_paper_as_ink():
+    page_image = Image.new("L", (400, 300), 120)
+    ImageDraw.Draw(page_image).rectangle((100, 60, 299, 239), fill=255)
+    ad_rect = (150, 120, 250, 180)
+
+    completion = complete_ad_rect(
+        ad_rect,
+        (0, 0, 400, 300),
+        [],
+        page_image,
+    )
+    margin = crop_margin(
+        ad_rect,
+        (0, 0, 400, 300),
+        [],
+        page_image=page_image,
+    )
+
+    assert completion["rect"] == ad_rect
+    assert completion["growth_mm"] == {
+        "left": 0.0,
+        "top": 0.0,
+        "right": 0.0,
+        "bottom": 0.0,
+    }
+    assert completion["incomplete_edges"] == []
+    assert margin["margin_mm"] == {
+        "left": 5.0,
+        "top": 5.0,
+        "right": 5.0,
+        "bottom": 5.0,
+    }
+    assert margin["shortfall"] == []
 
 
 def test_complete_ad_rect_ignores_ordinary_ink_after_a_clean_gutter():
