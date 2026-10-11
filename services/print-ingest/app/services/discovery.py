@@ -1,3 +1,4 @@
+import math
 import os
 import re
 from datetime import date
@@ -124,17 +125,17 @@ def candidate_recency_key(url: str, archive_timestamp: str | None = None) -> tup
             return year, min(12, week * 12 // 52 + 1)
     return year, 0
 
-def _actuality_max_age_years() -> int:
+def _actuality_max_age_years() -> float:
     value = os.getenv("INGESTION_ACTUALITY_MAX_AGE_YEARS")
-    if value is None:
-        return 3
+    if value is None or not value.strip():
+        return 2.5
     try:
-        parsed = float(value.strip() or "0")
+        parsed = float(value)
     except ValueError:
-        return 3
-    if parsed < 0 or not parsed.is_integer():
-        return 3
-    return int(parsed)
+        return 2.5
+    if not math.isfinite(parsed) or parsed < 0:
+        return 2.5
+    return parsed
 
 def _area_slug(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", _match_text(value)).strip("-")

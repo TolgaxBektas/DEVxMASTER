@@ -182,8 +182,8 @@ describe("Run50-Etappenplanung", () => {
     sha256: String(index + 1).padStart(64, "0"),
   }));
 
-  it("schließt alte, unbekannte und zukünftige Publikationsjahre aus", () => {
-    const yearCandidates = [2025, 2026, 2024, null, 2027].map((periodEndYear, index) => ({
+  it("schließt nur erkannte Jahre außerhalb des Aktualitätszeitraums aus", () => {
+    const yearCandidates = [2024, 2025, 2026, null, 2027, 2023, 2022].map((periodEndYear, index) => ({
       ...candidates[0]!,
       documentId: index + 20,
       periodEndYear,
@@ -191,20 +191,15 @@ describe("Run50-Etappenplanung", () => {
     }));
     const previousAge = process.env.INGESTION_ACTUALITY_MAX_AGE_YEARS;
     try {
-      process.env.INGESTION_ACTUALITY_MAX_AGE_YEARS = "1";
-      const selectedWithOneYearMaxAge = selectRun50EtappeDocuments(
+      delete process.env.INGESTION_ACTUALITY_MAX_AGE_YEARS;
+      const selectedWithDefaultAge = selectRun50EtappeDocuments(
         yearCandidates,
         10,
         "stage-1",
         undefined,
         2026,
       );
-      expect(selectedWithOneYearMaxAge.map((item) => item.documentId).sort()).toEqual([20, 21]);
-
-      delete process.env.INGESTION_ACTUALITY_MAX_AGE_YEARS;
-      const year2023 = { ...candidates[0]!, documentId: 30, periodEndYear: 2023 };
-      expect(selectRun50EtappeDocuments([year2023], 1, "stage-1", undefined, 2026))
-        .toEqual([year2023]);
+      expect(selectedWithDefaultAge.map((item) => item.documentId).sort()).toEqual([20, 21, 22, 23, 24]);
     } finally {
       if (previousAge === undefined) {
         delete process.env.INGESTION_ACTUALITY_MAX_AGE_YEARS;

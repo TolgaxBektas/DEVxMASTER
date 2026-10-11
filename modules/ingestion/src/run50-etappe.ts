@@ -28,9 +28,7 @@ export function isRun50EtappeYearEligible(
   currentYear = new Date().getFullYear(),
   maxAgeYears = actualityMaxAgeYears(),
 ): boolean {
-  return periodEndYear !== null
-    && periodEndYear >= currentYear - maxAgeYears
-    && periodEndYear <= currentYear;
+  return periodEndYear === null || periodEndYear >= currentYear - maxAgeYears;
 }
 
 export type Run50EtappeContact = {
