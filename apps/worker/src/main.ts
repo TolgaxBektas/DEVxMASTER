@@ -26,6 +26,7 @@ import { createIngestionModule } from "@xmaster-center/module-ingestion";
 import { createDrizzleIngestionRepository } from "@xmaster-center/module-ingestion";
 import { createAssistantModule } from "@xmaster-center/module-assistant";
 import type { ModuleRegistry } from "@xmaster-center/kernel";
+import { buildWorkerSchedules } from "./schedules.js";
 
 const env = parseEnv();
 const dbFactory = createDbFactory(env);
@@ -283,29 +284,12 @@ const dispatchLoop = async () => {
   }
 };
 console.log("[worker] starting job loop and event dispatcher");
-const schedules = [
-  ...[...registry.jobs.values()]
-    .filter((job) => job.schedule === "daily")
-    .map((job) => ({
-      name: job.name,
-      intervalMs: 86_400_000,
-      tenantId: "1",
-      // Scheduled runs currently cover only the first tenant.
-      payload: {},
-    })),
-  ...(env.INGESTION_WATCH_FOLDER?.trim()
-    ? [...registry.jobs.values()]
-      .filter((job) => job.schedule === "frequent")
-      .map((job) => ({
-        name: job.name,
-        intervalMs: env.INGESTION_WATCH_INTERVAL_SECONDS * 1_000,
-        tenantId: "1",
-        // Scheduled runs currently cover only the first tenant.
-        payload: {},
-      }))
-    : []),
-];
-scheduler.start(schedules);
+const schedules = buildWorkerSchedules(registry.jobs.values(), env);
+if (env.WORKER_SCHEDULES_ENABLED) {
+  scheduler.start(schedules);
+} else {
+  console.log("[worker] Zeitpläne deaktiviert (WORKER_SCHEDULES_ENABLED=false)");
+}
 for (let index = 0; index < env.WORKER_CONCURRENCY; index += 1) {
   void worker.run({
     workerId: `worker-${process.pid}-${index}`,
