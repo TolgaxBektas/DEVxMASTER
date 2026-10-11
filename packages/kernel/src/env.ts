@@ -1,6 +1,16 @@
 import { z } from "zod";
 
 const optionalUrl = z.string().url().optional().or(z.literal(""));
+const environmentBoolean = z.preprocess(
+  (value) => {
+    if (typeof value !== "string") return value;
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true" || normalized === "1") return true;
+    if (normalized === "false" || normalized === "0") return false;
+    return value;
+  },
+  z.boolean().default(true),
+);
 
 export const envSchema = z.object({
   NODE_ENV: z
@@ -25,6 +35,7 @@ export const envSchema = z.object({
   INGESTION_WATCH_FOLDER: z.string().optional(),
   INGESTION_WATCH_INTERVAL_SECONDS: z.coerce.number().int().positive().default(60),
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(1),
+  WORKER_SCHEDULES_ENABLED: environmentBoolean,
   OPENAI_API_KEY: z.string().optional(),
   GEMINI_API_KEY: z.string().optional(),
   XAI_API_KEY: z.string().optional(),
