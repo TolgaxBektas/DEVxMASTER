@@ -94,6 +94,7 @@ const ingestion = createIngestionModule({
   db,
   audit,
   storage,
+  autoProcess: env.INGESTION_AUTO_PROCESS,
   ...(env.ARTWORK_SERVICE_TOKEN
     ? {
         reviewClient: createPifReviewClient({

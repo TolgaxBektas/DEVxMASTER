@@ -33,3 +33,40 @@ describe("WORKER_SCHEDULES_ENABLED", () => {
     })).toThrow("Ungültige Umgebungsvariablen");
   });
 });
+
+describe("INGESTION_AUTO_PROCESS", () => {
+  it("ist standardmäßig aktiviert", () => {
+    expect(parseEnv(requiredEnvironment).INGESTION_AUTO_PROCESS).toBe(true);
+  });
+
+  it.each(["false", "FALSE", "0"])("akzeptiert %s als deaktiviert", (value) => {
+    expect(parseEnv({
+      ...requiredEnvironment,
+      INGESTION_AUTO_PROCESS: value,
+    }).INGESTION_AUTO_PROCESS).toBe(false);
+  });
+
+  it.each(["true", "TRUE", "1"])("akzeptiert %s als aktiviert", (value) => {
+    expect(parseEnv({
+      ...requiredEnvironment,
+      INGESTION_AUTO_PROCESS: value,
+    }).INGESTION_AUTO_PROCESS).toBe(true);
+  });
+
+  it("lehnt andere Werte ab", () => {
+    expect(() => parseEnv({
+      ...requiredEnvironment,
+      INGESTION_AUTO_PROCESS: "yes",
+    })).toThrow("Ungültige Umgebungsvariablen");
+  });
+});
+
+describe("WORKER_SCHEDULES", () => {
+  it("ist optional und bewahrt den Listenwert auf", () => {
+    expect(parseEnv(requiredEnvironment).WORKER_SCHEDULES).toBeUndefined();
+    expect(parseEnv({
+      ...requiredEnvironment,
+      WORKER_SCHEDULES: "ingestion.search_keys.run, ingestion.source.fetch",
+    }).WORKER_SCHEDULES).toBe("ingestion.search_keys.run, ingestion.source.fetch");
+  });
+});

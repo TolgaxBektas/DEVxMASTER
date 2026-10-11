@@ -18,6 +18,7 @@ describe("Worker-Zeitpläne", () => {
     expect(buildWorkerSchedules(jobs, {
       ...environment,
       WORKER_SCHEDULES_ENABLED: false,
+      WORKER_SCHEDULES: "daily-job",
     })).toEqual([]);
   });
 
@@ -43,5 +44,36 @@ describe("Worker-Zeitpläne", () => {
       ...environment,
       INGESTION_WATCH_FOLDER: "",
     }).map(({ name }) => name)).toEqual(["daily-job"]);
+  });
+
+  it("filtert Zeitpläne nach der optionalen Job-Allowlist", () => {
+    expect(buildWorkerSchedules(jobs, {
+      ...environment,
+      WORKER_SCHEDULES: " frequent-job , daily-job ",
+    }).map(({ name }) => name)).toEqual(["daily-job", "frequent-job"]);
+  });
+
+  it("lehnt unbekannte Jobnamen ab und nennt die gültigen Namen", () => {
+    expect(() => buildWorkerSchedules(jobs, {
+      ...environment,
+      WORKER_SCHEDULES: "daily-job, unbekannt",
+    })).toThrow(
+      "Ungültige WORKER_SCHEDULES: unbekannt. Gültige geplante Jobnamen: daily-job, frequent-job",
+    );
+  });
+
+  it("lehnt unbekannte Jobnamen auch bei deaktivierten Zeitplänen ab", () => {
+    expect(() => buildWorkerSchedules(jobs, {
+      ...environment,
+      WORKER_SCHEDULES_ENABLED: false,
+      WORKER_SCHEDULES: "unknown-job",
+    })).toThrow("Gültige geplante Jobnamen: daily-job, frequent-job");
+  });
+
+  it("behandelt eine leere Allowlist wie eine nicht gesetzte", () => {
+    expect(buildWorkerSchedules(jobs, {
+      ...environment,
+      WORKER_SCHEDULES: "   ",
+    })).toEqual(buildWorkerSchedules(jobs, environment));
   });
 });

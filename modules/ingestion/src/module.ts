@@ -273,6 +273,7 @@ export function createIngestionModule(deps: {
   audit?: AuditRepository;
   storage?: Storage;
   maxUploadBytes?: number;
+  autoProcess?: boolean;
   transaction?: <T>(callback: (db: unknown) => Promise<T>) => Promise<T>;
   repositoryForTransaction?: (db: unknown) => IngestionRepository;
   enqueue?: (
@@ -927,7 +928,7 @@ export function createIngestionModule(deps: {
                 : {}),
               storage: deps.storage!,
               audit: deps.audit!,
-              auditFor: (db) => createDrizzleAuditRepository(db),
+              auditFor: (db) => deps.db ? createDrizzleAuditRepository(db) : deps.audit!,
               transaction: deps.transaction!,
               publish: deps.publish,
               enqueue: deps.enqueue!,
@@ -945,7 +946,7 @@ export function createIngestionModule(deps: {
               lastFetchedAt: new Date(),
               lastError: null,
             });
-            if (!result.deduplicated) {
+            if (!result.deduplicated && deps.autoProcess !== false) {
               await deps.enqueue!({ name: "ingestion.processing.run", tenantId, payload: { documentId: result.document.id } });
             }
           } catch (error) {
@@ -1004,6 +1005,7 @@ export function createIngestionModule(deps: {
           const documentId = (payload as { documentId?: unknown }).documentId;
           const isTargeted = typeof documentId === "number";
           if (!isTargeted) {
+            if (deps.autoProcess === false) return;
             if (!deps.enqueue || !deps.hasActiveDocumentJob) {
               throw new Error("Sammellauf ohne Queue-Anbindung nicht möglich");
             }
