@@ -4,6 +4,7 @@ import {
   parseRun50EtappeDocumentList,
   parseRun50EtappeExclusionList,
   parseRun50EtappeArguments,
+  run50EtappePeriodEndYear,
   run50EtappeTargetPages,
   selectRun50EtappeDocuments,
   type Run50EtappeCandidate,
@@ -200,6 +201,33 @@ describe("Run50-Etappenplanung", () => {
         2026,
       );
       expect(selectedWithDefaultAge.map((item) => item.documentId).sort()).toEqual([20, 21, 22, 23, 24]);
+      const filenameCandidates: Run50EtappeCandidate[] = [
+        {
+          ...candidates[0]!,
+          documentId: 30,
+          filename: "Mitteilungsblatt_2022.pdf",
+          periodEndYear: run50EtappePeriodEndYear(null, "Mitteilungsblatt_2022.pdf"),
+        },
+        {
+          ...candidates[0]!,
+          documentId: 31,
+          filename: "familienwegweiser_internet.pdf",
+          periodEndYear: run50EtappePeriodEndYear(null, "familienwegweiser_internet.pdf"),
+        },
+        {
+          ...candidates[0]!,
+          documentId: 32,
+          filename: "Mitteilungsblatt_2024.pdf",
+          periodEndYear: run50EtappePeriodEndYear(null, "Mitteilungsblatt_2024.pdf"),
+        },
+      ];
+      expect(selectRun50EtappeDocuments(
+        filenameCandidates,
+        10,
+        "stage-filename",
+        undefined,
+        2026,
+      ).map((item) => item.documentId)).toEqual([31, 32]);
     } finally {
       if (previousAge === undefined) {
         delete process.env.INGESTION_ACTUALITY_MAX_AGE_YEARS;
@@ -207,6 +235,14 @@ describe("Run50-Etappenplanung", () => {
         process.env.INGESTION_ACTUALITY_MAX_AGE_YEARS = previousAge;
       }
     }
+  });
+
+  it("bevorzugt das Klassifikationsjahr und nutzt sonst das Dateinamensjahr", () => {
+    expect(run50EtappePeriodEndYear(2020, "Mitteilungsblatt_2022.pdf")).toBe(2020);
+    expect(run50EtappePeriodEndYear(null, "Mitteilungsblatt_2022.pdf")).toBe(2022);
+    expect(run50EtappePeriodEndYear(null, "familienwegweiser_internet.pdf")).toBeNull();
+    expect(run50EtappePeriodEndYear(0, "Mitteilungsblatt_2022.pdf")).toBe(2022);
+    expect(run50EtappePeriodEndYear(-1, "Mitteilungsblatt_2022.pdf")).toBe(2022);
   });
 
   it("ist für dieselbe Etappe deterministisch und variiert zwischen Etappen", () => {

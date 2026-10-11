@@ -198,16 +198,25 @@ function derivePeriodCandidate(
       source,
     };
   }
-  const bareYear = allowBareYear ? text.match(/\b(20\d{2})\b/) : null;
-  return bareYear ? {
+  const bareYear = allowBareYear ? text.match(/(?<!\d)(20\d{2})(?!\d)/) : null;
+  const compactMonthYear = allowBareYear
+    ? text.match(/(?<!\d)(?:0[1-9]|1[0-2])(20\d{2})(?!\d)/)
+    : null;
+  const year = bareYear?.[1] ?? compactMonthYear?.[1];
+  return year ? {
     editionLabel: null,
     editionConfidence: null,
-    periodStartYear: Number(bareYear[1]),
-    periodEndYear: Number(bareYear[1]),
+    periodStartYear: Number(year),
+    periodEndYear: Number(year),
     periodIssue: null,
     periodConfidence: 0.45,
     source,
   } : null;
+}
+
+export function filenamePeriodEndYear(filename: string): number | null {
+  const candidate = derivePeriodCandidate(filename.replace(/_+/g, " "), "filename", true);
+  return candidate && candidate.periodEndYear > 0 ? candidate.periodEndYear : null;
 }
 
 function deriveRegion(text: string) {
@@ -343,7 +352,7 @@ export function deriveDocumentClassification(input: {
     .join("\n");
   const periodDecision = [
     derivePeriodCandidate(metadataText, "pdf-metadata", false),
-    derivePeriodCandidate(input.filename, "filename", true),
+    derivePeriodCandidate(input.filename.replace(/_+/g, " "), "filename", true),
     derivePeriodCandidate(firstPage, "title-page", false),
     derivePeriodCandidate(firstPagesPeriodEvidence, "first-pages", false),
   ].find((candidate): candidate is PeriodDecision => Boolean(candidate)) ?? null;

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { actualityMaxAgeYears } from "./actuality.js";
+import { filenamePeriodEndYear } from "./classification.js";
 
 export type Run50EtappeArguments = {
   tenantId: number;
@@ -22,6 +23,15 @@ export type Run50EtappeCandidate = {
   filename: string;
   sha256: string;
 };
+
+export function run50EtappePeriodEndYear(
+  classificationYear: number | null,
+  filename: string,
+): number | null {
+  return classificationYear !== null && classificationYear > 0
+    ? classificationYear
+    : filenamePeriodEndYear(filename);
+}
 
 export function isRun50EtappeYearEligible(
   periodEndYear: number | null,
