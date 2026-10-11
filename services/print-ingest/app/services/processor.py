@@ -70,6 +70,8 @@ MAX_ADS_PER_PAGE = 24
 MAX_CROP_PIXELS = 18_000_000
 MARGIN_TARGET_PT = 5 / 25.4 * 72
 MARGIN_MIN_PT = 2.5 / 25.4 * 72
+COMPLETION_MAX_PT = 10 / 25.4 * 72
+COMPLETION_GUTTER_PT = 2 / 25.4 * 72
 MAX_OCR_REGIONS_PER_PAGE = 12
 _CLUSTER_MAX_GAP = 8
 _IMAGE_XOBJECT_LIMIT = 400
@@ -1480,6 +1482,228 @@ def heuristic_ad_regions(page_image: bytes, text: str, layout: dict | None = Non
     return results[:MAX_ADS_PER_PAGE]
 
 
+def _paper_gray(page_image: Image.Image) -> float:
+    histogram = page_image.histogram()
+    bright_mode = max(range(160, 256), key=histogram.__getitem__)
+    if histogram[bright_mode]:
+        return float(bright_mode)
+
+    pixel_count = sum(histogram)
+    lower_rank = max(0, (pixel_count - 1) // 2)
+    upper_rank = max(0, pixel_count // 2)
+    lower_median = upper_median = None
+    cumulative = 0
+    for gray, count in enumerate(histogram):
+        cumulative += count
+        if lower_median is None and cumulative > lower_rank:
+            lower_median = gray
+        if cumulative > upper_rank:
+            upper_median = gray
+            break
+    return (
+        (lower_median + upper_median) / 2
+        if pixel_count
+        else 255.0
+    )
+
+
+def complete_ad_rect(
+    ad_rect,
+    page_rect,
+    other_ad_rects,
+    page_image,
+    max_growth_pt=COMPLETION_MAX_PT,
+    gutter_pt=COMPLETION_GUTTER_PT,
+    ink_delta=24,
+    safety_pt=0.5,
+) -> dict:
+    original = tuple(float(value) for value in ad_rect)
+    sides = ("left", "top", "right", "bottom")
+    unchanged = {
+        "rect": original,
+        "growth_mm": {side: 0.0 for side in sides},
+        "incomplete_edges": [],
+    }
+    if page_image is None:
+        return unchanged
+
+    page_x0, page_y0, page_x1, page_y1 = (float(value) for value in page_rect)
+    page_bounds = (page_x0, page_y0, page_x1, page_y1)
+    page_width = page_x1 - page_x0
+    page_height = page_y1 - page_y0
+    if page_width <= 0 or page_height <= 0 or page_image.width <= 0:
+        return unchanged
+
+    scale = page_image.width / page_width
+    if scale <= 0:
+        return unchanged
+
+    max_growth_pt = max(0.0, float(max_growth_pt))
+    gutter_pt = max(0.0, float(gutter_pt))
+    ink_delta = max(0.0, float(ink_delta))
+    safety_pt = max(0.0, float(safety_pt))
+    paper = _paper_gray(page_image)
+    rect = list(original)
+    indexes = {"left": 0, "top": 1, "right": 2, "bottom": 3}
+    low_cut = max(0, min(256, math.ceil(paper - ink_delta)))
+    high_cut = max(0, min(256, math.floor(paper + ink_delta) + 1))
+
+    def scan_side(side):
+        axis_index = 0 if side in ("left", "right") else 1
+        cross_index = 1 - axis_index
+        negative = side in ("left", "top")
+        edge_index = indexes[side]
+        current_edge = rect[edge_index]
+        cross_start_pt = rect[cross_index]
+        cross_end_pt = rect[cross_index + 2]
+        origin = page_x0 if axis_index == 0 else page_y0
+        cross_origin = page_y0 if axis_index == 0 else page_x0
+        axis_size = page_image.width if axis_index == 0 else page_image.height
+        cross_size = page_image.height if axis_index == 0 else page_image.width
+        page_edge = page_bounds[edge_index]
+
+        cross_start = max(
+            0,
+            min(cross_size, math.floor((cross_start_pt - cross_origin) * scale)),
+        )
+        cross_end = max(
+            cross_start,
+            min(cross_size, math.ceil((cross_end_pt - cross_origin) * scale)),
+        )
+        line_length = cross_end - cross_start
+        if line_length <= 0:
+            return current_edge, False
+
+        edge_px = (current_edge - origin) * scale
+        step = -1 if negative else 1
+        line = math.floor(edge_px) - 1 if negative else math.ceil(edge_px)
+        allowed_edge = original[edge_index] + (
+            -max_growth_pt if negative else max_growth_pt
+        )
+        obstacle_edges = []
+        for obstacle in other_ad_rects or ():
+            obstacle = tuple(float(value) for value in obstacle)
+            outside_on_side = (
+                obstacle[axis_index + 2] <= current_edge
+                if negative
+                else obstacle[axis_index] >= current_edge
+            )
+            overlaps_cross_span = (
+                obstacle[cross_index + 2] >= cross_start_pt - MARGIN_TARGET_PT
+                and obstacle[cross_index] <= cross_end_pt + MARGIN_TARGET_PT
+            )
+            if outside_on_side and overlaps_cross_span:
+                obstacle_edge = (
+                    obstacle[axis_index + 2] + safety_pt
+                    if negative
+                    else obstacle[axis_index] - safety_pt
+                )
+                obstacle_edges.append(obstacle_edge)
+
+        limit_options = [(allowed_edge, "max", 0), (page_edge, "page", 1)]
+        if obstacle_edges:
+            nearest_obstacle = (
+                max(obstacle_edges) if negative else min(obstacle_edges)
+            )
+            limit_options.append((nearest_obstacle, "neighbor", 2))
+        allowed_edge, limit_reason, _ = (
+            max(limit_options, key=lambda item: (item[0], item[2]))
+            if negative
+            else min(limit_options, key=lambda item: (item[0], -item[2]))
+        )
+
+        ink_threshold = max(2, 0.002 * line_length)
+        clean_run = 0.0
+        clean_before_ink = 0.0
+        frame_mode = False
+        last_ink_edge = None
+        saw_ink = False
+        while 0 <= line < axis_size:
+            line_edge = (
+                (line if step < 0 else line + 1) / scale + origin
+            )
+            within_limit = (
+                line_edge >= allowed_edge - 1e-9
+                if step < 0
+                else line_edge <= allowed_edge + 1e-9
+            )
+            if not within_limit:
+                break
+            strip = page_image.crop(
+                (line, cross_start, line + 1, cross_end)
+                if axis_index == 0
+                else (cross_start, line, cross_end, line + 1)
+            )
+            histogram = strip.histogram()
+            strip.close()
+            ink_pixels = sum(histogram[:low_cut]) + sum(histogram[high_cut:])
+            if ink_pixels > ink_threshold:
+                if last_ink_edge is None and clean_before_ink + 1e-9 >= gutter_pt:
+                    if ink_pixels < 0.8 * line_length:
+                        return current_edge, False
+                    frame_mode = True
+                clean_run = 0.0
+                saw_ink = True
+                last_ink_edge = line_edge
+            else:
+                if last_ink_edge is None:
+                    clean_before_ink += 1 / scale
+                else:
+                    clean_run += 1 / scale
+                    if frame_mode or clean_run + 1e-9 >= gutter_pt:
+                        return last_ink_edge, False
+            line += step
+
+        reached_page = not (0 <= line < axis_size)
+        if limit_reason == "page" and reached_page:
+            return (page_edge if saw_ink else current_edge), False
+        if saw_ink or (
+            limit_reason == "neighbor"
+            and (
+                clean_before_ink
+                if last_ink_edge is None
+                else clean_run
+            )
+            + 1e-9
+            < gutter_pt
+        ):
+            return original[indexes[side]], True
+        return current_edge, False
+
+    incomplete_edges = []
+    for _ in range(3):
+        changed = False
+        round_incomplete = []
+        for side in sides:
+            index = indexes[side]
+            new_edge, incomplete = scan_side(side)
+            edge = original[index] if incomplete else new_edge
+            if rect[index] != edge:
+                rect[index] = edge
+                changed = True
+            if incomplete:
+                round_incomplete.append(side)
+        incomplete_edges = round_incomplete
+        if not changed:
+            break
+
+    left, top, right, bottom = rect
+    growth = {
+        "left": max(0.0, original[0] - left),
+        "top": max(0.0, original[1] - top),
+        "right": max(0.0, right - original[2]),
+        "bottom": max(0.0, bottom - original[3]),
+    }
+    return {
+        "rect": tuple(rect),
+        "growth_mm": {
+            side: round(distance * 25.4 / 72, 3)
+            for side, distance in growth.items()
+        },
+        "incomplete_edges": incomplete_edges,
+    }
+
+
 def crop_margin(
     ad_rect,
     page_rect,
@@ -1546,24 +1770,7 @@ def crop_margin(
 
     if page_image is not None:
         pixels = page_image.load()
-        histogram = page_image.histogram()
-        pixel_count = sum(histogram)
-        lower_rank = max(0, (pixel_count - 1) // 2)
-        upper_rank = max(0, pixel_count // 2)
-        lower_median = upper_median = None
-        cumulative = 0
-        for gray, count in enumerate(histogram):
-            cumulative += count
-            if lower_median is None and cumulative > lower_rank:
-                lower_median = gray
-            if cumulative > upper_rank:
-                upper_median = gray
-                break
-        paper = (
-            (lower_median + upper_median) / 2
-            if pixel_count
-            else 255
-        )
+        paper = _paper_gray(page_image)
         scale = page_image.width / (page_x1 - page_x0)
         for side in ("left", "top", "right", "bottom"):
             maximum_margin = margins[side]
@@ -1755,13 +1962,20 @@ def render_ad_crop_with_margin(
                 for drawing in layout.get("drawings", [])
                 if drawing.get("bbox")
             )
-        obstacles.extend(
+        other_ad_rects = [
             _region_rect(page, other_region)
             for other_region in page_regions
             if other_region is not region
+        ]
+        obstacles.extend(other_ad_rects)
+        completion_info = complete_ad_rect(
+            ad_rect,
+            page.rect,
+            other_ad_rects,
+            page_image,
         )
         margin_info = crop_margin(
-            ad_rect,
+            completion_info["rect"],
             page.rect,
             obstacles,
             page_image=page_image,
@@ -1778,6 +1992,8 @@ def render_ad_crop_with_margin(
             "crop_bbox": crop_bbox,
             "margin_mm": margin_info["margin_mm"],
             "shortfall": margin_info["shortfall"],
+            "completion_mm": completion_info["growth_mm"],
+            "incomplete_edges": completion_info["incomplete_edges"],
         }
     finally:
         doc.close()
