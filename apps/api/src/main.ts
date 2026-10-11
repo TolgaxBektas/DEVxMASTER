@@ -93,6 +93,7 @@ const ingestion = createIngestionModule({
   audit,
   storage,
   maxUploadBytes: env.INGESTION_MAX_UPLOAD_BYTES,
+  autoProcess: env.INGESTION_AUTO_PROCESS,
   ...(env.ARTWORK_SERVICE_TOKEN
     ? {
         reviewClient: createPifReviewClient({
