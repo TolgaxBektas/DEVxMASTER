@@ -20,7 +20,7 @@ import {
   IngestionOccurrenceNotFoundError,
   periodIncludesYear,
 } from "./repository.js";
-import { documentActualityStatus } from "./actuality.js";
+import { actualityMaxAgeYears, documentActualityStatus } from "./actuality.js";
 import { areaWebsiteSeeds, websiteRegister } from "./website-registry.js";
 
 const context = (tenantId: string | null, payload: unknown) => ({
@@ -761,10 +761,37 @@ describe("Ingestion-Bestand", () => {
     expect(enqueued).toHaveLength(0);
     expect(repository.sourceVisits[0]).toMatchObject({ newPdfCount: 1 });
   });
-  it("bewertet Aktualität relativ und lässt das Jahr unbelegt offen", () => {
-    expect(documentActualityStatus({ periodStartYear: 2022, periodEndYear: 2022 }, 2025, 3)).toBe("current");
-    expect(documentActualityStatus({ periodStartYear: 2021, periodEndYear: 2021 }, 2025, 3)).toBe("outdated");
-    expect(documentActualityStatus({ periodStartYear: null, periodEndYear: null }, 2025, 3)).toBe("unverified");
+  it("verwendet 2,5 Jahre als Standard und lässt das Jahr unbelegt offen", () => {
+    const previousAge = process.env.INGESTION_ACTUALITY_MAX_AGE_YEARS;
+    try {
+      delete process.env.INGESTION_ACTUALITY_MAX_AGE_YEARS;
+      expect(actualityMaxAgeYears()).toBe(2.5);
+      expect(actualityMaxAgeYears("2.5")).toBe(2.5);
+      expect(actualityMaxAgeYears("1.25")).toBe(1.25);
+      expect(actualityMaxAgeYears("0")).toBe(0);
+      expect(actualityMaxAgeYears("abc")).toBe(2.5);
+      expect(actualityMaxAgeYears("Infinity")).toBe(2.5);
+      expect(actualityMaxAgeYears("-1")).toBe(2.5);
+      expect(actualityMaxAgeYears("")).toBe(2.5);
+      expect(documentActualityStatus(
+        { periodStartYear: 2024, periodEndYear: 2024 },
+        2026,
+      )).toBe("current");
+      expect(documentActualityStatus(
+        { periodStartYear: 2023, periodEndYear: 2023 },
+        2026,
+      )).toBe("outdated");
+      expect(documentActualityStatus(
+        { periodStartYear: null, periodEndYear: null },
+        2026,
+      )).toBe("unverified");
+    } finally {
+      if (previousAge === undefined) {
+        delete process.env.INGESTION_ACTUALITY_MAX_AGE_YEARS;
+      } else {
+        process.env.INGESTION_ACTUALITY_MAX_AGE_YEARS = previousAge;
+      }
+    }
   });
 
   it("hält Aktualitätsentscheidung und Jahreskorrektur in der Speicherfassung synchron", async () => {

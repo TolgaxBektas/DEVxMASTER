@@ -1,12 +1,13 @@
 import type { DocumentClassification } from "./classification.js";
 
-export const DEFAULT_ACTUALITY_MAX_AGE_YEARS = 3;
+export const DEFAULT_ACTUALITY_MAX_AGE_YEARS = 2.5;
 
 export type ActualityStatus = "current" | "outdated" | "unverified";
 
 export function actualityMaxAgeYears(value = process.env.INGESTION_ACTUALITY_MAX_AGE_YEARS): number {
+  if (value === undefined || value.trim() === "") return DEFAULT_ACTUALITY_MAX_AGE_YEARS;
   const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed >= 0 ? parsed : DEFAULT_ACTUALITY_MAX_AGE_YEARS;
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_ACTUALITY_MAX_AGE_YEARS;
 }
 
 export function documentActualityStatus(

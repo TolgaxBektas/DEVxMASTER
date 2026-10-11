@@ -1,7 +1,12 @@
+import math
+import os
+import re
 from datetime import date
 from urllib.parse import unquote, urljoin, urlparse
-import re, requests
+
+import requests
 from bs4 import BeautifulSoup
+
 from app.core.config import settings
 from app.services.archive_index import ArchiveIndex
 from app.services.policy import DiscoveryBudget, check_url_policy, close_checked_response, read_limited_response, request_checked
@@ -120,6 +125,18 @@ def candidate_recency_key(url: str, archive_timestamp: str | None = None) -> tup
             return year, min(12, week * 12 // 52 + 1)
     return year, 0
 
+def _actuality_max_age_years() -> float:
+    value = os.getenv("INGESTION_ACTUALITY_MAX_AGE_YEARS")
+    if value is None or not value.strip():
+        return 2.5
+    try:
+        parsed = float(value)
+    except ValueError:
+        return 2.5
+    if not math.isfinite(parsed) or parsed < 0:
+        return 2.5
+    return parsed
+
 def _area_slug(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", _match_text(value)).strip("-")
 
@@ -158,7 +175,7 @@ def candidate_rejection_reason(
         match = re.match(r"(20\d{2})", archive_timestamp)
         if match:
             years.append(int(match.group(1)))
-    cutoff = date.today().year - 3
+    cutoff = date.today().year - _actuality_max_age_years()
     if years and max(years) < cutoff:
         return f"Jahreszahl älter als {cutoff}"
     score = score_candidate(url, anchor_text, area_name)

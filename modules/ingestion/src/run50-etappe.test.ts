@@ -176,10 +176,38 @@ describe("Run50-Etappenplanung", () => {
     areaName: index === 0 ? null : "Passau",
     areaLabel: index === 0 ? "wird aus den Anzeigen ermittelt" : "09162 Passau",
     areaOrigin: index === 0 ? "offen" : "quelle",
+    periodEndYear: new Date().getFullYear(),
     pages: 1,
     filename: `${index + 1}.pdf`,
     sha256: String(index + 1).padStart(64, "0"),
   }));
+
+  it("schließt nur erkannte Jahre außerhalb des Aktualitätszeitraums aus", () => {
+    const yearCandidates = [2024, 2025, 2026, null, 2027, 2023, 2022].map((periodEndYear, index) => ({
+      ...candidates[0]!,
+      documentId: index + 20,
+      periodEndYear,
+      sha256: String(index + 20).padStart(64, "0"),
+    }));
+    const previousAge = process.env.INGESTION_ACTUALITY_MAX_AGE_YEARS;
+    try {
+      delete process.env.INGESTION_ACTUALITY_MAX_AGE_YEARS;
+      const selectedWithDefaultAge = selectRun50EtappeDocuments(
+        yearCandidates,
+        10,
+        "stage-1",
+        undefined,
+        2026,
+      );
+      expect(selectedWithDefaultAge.map((item) => item.documentId).sort()).toEqual([20, 21, 22, 23, 24]);
+    } finally {
+      if (previousAge === undefined) {
+        delete process.env.INGESTION_ACTUALITY_MAX_AGE_YEARS;
+      } else {
+        process.env.INGESTION_ACTUALITY_MAX_AGE_YEARS = previousAge;
+      }
+    }
+  });
 
   it("ist für dieselbe Etappe deterministisch und variiert zwischen Etappen", () => {
     const firstEtappe = selectRun50EtappeDocuments(candidates, 10, "stage-1")
@@ -209,6 +237,7 @@ describe("Run50-Etappenplanung", () => {
         areaName: null,
         areaLabel: "wird aus den Anzeigen ermittelt",
         areaOrigin: "offen",
+        periodEndYear: new Date().getFullYear(),
         pages: 550,
         filename: "4119.pdf",
         sha256: "f".repeat(64),
@@ -225,6 +254,7 @@ describe("Run50-Etappenplanung", () => {
       areaName: null,
       areaLabel: "Teststadt (12345), 1 von 1 Anzeigen",
       areaOrigin: "anzeigen",
+      periodEndYear: new Date().getFullYear(),
       pages: 2,
       filename: "gebietslos.pdf",
       sha256: "a".repeat(64),

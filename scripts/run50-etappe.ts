@@ -18,8 +18,10 @@ import {
   parseEnv,
 } from "../packages/kernel/src/index.ts";
 import { DrizzleQueueRepository, LeaseQueue } from "../packages/jobs/src/index.ts";
+import { actualityMaxAgeYears } from "../modules/ingestion/src/actuality.ts";
 import {
   areas,
+  classifications,
   documents,
   occurrences,
   pages,
@@ -31,6 +33,7 @@ import {
   parseRun50EtappeDocumentList,
   parseRun50EtappeExclusionList,
   run50EtappeTargetPages,
+  isRun50EtappeYearEligible,
   selectRun50EtappeDocuments,
   type Run50EtappeContact,
 } from "../modules/ingestion/src/run50-etappe.ts";
@@ -149,6 +152,7 @@ async function main() {
       filename: documents.filename,
       ags: areas.ags,
       areaName: areas.name,
+      periodEndYear: classifications.periodEndYear,
       pages: sql<number>`COUNT(${pages.id})`,
     })
       .from(documents)
@@ -159,6 +163,10 @@ async function main() {
       .leftJoin(areas, and(
         eq(areas.id, sources.areaId!),
         eq(areas.tenantId, tenantId),
+      ))
+      .leftJoin(classifications, and(
+        eq(classifications.documentId, documents.id),
+        eq(classifications.tenantId, tenantId),
       ))
       .leftJoin(pages, eq(pages.documentId, documents.id))
       .where(and(
@@ -193,6 +201,7 @@ async function main() {
         documents.filename,
         areas.ags,
         areas.name,
+        classifications.periodEndYear,
       )
       .orderBy(asc(documents.sha256), asc(documents.id));
     const candidates = rows.map((row) => ({
@@ -201,6 +210,7 @@ async function main() {
       filename: row.filename,
       ags: row.ags,
       areaName: row.areaName,
+      periodEndYear: row.periodEndYear,
       pages: Number(row.pages),
     }));
     const areaLessDocumentIds = candidates
@@ -253,19 +263,28 @@ async function main() {
     const oversizedCandidateCount = maxPages === undefined
       ? 0
       : candidatesWithArea.filter((candidate) => candidate.pages > maxPages).length;
+    const currentYear = new Date().getFullYear();
+    const maxAgeYears = actualityMaxAgeYears();
+    const excludedByYearCount = candidatesWithArea.filter((candidate) =>
+      !isRun50EtappeYearEligible(candidate.periodEndYear, currentYear, maxAgeYears)
+    ).length;
     const candidatesById = new Map(
       candidatesWithArea.map((candidate) => [candidate.documentId, candidate]),
     );
     const selected = documentIds === undefined
       ? selectRun50EtappeDocuments(
         candidatesWithArea,
-        targetPages ?? 0,
-        etappe,
-        maxPages,
-      )
+          targetPages ?? 0,
+          etappe,
+          maxPages,
+          currentYear,
+          maxAgeYears,
+        )
       : documentIds.flatMap((documentId) => {
         const candidate = candidatesById.get(documentId);
-        return candidate && (maxPages === undefined || candidate.pages <= maxPages)
+        return candidate
+          && isRun50EtappeYearEligible(candidate.periodEndYear, currentYear, maxAgeYears)
+          && (maxPages === undefined || candidate.pages <= maxPages)
           ? [candidate]
           : [];
       });
@@ -281,6 +300,10 @@ async function main() {
       if (document.state !== "processed") return "nicht processed";
       if (approvedDocumentIds.has(documentId)) return "bereits freigegebene Anzeige";
       if (excludedDocumentIds.has(documentId)) return "Ausschlussliste";
+      const candidate = candidatesById.get(documentId);
+      if (candidate && !isRun50EtappeYearEligible(candidate.periodEndYear, currentYear, maxAgeYears)) {
+        return "Jahr außerhalb des Aktualitätszeitraums";
+      }
       if (maxPages !== undefined && Number(document.pages) > maxPages) return "zu groß";
       return "unbekannt";
     };
@@ -296,6 +319,7 @@ async function main() {
     console.log(`Zielseiten: ${targetPages ?? "—"}`);
     console.log(`Max. Seiten je Heft: ${maxPages ?? "—"}`);
     console.log(`Ausgeschlossen (Liste): ${excludedFromStock.length}`);
+    console.log(`Ausgeschlossen (Jahr): ${excludedByYearCount}`);
     console.log(`Ausgeschlossen (zu groß): ${oversizedCandidateCount}`);
     console.log(`Dokumente: ${selected.length}`);
     console.log(`Seiten: ${selectedPages}`);
