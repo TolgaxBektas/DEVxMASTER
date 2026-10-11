@@ -9,6 +9,7 @@ from app.services.processor import (
     _add_candidate_without_nested_duplicates,
     _image_placement_upper_bound,
     _layout_for_page,
+    complete_ad_rect,
     extract_contacts,
     extract_pdf_metadata,
     classify_ad_candidate,
@@ -970,6 +971,161 @@ def _points_from_mm(value):
     return value / 25.4 * 72
 
 
+def test_complete_ad_rect_includes_the_full_frame():
+    page_image = Image.new("L", (400, 300), 255)
+    ImageDraw.Draw(page_image).rectangle(
+        (100, 100, 300, 200),
+        outline=0,
+        width=2,
+    )
+
+    result = complete_ad_rect(
+        (110, 110, 290, 190),
+        (0, 0, 400, 300),
+        [],
+        page_image,
+    )
+
+    x0, y0, x1, y1 = result["rect"]
+    assert x0 <= 100 and y0 <= 100 and x1 >= 300 and y1 >= 200
+    assert x0 >= 99 and y0 >= 99 and x1 <= 301 and y1 <= 201
+    assert result["incomplete_edges"] == []
+
+
+def test_complete_ad_rect_includes_the_full_tinted_background():
+    page_image = Image.new("L", (400, 300), 255)
+    ImageDraw.Draw(page_image).rectangle(
+        (150, 120, 250, 220),
+        fill=225,
+    )
+
+    result = complete_ad_rect(
+        (160, 130, 240, 210),
+        (0, 0, 400, 300),
+        [],
+        page_image,
+    )
+
+    x0, y0, x1, y1 = result["rect"]
+    assert x0 <= 150 and y0 <= 120 and x1 >= 250 and y1 >= 220
+    assert x0 >= 149 and y0 >= 119 and x1 <= 251 and y1 <= 221
+
+
+def test_complete_ad_rect_follows_glyphs_cut_at_the_bottom():
+    page_image = Image.new("L", (400, 300), 255)
+    ImageDraw.Draw(page_image).rectangle((150, 175, 170, 185), fill=0)
+
+    result = complete_ad_rect(
+        (130, 130, 200, 180),
+        (0, 0, 400, 300),
+        [],
+        page_image,
+    )
+
+    assert result["rect"][3] >= 186
+    assert result["rect"][3] <= 187
+    assert result["incomplete_edges"] == []
+
+
+def test_complete_ad_rect_does_not_cross_into_a_neighbor_ad():
+    page_image = Image.new("L", (400, 300), 255)
+    ImageDraw.Draw(page_image).rectangle((190, 120, 220, 180), fill=0)
+
+    result = complete_ad_rect(
+        (100, 100, 200, 200),
+        (0, 0, 400, 300),
+        [(200, 100, 250, 200)],
+        page_image,
+    )
+
+    assert result["rect"][2] == 200
+    assert "right" in result["incomplete_edges"]
+    assert result["rect"][2] <= 200
+
+
+def test_complete_ad_rect_reports_ink_beyond_the_growth_limit():
+    page_image = Image.new("L", (400, 300), 255)
+    ImageDraw.Draw(page_image).rectangle((200, 120, 260, 180), fill=0)
+
+    result = complete_ad_rect(
+        (100, 100, 200, 200),
+        (0, 0, 400, 300),
+        [],
+        page_image,
+    )
+
+    assert result["rect"][2] == 200
+    assert "right" in result["incomplete_edges"]
+
+
+def test_complete_ad_rect_leaves_clean_edges_unchanged():
+    page_image = Image.new("L", (400, 300), 255)
+    ad_rect = (100, 80, 200, 180)
+
+    result = complete_ad_rect(
+        ad_rect,
+        (0, 0, 400, 300),
+        [],
+        page_image,
+    )
+
+    assert result["rect"] == ad_rect
+    assert result["growth_mm"] == {
+        "left": 0.0,
+        "top": 0.0,
+        "right": 0.0,
+        "bottom": 0.0,
+    }
+    assert result["incomplete_edges"] == []
+
+
+def test_complete_ad_rect_without_page_image_is_unchanged():
+    ad_rect = (100, 80, 200, 180)
+
+    result = complete_ad_rect(ad_rect, (0, 0, 400, 300), [], None)
+
+    assert result["rect"] == ad_rect
+    assert result["incomplete_edges"] == []
+
+
+def test_render_ad_crop_with_margin_completes_a_pdf_frame_before_padding():
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    frame = fitz.Rect(100, 100, 300, 200)
+    page.draw_rect(frame, color=(0, 0, 0), width=1)
+    page.insert_text((125, 150), "Anzeige", fontsize=14)
+    page_image = load_page_gray(
+        page.get_pixmap(matrix=fitz.Matrix(1, 1), alpha=False).tobytes("png")
+    )
+    pdf = document.tobytes()
+    region = {
+        "x": 110 / 400,
+        "y": 110 / 300,
+        "width": 180 / 400,
+        "height": 80 / 300,
+    }
+
+    _crop, info = render_ad_crop_with_margin(
+        pdf,
+        1,
+        region,
+        {"blocks": [], "images": [], "drawings": []},
+        [region],
+        page_image=page_image,
+    )
+
+    crop_bbox = info["crop_bbox"]
+    assert crop_bbox["x"] * 400 <= frame.x0 - MARGIN_TARGET_PT
+    assert crop_bbox["y"] * 300 <= frame.y0 - MARGIN_TARGET_PT
+    assert (
+        crop_bbox["x"] + crop_bbox["width"]
+    ) * 400 >= frame.x1 + MARGIN_TARGET_PT
+    assert (
+        crop_bbox["y"] + crop_bbox["height"]
+    ) * 300 >= frame.y1 + MARGIN_TARGET_PT
+    assert all(info["completion_mm"][side] > 0 for side in ("left", "top", "right", "bottom"))
+
+
 def test_crop_margin_uses_target_margin_when_isolated():
     result = crop_margin(
         (100, 100, 200, 200),
@@ -1083,7 +1239,20 @@ def test_render_ad_crop_with_margin_includes_safe_padding_without_neighbor_pixel
             for red, green, blue in crop_image.getdata()
         )
     assert info["margin_mm"]["right"] == 1.6
-    assert set(info) == {"crop_bbox", "margin_mm", "shortfall"}
+    assert set(info) == {
+        "crop_bbox",
+        "margin_mm",
+        "shortfall",
+        "completion_mm",
+        "incomplete_edges",
+    }
+    assert info["completion_mm"] == {
+        "left": 0.0,
+        "top": 0.0,
+        "right": 0.0,
+        "bottom": 0.0,
+    }
+    assert info["incomplete_edges"] == []
     assert info["shortfall"] == ["right"]
 
 
