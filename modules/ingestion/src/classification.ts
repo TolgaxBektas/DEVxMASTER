@@ -219,8 +219,19 @@ function derivePeriodCandidate(
   };
 }
 
+function normalizeFilenameForPeriod(filename: string): string {
+  let decodedFilename: string;
+  try {
+    decodedFilename = decodeURIComponent(filename);
+  } catch (error) {
+    if (!(error instanceof URIError)) throw error;
+    decodedFilename = filename.replace(/%20/gi, " ");
+  }
+  return decodedFilename.replace(/_+/g, " ");
+}
+
 export function filenamePeriodEndYear(filename: string): number | null {
-  const candidate = derivePeriodCandidate(filename.replace(/_+/g, " "), "filename", true);
+  const candidate = derivePeriodCandidate(normalizeFilenameForPeriod(filename), "filename", true);
   return candidate && candidate.periodEndYear > 0 ? candidate.periodEndYear : null;
 }
 
@@ -357,7 +368,7 @@ export function deriveDocumentClassification(input: {
     .join("\n");
   const periodDecision = [
     derivePeriodCandidate(metadataText, "pdf-metadata", false),
-    derivePeriodCandidate(input.filename.replace(/_+/g, " "), "filename", true),
+    derivePeriodCandidate(normalizeFilenameForPeriod(input.filename), "filename", true),
     derivePeriodCandidate(firstPage, "title-page", false),
     derivePeriodCandidate(firstPagesPeriodEvidence, "first-pages", false),
   ].find((candidate): candidate is PeriodDecision => Boolean(candidate)) ?? null;

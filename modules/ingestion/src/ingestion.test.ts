@@ -807,6 +807,12 @@ describe("Ingestion-Bestand", () => {
       .toBe("outdated");
   });
 
+  it("decodiert URL-kodierte Jahre vor der Aktualitätsprüfung", () => {
+    expect(sourceActualityHint({
+      url: "https://x/Sonderamtsblatt%202%20vom%2028.09.2023.pdf",
+    }, 2026, 2.5)).toBe("outdated");
+  });
+
   it("hält Aktualitätsentscheidung und Jahreskorrektur in der Speicherfassung synchron", async () => {
     const repository = new MemoryIngestionRepository();
     const document = await repository.createUploadedDocument("1", {
@@ -916,6 +922,10 @@ describe("Ingestion-Bestand", () => {
     { filename: "Amtsblatt_2022_2024.pdf", year: 2024 },
     { filename: "Mitbl_24_2024-11-22.pdf", year: 2024 },
     { filename: "22-11-09_Neubuergerbroschuere_2023.pdf", year: 2023 },
+    { filename: "Mitteilungsblatt%20Nr%2003_2023.pdf", year: 2023 },
+    { filename: "Sonderamtsblatt%202%20vom%2028.09.2023.pdf", year: 2023 },
+    { filename: "20250917%20Anmeldung%20BOWLING%2021.10.2025.pdf", year: 2025 },
+    { filename: "Blatt%E0%A4%A_2024.pdf", year: 2024 },
     { filename: "1325.pdf", year: null },
     { filename: "220524-Wegweiser Stadt Landshut_ukrainisch.pdf", year: null },
     { filename: "familienwegweiser_internet.pdf", year: null },
@@ -947,6 +957,30 @@ describe("Ingestion-Bestand", () => {
       periodEndYear: 2015,
       periodSource: "filename",
     });
+  });
+
+  it("decodiert URL-kodierte Jahresangaben im Dateinamen", () => {
+    expect(deriveDocumentClassification({
+      filename: "Mitteilungsblatt%20Nr%2003_2023.pdf",
+      pages: [],
+    })).toMatchObject({
+      periodStartYear: 2023,
+      periodEndYear: 2023,
+      periodSource: "filename",
+    });
+    expect(filenamePeriodEndYear("Sonderamtsblatt%202%20vom%2028.09.2023.pdf")).toBe(2023);
+    expect(deriveDocumentClassification({
+      filename: "20250917%20Anmeldung%20BOWLING%2021.10.2025.pdf",
+      pages: [],
+    })).toMatchObject({
+      periodStartYear: 2025,
+      periodEndYear: 2025,
+      periodSource: "filename",
+    });
+
+    const malformedFilename = "Blatt%E0%A4%A_2024.pdf";
+    expect(() => filenamePeriodEndYear(malformedFilename)).not.toThrow();
+    expect(filenamePeriodEndYear(malformedFilename)).toBe(2024);
   });
 
   it("liefert die Regionsherkunft aus der verwendeten Evidenz oder leer", () => {
