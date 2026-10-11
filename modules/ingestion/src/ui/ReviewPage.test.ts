@@ -17,6 +17,7 @@ import {
   updateReviewPage,
   updateReviewSelection,
   ReviewProvenanceRows,
+  readableFilename,
   reviewListCaption,
   type ReviewTabState,
 } from "./ReviewPage.js";
@@ -271,5 +272,13 @@ describe("Prüfseiten-Herkunft", () => {
       reason: "Menschliche Prüfung erforderlich",
       provenance: null,
     })).toBe("Seite — · Menschliche Prüfung erforderlich");
+  });
+});
+
+describe("readableFilename", () => {
+  it("decodes percent-encoded filenames and keeps malformed ones", () => {
+    expect(readableFilename("Amtsblatt%20M%C3%A4rz%202025.pdf")).toBe("Amtsblatt März 2025.pdf");
+    expect(readableFilename("heft%E0.pdf")).toBe("heft%E0.pdf");
+    expect(readableFilename(undefined)).toBeUndefined();
   });
 });

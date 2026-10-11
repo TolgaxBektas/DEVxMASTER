@@ -283,6 +283,15 @@ export function reviewListCaption(
   return `${area ? `${area} · ` : ""}Seite ${item.page ?? "—"} · ${item.reason}`;
 }
 
+export function readableFilename(value: string | undefined): string | undefined {
+  if (!value) return value;
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 function displayValue(value: unknown): string {
   if (Array.isArray(value)) return value.join(", ");
   if (value && typeof value === "object") {
@@ -573,6 +582,18 @@ export function ReviewPage({ api }: ModulePageProps) {
     );
   }, [activeSource, queue.data?.items, selectedIndex]);
 
+  const previous = useCallback(() => {
+    const items = queue.data?.items ?? [];
+    if (!items.length) return;
+    setSourceState((current) =>
+      updateReviewSelection(
+        current,
+        activeSource,
+        items[(selectedIndex - 1 + items.length) % items.length]?.id ?? null,
+      ),
+    );
+  }, [activeSource, queue.data?.items, selectedIndex]);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.target instanceof Element && ignoresReviewKeyboardShortcut(event.target.tagName)) return;
@@ -718,109 +739,102 @@ export function ReviewPage({ api }: ModulePageProps) {
   if (selected.isLoading || !selected.data) return statePage(<Skeleton />, true);
 
   const review = selected.data;
+  const position = page * REVIEW_PAGE_SIZE + Math.max(selectedIndex, 0) + 1;
   return (
     <div className="stack">
       {pageHeader}
       {sourceTabs}
       {reviewControls}
+      <div className="review-case-nav">
+        <Button variant="secondary" disabled={busy} onClick={previous}>← Vorheriger Fall</Button>
+        <strong>Fall {position} von {total}</strong>
+        <Button variant="secondary" disabled={busy} onClick={next}>Nächster Fall (N) →</Button>
+      </div>
       <div className="review-layout">
         <Card>
-          <h2>{SOURCE_LABELS[activeSource]}</h2>
-          <div className="stack">
-            {queue.data.items.map((item) => (
-              <button
-                className={item.id === review.id ? "list-row active" : "list-row"}
-                key={item.id}
-                type="button"
-                onClick={() =>
-                  setSourceState((current) =>
-                    updateReviewSelection(current, activeSource, item.id),
-                  )
-                }
-              >
-                <strong>{item.company.name ?? "Unbekannte Firma"}</strong>
-                <span>{reviewListCaption(item)}</span>
-              </button>
-            ))}
-          </div>
-        </Card>
-        <div className="stack">
-          <Card>
-            <h2>{review.company.name ?? "Unbekannte Firma"}</h2>
-            <span className="form-message">{SOURCE_LABELS[review.data_source]}</span>
-            <p>{review.reason}</p>
-            <div className="review-images">
-              <figure>
-                <figcaption>Original</figcaption>
-                {review.images.original_available ? (
-                  <img src={`/api/ingestion/reviews/${review.id}/original`} alt="Original" />
-                ) : (
-                  <div className="image-unavailable">Originalbild nicht verfügbar</div>
-                )}
-              </figure>
+          <div className="review-images">
+            <figure>
+              <figcaption>Anzeige im Original</figcaption>
+              {review.images.original_available ? (
+                <img src={`/api/ingestion/reviews/${review.id}/original`} alt="Original" />
+              ) : (
+                <div className="image-unavailable">Originalbild nicht verfügbar</div>
+              )}
+            </figure>
+            {review.images.restored_available && (
               <figure>
                 <figcaption>Bearbeitung</figcaption>
-                {review.images.restored_available ? (
-                  <img src={`/api/ingestion/reviews/${review.id}/restored`} alt="Bearbeitung" />
-                ) : (
-                  <div className="image-unavailable">Bearbeitung nicht verfügbar</div>
-                )}
+                <img src={`/api/ingestion/reviews/${review.id}/restored`} alt="Bearbeitung" />
               </figure>
+            )}
+          </div>
+        </Card>
+        <Card>
+          <div className="stack">
+            <div>
+              <h2>{review.company.name ?? "Unbekannte Firma"}</h2>
+              <span className="form-message">
+                {[review.provenance?.area_name, `Seite ${review.page ?? "—"}`, readableFilename(review.provenance?.document_filename)]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </span>
             </div>
-          </Card>
-          <Card>
-            <h2>Extrahierte Daten</h2>
+            <div className="review-decision">
+              <Button disabled={busy} onClick={() => void decide("approve")}>Freigeben (A)</Button>
+              <Button variant="danger" disabled={busy} onClick={() => void decide("reject")}>Ablehnen (R)</Button>
+            </div>
+            {decisionError && <div className="login-error">{decisionError}</div>}
+            <label htmlFor="review-note">Notiz</label>
+            <Input id="review-note" value={note} onChange={(event) => setNote(event.target.value)} placeholder="Optional, z. B. Grund der Ablehnung" autoComplete="off" />
+            <h3>Firmendaten</h3>
             <ContactDetails
               values={review.company.extracted_values}
               evidence={review.company.evidence}
             />
-            <VerificationDetails verification={review.company.verification} />
-            <AdvertiserProofDetails advertiserProof={review.advertiser_proof ?? []} />
-            <DeferredChannels channels={review.company.deferred_channels} />
-            <dl className="detail-list">
-              <ReviewProvenanceRows provenance={review.provenance} />
-              <div><dt>Seite</dt><dd>{review.page ?? "—"}</dd></div>
-              <div><dt>Bounding-Box</dt><dd>{Array.isArray(review.bbox) ? review.bbox.join(" × ") : displayValue(review.bbox)}</dd></div>
-              <div><dt>Review-Status</dt><dd>{review.restoration.review_status ?? "—"}</dd></div>
-              <div><dt>Geometrie</dt><dd>{review.restoration.geometry_quality_status ?? "—"}</dd></div>
-              <div><dt>Modell</dt><dd>{review.restoration.model_name ?? "—"}</dd></div>
-              <div><dt>Plan-Digest</dt><dd>{review.restoration.plan_digest ?? "—"}</dd></div>
-            </dl>
-            <h3>Inhaltsabgleich</h3>
-            {!review.restoration.content_comparison ? (
-              <p className="form-message">Kein Inhaltsabgleich verfügbar.</p>
-            ) : review.restoration.content_comparison.findings.length === 0 ? (
-              <p className="form-message">Keine Abweichungen erkannt.</p>
-            ) : (
-              <div className="form-message">
-                Schweregrad: {review.restoration.content_comparison.severity ?? review.restoration.content_comparison.status}
-                <ul>
-                {review.restoration.content_comparison.findings.map((finding, index) => (
-                  <li key={`${finding.type}-${finding.category}-${index}`}>
-                    {finding.severity ?? "unsicher"} · {finding.type === "missing" ? "Fehlt" : finding.type === "new" ? "Neu" : "Unsicher"} · {finding.category}: {finding.value}
-                  </li>
-                ))}
-                </ul>
-              </div>
-            )}
-            {review.restoration.visual_comparison?.alignment && (
-              <p className="form-message">
-                Ausrichtung: {review.restoration.visual_comparison.alignment.class ?? "—"} ·
-                {" "}Güte: {review.restoration.visual_comparison.alignment.score?.toFixed(3) ?? "—"} ·
-                {" "}verlorene Zellen: {review.restoration.visual_comparison.lost_cells ?? 0} ·
-                {" "}ergänzte Zellen: {review.restoration.visual_comparison.added_cells ?? 0}
-              </p>
-            )}
-            <label htmlFor="review-note">Notiz</label>
-            <Input id="review-note" value={note} onChange={(event) => setNote(event.target.value)} placeholder="Optionale Notiz" autoComplete="off" />
-            {decisionError && <div className="login-error">{decisionError}</div>}
-            <div className="button-row">
-              <Button disabled={busy} onClick={() => void decide("approve")}>Freigeben (A)</Button>
-              <Button variant="danger" disabled={busy} onClick={() => void decide("reject")}>Ablehnen (R)</Button>
-              <Button variant="secondary" disabled={busy} onClick={next}>Weiter (N)</Button>
-            </div>
-          </Card>
-        </div>
+            <details className="review-technical">
+              <summary>Technische Details</summary>
+              <p>{review.reason}</p>
+              <VerificationDetails verification={review.company.verification} />
+              <AdvertiserProofDetails advertiserProof={review.advertiser_proof ?? []} />
+              <DeferredChannels channels={review.company.deferred_channels} />
+              <dl className="detail-list">
+                <div><dt>Datenquelle</dt><dd>{SOURCE_LABELS[review.data_source]}</dd></div>
+                <ReviewProvenanceRows provenance={review.provenance} />
+                <div><dt>Seite</dt><dd>{review.page ?? "—"}</dd></div>
+                <div><dt>Bounding-Box</dt><dd>{Array.isArray(review.bbox) ? review.bbox.join(" × ") : displayValue(review.bbox)}</dd></div>
+                <div><dt>Review-Status</dt><dd>{review.restoration.review_status ?? "—"}</dd></div>
+                <div><dt>Geometrie</dt><dd>{review.restoration.geometry_quality_status ?? "—"}</dd></div>
+                <div><dt>Modell</dt><dd>{review.restoration.model_name ?? "—"}</dd></div>
+                <div><dt>Plan-Digest</dt><dd>{review.restoration.plan_digest ?? "—"}</dd></div>
+              </dl>
+              <h3>Inhaltsabgleich</h3>
+              {!review.restoration.content_comparison ? (
+                <p className="form-message">Kein Inhaltsabgleich verfügbar.</p>
+              ) : review.restoration.content_comparison.findings.length === 0 ? (
+                <p className="form-message">Keine Abweichungen erkannt.</p>
+              ) : (
+                <div className="form-message">
+                  Schweregrad: {review.restoration.content_comparison.severity ?? review.restoration.content_comparison.status}
+                  <ul>
+                  {review.restoration.content_comparison.findings.map((finding, index) => (
+                    <li key={`${finding.type}-${finding.category}-${index}`}>
+                      {finding.severity ?? "unsicher"} · {finding.type === "missing" ? "Fehlt" : finding.type === "new" ? "Neu" : "Unsicher"} · {finding.category}: {finding.value}
+                    </li>
+                  ))}
+                  </ul>
+                </div>
+              )}
+              {review.restoration.visual_comparison?.alignment && (
+                <p className="form-message">
+                  Ausrichtung: {review.restoration.visual_comparison.alignment.class ?? "—"} ·
+                  {" "}Güte: {review.restoration.visual_comparison.alignment.score?.toFixed(3) ?? "—"} ·
+                  {" "}verlorene Zellen: {review.restoration.visual_comparison.lost_cells ?? 0} ·
+                  {" "}ergänzte Zellen: {review.restoration.visual_comparison.added_cells ?? 0}
+                </p>
+              )}
+            </details>
+          </div>
+        </Card>
       </div>
     </div>
   );
