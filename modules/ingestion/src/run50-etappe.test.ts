@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   deriveRun50EtappeAreaFromContacts,
+  parseRun50EtappeDocumentList,
   parseRun50EtappeExclusionList,
   parseRun50EtappeArguments,
   run50EtappeTargetPages,
@@ -38,6 +39,22 @@ describe("Run50-Etappenplanung", () => {
       "--anteil", "5",
       "--ausschliessen", "/tmp/testdateien.txt",
     ]).exclusionFile).toBe("/tmp/testdateien.txt");
+    expect(parseRun50EtappeArguments([
+      "--mandant", "7",
+      "--etappe", "stage-1",
+      "--dokumente", "/tmp/hefte.tsv",
+    ])).toEqual({
+      tenantId: 7,
+      etappe: "stage-1",
+      apply: false,
+      documentFile: "/tmp/hefte.tsv",
+    });
+    expect(() => parseRun50EtappeArguments([
+      "--mandant", "7",
+      "--etappe", "stage-1",
+      "--anteil", "5",
+      "--dokumente", "/tmp/hefte.tsv",
+    ])).toThrow("schließen sich gegenseitig aus");
   });
 
   it.each([
@@ -56,9 +73,28 @@ describe("Run50-Etappenplanung", () => {
     [["--mandant", "1", "--etappe", "s", "--anteil", "5", "--max-seiten", "12", "--max-seiten", "20"], "darf nur einmal"],
     [["--mandant", "1", "--etappe", "s", "--anteil", "5", "--ausschliessen"], "--ausschliessen"],
     [["--mandant", "1", "--etappe", "s", "--anteil", "5", "--ausschliessen", "a.txt", "--ausschliessen", "b.txt"], "darf nur einmal"],
+    [["--mandant", "1", "--etappe", "s", "--anteil", "5", "--dokumente"], "--dokumente"],
+    [["--mandant", "1", "--etappe", "s", "--dokumente", "a.tsv", "--dokumente", "b.tsv"], "darf nur einmal"],
     [["--mandant", "1", "--etappe", "s", "--anteil", "5", "--unbekannt"], "Unbekanntes"],
   ])("lehnt ungültige Argumente ab", (args, message) => {
     expect(() => parseRun50EtappeArguments(args)).toThrow(message);
+  });
+
+  it("liest Dokumentlisten mit einer ID pro Zeile und dedupliziert IDs", () => {
+    expect(parseRun50EtappeDocumentList("1105\n5372\n1105\n")).toEqual([1105, 5372]);
+  });
+
+  it("liest Dokumentlisten aus einer TSV-Spalte document_id", () => {
+    expect(parseRun50EtappeDocumentList(
+      "\uFEFFfilename\tdocument_id\tpages\nheft.pdf\t1105\t104\n",
+    )).toEqual([1105]);
+  });
+
+  it("meldet ungültige Dokument-IDs mit Zeilennummer", () => {
+    expect(() => parseRun50EtappeDocumentList("1105\nabc\n")).toThrow("Zeile 2");
+    expect(() => parseRun50EtappeDocumentList(
+      "filename\tdocument_id\nheft.pdf\t1.5",
+    )).toThrow("Zeile 2");
   });
 
   it("leitet die Mehrheitsstadt ab und löst Postleitzahlengleichstände alphabetisch", () => {
