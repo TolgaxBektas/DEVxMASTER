@@ -70,6 +70,52 @@ export type IngestionSourceVisit = {
   changed: boolean;
   note: string | null;
 };
+export type IngestionSearchTerm = {
+  id: number;
+  tenantId: string;
+  term: string;
+  priority: number;
+  active: boolean;
+  origin: "vorgabe" | "manuell";
+  createdAt: Date;
+};
+export type IngestionSearchKey = {
+  id: number;
+  tenantId: string;
+  areaId: number;
+  keyType: "verwaltung" | "ort" | "plz" | "kreis";
+  term: string;
+  scope: string;
+  query: string;
+  status: "pending" | "done" | "error";
+  lastSearchedAt: Date | null;
+  nextDueAt: Date | null;
+  lastHitCount: number;
+  lastPdfCount: number;
+  lastNewSources: number;
+  totalNewSources: number;
+  runCount: number;
+  lastError: string | null;
+  createdAt: Date;
+};
+export type IngestionSearchKeyDraft = Pick<
+  IngestionSearchKey,
+  "areaId" | "keyType" | "term" | "scope" | "query"
+>;
+export type SearchKeyCoverageRow = {
+  areaId: number;
+  keyType: IngestionSearchKey["keyType"];
+  total: number;
+  searched: number;
+  errors: number;
+  withHits: number;
+  lastSearchedAt: Date | null;
+};
+export type SearchKeyRunItem = {
+  key: IngestionSearchKey;
+  area: IngestionArea;
+  termPriority: number;
+};
 
 function normalizeOccurrenceText(value: string): string {
   return value.normalize("NFKC").toLocaleLowerCase("de-DE").trim().replace(/\s+/g, " ");
@@ -207,6 +253,26 @@ export type IngestionRepository = {
   listAreas(tenantId: string): Promise<IngestionArea[]>;
   upsertArea(tenantId: string, input: IngestionAreaInput): Promise<IngestionArea>;
   updateArea(tenantId: string, areaId: number, input: Partial<Pick<IngestionArea, "status" | "lastRunAt" | "startedAt" | "nextDueAt" | "lastError" | "foundSources" | "municipalityOffset" | "incompleteRuns">>): Promise<IngestionArea>;
+  listSearchTerms(tenantId: string): Promise<IngestionSearchTerm[]>;
+  ensureSearchTerms(tenantId: string, terms: Array<{ term: string; priority: number }>): Promise<void>;
+  createSearchTerm(tenantId: string, input: {
+    term: string;
+    priority: number;
+    active: boolean;
+    origin: IngestionSearchTerm["origin"];
+  }): Promise<IngestionSearchTerm>;
+  setSearchTermActive(tenantId: string, id: number, active: boolean): Promise<IngestionSearchTerm>;
+  insertSearchKeys(tenantId: string, keys: IngestionSearchKeyDraft[]): Promise<
+    Record<IngestionSearchKey["keyType"], { inserted: number; existing: number }>
+  >;
+  listSearchKeysForRun(tenantId: string, now: Date, limit: number): Promise<SearchKeyRunItem[]>;
+  hasDueSearchKeys(tenantId: string, now: Date): Promise<boolean>;
+  updateSearchKey(tenantId: string, id: number, input: Partial<Pick<
+    IngestionSearchKey,
+    "status" | "lastSearchedAt" | "nextDueAt" | "lastHitCount" | "lastPdfCount"
+    | "lastNewSources" | "totalNewSources" | "runCount" | "lastError"
+  >>): Promise<IngestionSearchKey>;
+  listSearchKeyCoverage(tenantId: string): Promise<SearchKeyCoverageRow[]>;
   createSourceVisit(tenantId: string, input: Omit<IngestionSourceVisit, "id" | "tenantId">): Promise<IngestionSourceVisit>;
   listSourceVisits(tenantId: string, sourceId: number): Promise<IngestionSourceVisit[]>;
   listDocuments(tenantId: string, filters?: DocumentListFilters): Promise<IngestionDocument[]>;

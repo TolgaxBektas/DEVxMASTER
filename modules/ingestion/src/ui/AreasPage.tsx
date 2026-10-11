@@ -2,7 +2,17 @@ import { useMemo, useState } from "react";
 import { Button, Card, EmptyState, Skeleton, useModuleQuery, type ModulePageProps } from "@xmaster-center/ui";
 import { AreaMap, areaStage, stageLabels, type MapArea } from "./AreaMap.js";
 
-type Area = MapArea & { id: number; level: "state" | "district" };
+type Area = MapArea & {
+  id: number;
+  level: "state" | "district";
+  searchKeyCoverage?: Record<string, {
+    total: number;
+    searched: number;
+    errors: number;
+    withHits: number;
+    lastSearchedAt: string | null;
+  }>;
+};
 const date = (value: string | null) => value ? new Date(value).toLocaleDateString("de-DE") : "—";
 export function AreasPage({ api }: ModulePageProps) {
   const [filter, setFilter] = useState("all");
@@ -17,18 +27,26 @@ export function AreasPage({ api }: ModulePageProps) {
     if (state !== "all" && area.stateName !== state) return false;
     if (selectedAgs !== null && area.ags !== selectedAgs) return false;
     if (filter === "due") return area.status === "pending" || (area.nextDueAt !== null && new Date(area.nextDueAt) <= new Date());
+    if (filter === "pending") return areaStage(area, now) === "pending";
+    if (filter === "done") return area.status === "done" && areaStage(area, now) !== "pending";
     return filter === "all" || area.status === filter;
   }), [areas.data, filter, state, selectedAgs, now]);
   if (areas.isLoading || capabilities.isLoading) return <Skeleton />;
   if (areas.error || capabilities.error) return <EmptyState title="Gebiete konnten nicht geladen werden" />;
   const districts = areas.data?.filter((area) => area.level === "district") ?? [];
-  const done = districts.filter((area) => area.status === "done").length;
+  const done = districts.filter((area) => area.status === "done" && areaStage(area, now) !== "pending").length;
   const run = async () => {
     try {
       await api.mutate("modules.ingestion.areas.run", { limit: 3 });
       await api.invalidate?.("modules.ingestion.areas.list");
       setMessage("Gebietslauf eingeplant.");
     } catch (error) { setMessage(error instanceof Error ? error.message : "Gebietslauf fehlgeschlagen"); }
+  };
+  const seedSearchKeys = async () => {
+    try {
+      await api.mutate("modules.ingestion.areas.seedSearchKeys", {});
+      setMessage("Erstellung der Suchschlüssel eingeplant.");
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Suchschlüssel konnten nicht eingeplant werden"); }
   };
   return <div className="stack">
     <div className="page-heading"><div><div className="eyebrow">INGESTION</div><h1>Gebiete</h1><p>{done} von {districts.length} Gebieten abgearbeitet</p></div></div>
@@ -42,9 +60,15 @@ export function AreasPage({ api }: ModulePageProps) {
     /></Card>
     <Card><label>Filter <select value={filter} onChange={(event) => setFilter(event.target.value)}>
       <option value="all">Alle</option><option value="pending">Offen</option><option value="running">In Arbeit</option><option value="done">Erledigt</option><option value="due">Fällig</option>
-    </select></label>{selectedAgs !== null && <Button onClick={() => setSelectedAgs(null)}>Gebietsauswahl aufheben</Button>}{capabilities.data?.run && <Button onClick={() => void run()}>Fällige Gebiete suchen</Button>}</Card>
-    <Card><div className="table-wrap"><table><thead><tr><th>Bundesland</th><th>Gebiet</th><th>Stand</th><th>Letzter Lauf</th><th>Nächste Fälligkeit</th><th>Funde</th></tr></thead>
-      <tbody>{rows.map((area) => <tr key={area.id}><td>{area.stateName}</td><td>{area.name}</td><td>{stageLabels[areaStage(area, now)]}</td><td>{date(area.lastRunAt)}</td><td>{date(area.nextDueAt)}</td><td>{area.foundSources}</td></tr>)}</tbody>
+    </select></label>{selectedAgs !== null && <Button onClick={() => setSelectedAgs(null)}>Gebietsauswahl aufheben</Button>}{capabilities.data?.run && <><Button onClick={() => void run()}>Fällige Gebiete suchen</Button><Button onClick={() => void seedSearchKeys()}>Suchschlüssel erstellen</Button></>}</Card>
+    <Card><div className="table-wrap"><table><thead><tr><th>Bundesland</th><th>Gebiet</th><th>Stand</th><th>Letzter Lauf</th><th>Nächste Fälligkeit</th><th>Funde</th><th>Suchschlüssel</th></tr></thead>
+      <tbody>{rows.map((area) => {
+        const keyTypes = Object.values(area.searchKeyCoverage ?? {});
+        const total = keyTypes.reduce((sum, item) => sum + item.total, 0);
+        const searched = keyTypes.reduce((sum, item) => sum + item.searched, 0);
+        const hits = keyTypes.reduce((sum, item) => sum + item.withHits, 0);
+        return <tr key={area.id}><td>{area.stateName}</td><td>{area.name}</td><td>{stageLabels[areaStage(area, now)]}</td><td>{date(area.lastRunAt)}</td><td>{date(area.nextDueAt)}</td><td>{area.foundSources}</td><td>{total ? `${searched}/${total} durchsucht, ${hits} mit Treffern` : "—"}</td></tr>;
+      })}</tbody>
     </table></div></Card>
   </div>;
 }

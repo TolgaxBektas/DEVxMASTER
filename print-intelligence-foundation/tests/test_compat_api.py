@@ -264,15 +264,16 @@ def test_process_recovers_when_render_file_is_missing(compatibility_client):
 def test_proposals_are_read_only(monkeypatch, compatibility_client):
     client, factory, _ = compatibility_client
     monkeypatch.setattr(
-        "app.services.discovery.DiscoveryCrawler.propose",
-        lambda self, seed_pages, search_terms, max_results: [
-            {
+        "app.services.discovery.DiscoveryCrawler.propose_with_search_hits",
+        lambda self, seed_pages, search_terms, max_results: {
+            "proposals": [{
                 "url": "https://example.test/file.pdf",
                 "score": 1.0,
                 "found_on": seed_pages[0],
                 "discovery": "seed_page",
-            }
-        ],
+            }],
+            "search_hits": [{"term": search_terms[0], "count": 4, "error": None}],
+        },
     )
     response = client.post(
         "/api/v1/discovery/proposals",
@@ -285,6 +286,9 @@ def test_proposals_are_read_only(monkeypatch, compatibility_client):
     )
     assert response.status_code == 200
     assert response.json()["proposals"][0]["url"].endswith(".pdf")
+    assert response.json()["search_hits"] == [
+        {"term": "senior", "count": 4, "error": None}
+    ]
     with factory() as session:
         assert session.query(Document).count() == 0
         assert session.query(Page).count() == 0

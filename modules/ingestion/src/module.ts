@@ -9,6 +9,7 @@ import {
   type ModuleDefinition,
 } from "@xmaster-center/kernel";
 import type { Storage } from "@xmaster-center/integrations";
+import { readFileSync } from "node:fs";
 import { mkdir, readFile, readdir, rename, stat } from "node:fs/promises";
 import { join, parse } from "node:path";
 import { ingestionSchema } from "./schema.js";
@@ -20,8 +21,7 @@ import {
   type IngestionRepository,
   type IngestionSource,
 } from "./repository.js";
-import { registerReviewImageRoutes, registerUploadRoute } from "./rest.js";
-import { persistDocumentBytes } from "./rest.js";
+import { persistDocumentBytes, registerReviewImageRoutes, registerSearchTermRoutes, registerUploadRoute } from "./rest.js";
 import { deriveDocumentClassification } from "./classification.js";
 import { documentActualityStatus } from "./actuality.js";
 import { publishCurrentActualityTransition } from "./actuality-replay.js";
@@ -35,6 +35,7 @@ import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { areaSearchTerms } from "./search-terms.js";
 import { PUBLISHER_SEED_PAGES } from "./publishers.js";
 import { areaWebsiteSeeds, isRegisteredMunicipalUrl } from "./website-registry.js";
+import { buildSearchKeys, DEFAULT_SEARCH_TERMS } from "./search-keys.js";
 
 export const MIN_DOCUMENT_ADVERTISEMENTS = 3;
 
@@ -331,6 +332,7 @@ export function createIngestionModule(deps: {
     url: string; score: number; metadata: Record<string, unknown>;
   }> | {
     proposals: Array<{ url: string; score: number; metadata: Record<string, unknown> }>;
+    searchHits?: Array<{ term: string; count: number; error?: string | null }>;
     domainEvidence?: Array<{
       host: string;
       status?: string;
@@ -359,6 +361,40 @@ export function createIngestionModule(deps: {
     ? createDrizzleIngestionRepository(deps.db)
     : new MemoryIngestionRepository());
   const watchObservations = new Map<string, { size: number; observations: number }>();
+  const approveRegisteredSource = async (
+    tenantId: string,
+    source: IngestionSource,
+    now: Date,
+  ): Promise<boolean> => {
+    if (source.status === "approved" || !isRegisteredMunicipalUrl(source.url)) return false;
+    const previous = {
+      status: source.status,
+      approvedBy: source.approvedBy,
+      approvedAt: source.approvedAt,
+      nextCheckAt: source.nextCheckAt,
+      lastError: source.lastError,
+    };
+    await repository.updateSource(tenantId, source.id, {
+      status: "approved",
+      approvedBy: "Ingestion-Register",
+      approvedAt: now,
+      nextCheckAt: new Date(now.getTime() + 90 * 86_400_000),
+      lastError: null,
+    });
+    if (deps.enqueue) {
+      try {
+        await deps.enqueue({
+          name: "ingestion.source.fetch",
+          tenantId,
+          payload: { sourceId: source.id },
+        });
+      } catch (error) {
+        await repository.updateSource(tenantId, source.id, previous);
+        throw error;
+      }
+    }
+    return true;
+  };
   return defineModule({
     id: "ingestion",
     title: "Dokumente",
@@ -391,6 +427,7 @@ export function createIngestionModule(deps: {
               enqueue: (input) => deps.enqueue!(input),
               maxUploadBytes: deps.maxUploadBytes ?? 25 * 1024 * 1024,
             });
+            registerSearchTermRoutes(app, { repository });
             if (deps.reviewClient) {
               registerReviewImageRoutes(app, {
                 reviewClient: deps.reviewClient,
@@ -446,6 +483,122 @@ export function createIngestionModule(deps: {
     ],
     jobs: [
       {
+        name: "ingestion.search_keys.seed",
+        handle: async (_payload, context) => {
+          const tenantId = jobTenantId(context);
+          await repository.ensureSearchTerms(tenantId, [...DEFAULT_SEARCH_TERMS]);
+          const [allAreas, terms] = await Promise.all([
+            repository.listAreas(tenantId),
+            repository.listSearchTerms(tenantId),
+          ]);
+          const localities = JSON.parse(readFileSync(
+            new URL("./data/localities.de.json", import.meta.url),
+            "utf8",
+          )) as Array<{ postalCode: string; name: string; municipalityKey: string }>;
+          const administrations = JSON.parse(readFileSync(
+            new URL("./data/verwaltungen.de.json", import.meta.url),
+            "utf8",
+          )) as Array<{ scope: string; districtAgs: string }>;
+          const drafts = buildSearchKeys({
+            areas: allAreas.filter((area) => area.level === "district"),
+            terms: terms.map(({ term, priority, active }) => ({ term, priority, active })),
+            localities,
+            administrations,
+          });
+          const counts = await repository.insertSearchKeys(tenantId, drafts);
+          console.log("[ingestion] search-key seed", counts);
+        },
+      },
+      {
+        name: "ingestion.search_keys.run",
+        schedule: "daily",
+        handle: async (payload, context) => {
+          const tenantId = jobTenantId(context);
+          const configuredLimit = (payload as { limit?: unknown }).limit;
+          const limit = typeof configuredLimit === "number"
+            && Number.isInteger(configuredLimit)
+            && configuredLimit > 0
+            ? Math.floor(configuredLimit)
+            : 300;
+          const now = new Date();
+          const keys = await repository.listSearchKeysForRun(tenantId, now, limit);
+          const heartbeatFn = (context as { heartbeat?: () => Promise<boolean> }).heartbeat;
+          const heartbeat = heartbeatFn
+            ? setInterval(() => { void heartbeatFn(); }, 30_000)
+            : null;
+          const knownSourceUrls = new Set((await repository.listSources(tenantId)).map((source) => source.url));
+          try {
+            for (const item of keys) {
+              const key = item.key;
+              try {
+                if (!deps.discoverProposals) throw new Error("Quellensuche ist nicht konfiguriert");
+                const discovery = await deps.discoverProposals({
+                  seedPages: [],
+                  archiveDomains: [],
+                  searchTerms: [key.query],
+                  maxResults: 10,
+                  areaName: item.area.name,
+                });
+                const proposals = Array.isArray(discovery) ? discovery : discovery.proposals;
+                const searchHit = Array.isArray(discovery)
+                  ? undefined
+                  : discovery.searchHits?.find((hit) => hit.term === key.query);
+                if (!searchHit) throw new Error("Suchtreffer-Zähler fehlt für den Suchschlüssel");
+                if (searchHit.error) throw new Error(searchHit.error);
+                const pdfProposals = proposals.filter((proposal) => {
+                  try {
+                    return new URL(proposal.url).pathname.toLocaleLowerCase("de-DE").endsWith(".pdf");
+                  } catch {
+                    return false;
+                  }
+                });
+                let newSources = 0;
+                for (const proposal of proposals) {
+                  const isNewSource = !knownSourceUrls.has(proposal.url);
+                  const source = await repository.createSource(tenantId, {
+                    ...proposal,
+                    metadata: { ...proposal.metadata, search_key: key.query },
+                    areaId: item.area.id,
+                    revisitIntervalDays: 90,
+                    nextCheckAt: new Date(now.getTime() + 90 * 86_400_000),
+                  });
+                  if (isNewSource) newSources += 1;
+                  knownSourceUrls.add(source.url);
+                  await approveRegisteredSource(tenantId, source, now);
+                }
+                const nextDueDays = pdfProposals.length > 0 ? 30 : 90;
+                await repository.updateSearchKey(tenantId, key.id, {
+                  status: "done",
+                  lastSearchedAt: now,
+                  nextDueAt: new Date(now.getTime() + nextDueDays * 86_400_000),
+                  lastHitCount: searchHit.count,
+                  lastPdfCount: pdfProposals.length,
+                  lastNewSources: newSources,
+                  totalNewSources: key.totalNewSources + newSources,
+                  runCount: key.runCount + 1,
+                  lastError: null,
+                });
+              } catch (error) {
+                await repository.updateSearchKey(tenantId, key.id, {
+                  status: "error",
+                  nextDueAt: new Date(now.getTime() + 86_400_000),
+                  lastError: describeError(error),
+                });
+              }
+            }
+          } finally {
+            if (heartbeat) clearInterval(heartbeat);
+          }
+          if (await repository.hasDueSearchKeys(tenantId, new Date()) && deps.enqueue) {
+            await deps.enqueue({
+              name: "ingestion.search_keys.run",
+              tenantId,
+              payload: { limit },
+            });
+          }
+        },
+      },
+      {
         name: "ingestion.discovery.run",
         schedule: "daily",
         handle: async (payload, context) => {
@@ -489,36 +642,6 @@ export function createIngestionModule(deps: {
           for (const area of areas) {
             await repository.updateArea(tenantId, area.id, { status: "running", startedAt: now, lastError: null });
             try {
-              const approveRegisteredSource = async (source: IngestionSource): Promise<boolean> => {
-                if (source.status === "approved" || !isRegisteredMunicipalUrl(source.url)) return false;
-                const previous = {
-                  status: source.status,
-                  approvedBy: source.approvedBy,
-                  approvedAt: source.approvedAt,
-                  nextCheckAt: source.nextCheckAt,
-                  lastError: source.lastError,
-                };
-                await repository.updateSource(tenantId, source.id, {
-                  status: "approved",
-                  approvedBy: "Ingestion-Register",
-                  approvedAt: now,
-                  nextCheckAt: new Date(now.getTime() + 90 * 86_400_000),
-                  lastError: null,
-                });
-                if (deps.enqueue) {
-                  try {
-                    await deps.enqueue({
-                      name: "ingestion.source.fetch",
-                      tenantId,
-                      payload: { sourceId: source.id },
-                    });
-                  } catch (error) {
-                    await repository.updateSource(tenantId, source.id, previous);
-                    throw error;
-                  }
-                }
-                return true;
-              };
               if (!deps.discoverProposals) throw new Error("Quellensuche ist nicht konfiguriert");
               const websiteSelection = areaWebsiteSeeds(
                 area.ags,
@@ -570,7 +693,7 @@ export function createIngestionModule(deps: {
                     await repository.updateSource(tenantId, source.id, { areaId: area.id });
                     foundSources += 1;
                   }
-                  await approveRegisteredSource(source);
+                  await approveRegisteredSource(tenantId, source, now);
                 } catch (error) {
                   sourceErrors.push(
                     `${proposal.url}: ${describeError(error)}`,
@@ -582,7 +705,7 @@ export function createIngestionModule(deps: {
                 if (source.areaId !== area.id) continue;
                 try {
                   if (source.status === "proposed") {
-                    await approveRegisteredSource(source);
+                    await approveRegisteredSource(tenantId, source, now);
                   } else if (
                     source.status === "approved"
                     && source.approvedBy === "Ingestion-Register"
