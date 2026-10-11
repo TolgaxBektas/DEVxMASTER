@@ -913,6 +913,9 @@ describe("Ingestion-Bestand", () => {
     { filename: "003_Maerz_2023_150.pdf", year: 2023 },
     { filename: "Mitteilungsblatt072015_reduz.pdf", year: 2015 },
     { filename: "Mitteilungsblatt-2024-03.pdf", year: 2024 },
+    { filename: "Amtsblatt_2022_2024.pdf", year: 2024 },
+    { filename: "Mitbl_24_2024-11-22.pdf", year: 2024 },
+    { filename: "22-11-09_Neubuergerbroschuere_2023.pdf", year: 2023 },
     { filename: "1325.pdf", year: null },
     { filename: "220524-Wegweiser Stadt Landshut_ukrainisch.pdf", year: null },
     { filename: "familienwegweiser_internet.pdf", year: null },
@@ -921,6 +924,15 @@ describe("Ingestion-Bestand", () => {
   });
 
   it("leitet das Zeitraumende ohne Seitentext aus dem Dateinamen ab", () => {
+    expect(filenamePeriodEndYear("Amtsblatt_2022_2024.pdf")).toBe(2024);
+    expect(deriveDocumentClassification({
+      filename: "Amtsblatt_2022_2024.pdf",
+      pages: [],
+    })).toMatchObject({
+      periodStartYear: 2022,
+      periodEndYear: 2024,
+      periodSource: "filename",
+    });
     expect(deriveDocumentClassification({
       filename: "Mitteilungsblatt_Juni_2023.pdf",
       pages: [],

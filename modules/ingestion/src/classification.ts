@@ -198,20 +198,25 @@ function derivePeriodCandidate(
       source,
     };
   }
-  const bareYear = allowBareYear ? text.match(/(?<!\d)(20\d{2})(?!\d)/) : null;
-  const compactMonthYear = allowBareYear
-    ? text.match(/(?<!\d)(?:0[1-9]|1[0-2])(20\d{2})(?!\d)/)
-    : null;
-  const year = bareYear?.[1] ?? compactMonthYear?.[1];
-  return year ? {
+  const years = allowBareYear
+    ? [
+        ...Array.from(text.matchAll(/(?<!\d)(20\d{2})(?!\d)/g), (match) => Number(match[1])),
+        ...Array.from(
+          text.matchAll(/(?<!\d)(?:0[1-9]|1[0-2])(20\d{2})(?!\d)/g),
+          (match) => Number(match[1]),
+        ),
+      ]
+    : [];
+  if (years.length === 0) return null;
+  return {
     editionLabel: null,
     editionConfidence: null,
-    periodStartYear: Number(year),
-    periodEndYear: Number(year),
+    periodStartYear: Math.min(...years),
+    periodEndYear: Math.max(...years),
     periodIssue: null,
     periodConfidence: 0.45,
     source,
-  } : null;
+  };
 }
 
 export function filenamePeriodEndYear(filename: string): number | null {

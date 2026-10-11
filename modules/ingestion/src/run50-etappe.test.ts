@@ -220,6 +220,12 @@ describe("Run50-Etappenplanung", () => {
           filename: "Mitteilungsblatt_2024.pdf",
           periodEndYear: run50EtappePeriodEndYear(null, "Mitteilungsblatt_2024.pdf"),
         },
+        {
+          ...candidates[0]!,
+          documentId: 33,
+          filename: "Amtsblatt_2022_2024.pdf",
+          periodEndYear: run50EtappePeriodEndYear(null, "Amtsblatt_2022_2024.pdf"),
+        },
       ];
       expect(selectRun50EtappeDocuments(
         filenameCandidates,
@@ -227,7 +233,8 @@ describe("Run50-Etappenplanung", () => {
         "stage-filename",
         undefined,
         2026,
-      ).map((item) => item.documentId)).toEqual([31, 32]);
+        2.5,
+      ).map((item) => item.documentId).sort()).toEqual([31, 32, 33]);
     } finally {
       if (previousAge === undefined) {
         delete process.env.INGESTION_ACTUALITY_MAX_AGE_YEARS;
