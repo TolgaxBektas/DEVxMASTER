@@ -70,6 +70,44 @@ export const areas = mysqlTable("ingestion_areas", {
   tenantAgs: uniqueIndex("ingestion_areas_tenant_ags_uq").on(table.tenantId, table.ags),
   tenant: index("ingestion_areas_tenant_idx").on(table.tenantId),
 }));
+export const searchTerms = mysqlTable("ingestion_search_terms", {
+  id: int("id").autoincrement().primaryKey(),
+  tenantId: int("tenant_id").notNull(),
+  term: varchar("term", { length: 120 }).notNull(),
+  priority: int("priority").notNull(),
+  active: boolean("active").default(true).notNull(),
+  origin: varchar("origin", { length: 16 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  tenantTerm: uniqueIndex("ingestion_search_terms_tenant_term_uq").on(table.tenantId, table.term),
+}));
+export const searchKeys = mysqlTable("ingestion_search_keys", {
+  id: int("id").autoincrement().primaryKey(),
+  tenantId: int("tenant_id").notNull(),
+  areaId: int("area_id").notNull(),
+  keyType: varchar("key_type", { length: 16 }).notNull(),
+  term: varchar("term", { length: 120 }).notNull(),
+  scope: varchar("scope", { length: 255 }).notNull(),
+  query: varchar("query", { length: 255 }).notNull(),
+  status: varchar("status", { length: 16 }).default("pending").notNull(),
+  lastSearchedAt: timestamp("last_searched_at"),
+  nextDueAt: timestamp("next_due_at"),
+  lastHitCount: int("last_hit_count").default(0).notNull(),
+  lastPdfCount: int("last_pdf_count").default(0).notNull(),
+  lastNewSources: int("last_new_sources").default(0).notNull(),
+  totalNewSources: int("total_new_sources").default(0).notNull(),
+  runCount: int("run_count").default(0).notNull(),
+  lastError: text("last_error"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  tenantQuery: uniqueIndex("ingestion_search_keys_tenant_query_uq").on(table.tenantId, table.query),
+  tenantStatusDue: index("ingestion_search_keys_tenant_status_due_idx").on(
+    table.tenantId,
+    table.status,
+    table.nextDueAt,
+  ),
+  tenantArea: index("ingestion_search_keys_tenant_area_idx").on(table.tenantId, table.areaId),
+}));
 export const sourceVisits = mysqlTable("ingestion_source_visits", {
   id: int("id").autoincrement().primaryKey(),
   tenantId: int("tenant_id").notNull(),
@@ -134,4 +172,14 @@ export const occurrences = mysqlTable("ingestion_occurrences", {
   provenance: json("provenance"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
-export const ingestionSchema = { sources, areas, sourceVisits, documents, classifications, pages, occurrences };
+export const ingestionSchema = {
+  sources,
+  areas,
+  searchTerms,
+  searchKeys,
+  sourceVisits,
+  documents,
+  classifications,
+  pages,
+  occurrences,
+};

@@ -1,6 +1,17 @@
 import type { MySql2Database } from "drizzle-orm/mysql2";
-import { and, asc, desc, eq, gte, lte, max, ne } from "drizzle-orm";
-import { areas, classifications, documents, occurrences, pages, sourceVisits, sources, ingestionSchema } from "./schema.js";
+import { and, asc, count, desc, eq, gte, lte, max, ne, or, sql } from "drizzle-orm";
+import {
+  areas,
+  classifications,
+  documents,
+  occurrences,
+  pages,
+  searchKeys,
+  searchTerms,
+  sourceVisits,
+  sources,
+  ingestionSchema,
+} from "./schema.js";
 import type { DerivedClassification, DocumentClassification } from "./classification.js";
 import { documentActualityStatus, sourceActualityHint, type ActualityStatus } from "./actuality.js";
 import {
@@ -10,8 +21,13 @@ import {
   type DocumentListFilters,
   type IngestionDocument,
   type IngestionOccurrence,
+  type IngestionSearchKey,
+  type IngestionSearchKeyDraft,
+  type SearchKeyRunItem,
+  type IngestionSearchTerm,
   type IngestionRepository,
   type OccurrenceProvenance,
+  type SearchKeyCoverageRow,
   WEB_FIND_DATA_SOURCE,
 } from "./repository.js";
 
@@ -192,6 +208,173 @@ export function createDrizzleIngestionRepository(db: unknown): IngestionReposito
       )).limit(1))[0];
       if (!row) throw new Error("Gebiet nicht gefunden");
       return { ...row, tenantId: String(row.tenantId) } as never;
+    },
+    async listSearchTerms(tenantId) {
+      const rows = await database.select().from(searchTerms)
+        .where(eq(searchTerms.tenantId, Number(tenantId)))
+        .orderBy(asc(searchTerms.priority), asc(searchTerms.id));
+      return rows.map((row) => ({ ...row, tenantId: String(row.tenantId) })) as IngestionSearchTerm[];
+    },
+    async ensureSearchTerms(tenantId, terms) {
+      const existing = await this.listSearchTerms(tenantId);
+      const existingTerms = new Set(existing.map((term) => term.term));
+      const missing = terms.filter((term) => !existingTerms.has(term.term));
+      if (missing.length) {
+        await database.insert(searchTerms).ignore().values(missing.map((term) => ({
+          tenantId: Number(tenantId),
+          term: term.term,
+          priority: term.priority,
+          active: true,
+          origin: "vorgabe",
+        })));
+      }
+    },
+    async createSearchTerm(tenantId, input) {
+      const existing = (await database.select().from(searchTerms).where(and(
+        eq(searchTerms.tenantId, Number(tenantId)),
+        eq(searchTerms.term, input.term),
+      )).limit(1))[0];
+      if (existing) return { ...existing, tenantId: String(existing.tenantId) } as IngestionSearchTerm;
+      await database.insert(searchTerms).ignore().values({
+        tenantId: Number(tenantId),
+        term: input.term,
+        priority: input.priority,
+        active: input.active,
+        origin: input.origin,
+      });
+      const created = (await database.select().from(searchTerms).where(and(
+        eq(searchTerms.tenantId, Number(tenantId)),
+        eq(searchTerms.term, input.term),
+      )).limit(1))[0];
+      if (!created) throw new Error("Suchbegriff konnte nicht angelegt werden");
+      return { ...created, tenantId: String(created.tenantId) } as IngestionSearchTerm;
+    },
+    async setSearchTermActive(tenantId, id, active) {
+      await database.update(searchTerms).set({ active }).where(and(
+        eq(searchTerms.tenantId, Number(tenantId)),
+        eq(searchTerms.id, id),
+      ));
+      const row = (await database.select().from(searchTerms).where(and(
+        eq(searchTerms.tenantId, Number(tenantId)),
+        eq(searchTerms.id, id),
+      )).limit(1))[0];
+      if (!row) throw new Error("Suchbegriff nicht gefunden");
+      return { ...row, tenantId: String(row.tenantId) } as IngestionSearchTerm;
+    },
+    async insertSearchKeys(tenantId, keys: IngestionSearchKeyDraft[]) {
+      const result: Record<IngestionSearchKey["keyType"], { inserted: number; existing: number }> = {
+        verwaltung: { inserted: 0, existing: 0 },
+        ort: { inserted: 0, existing: 0 },
+        plz: { inserted: 0, existing: 0 },
+        kreis: { inserted: 0, existing: 0 },
+      };
+      for (const keyType of ["verwaltung", "ort", "plz", "kreis"] as const) {
+        const typedKeys = keys.filter((key) => key.keyType === keyType);
+        for (let offset = 0; offset < typedKeys.length; offset += 300) {
+          const batch = typedKeys.slice(offset, offset + 300);
+          const response = await database.insert(searchKeys).ignore().values(batch.map((key) => ({
+            tenantId: Number(tenantId),
+            areaId: key.areaId,
+            keyType: key.keyType,
+            term: key.term,
+            scope: key.scope,
+            query: key.query,
+          })));
+          const affectedRows = Number((response[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0);
+          result[keyType].inserted += affectedRows;
+          result[keyType].existing += batch.length - affectedRows;
+        }
+      }
+      return result;
+    },
+    async listSearchKeysForRun(tenantId, now, limit): Promise<SearchKeyRunItem[]> {
+      const rows = await database.select({
+        key: searchKeys,
+        area: areas,
+        termPriority: searchTerms.priority,
+      }).from(searchKeys)
+        .innerJoin(searchTerms, and(
+          eq(searchTerms.tenantId, searchKeys.tenantId),
+          eq(searchTerms.term, searchKeys.term),
+          eq(searchTerms.active, true),
+        ))
+        .innerJoin(areas, and(
+          eq(areas.tenantId, searchKeys.tenantId),
+          eq(areas.id, searchKeys.areaId),
+        ))
+        .where(and(
+          eq(searchKeys.tenantId, Number(tenantId)),
+          or(
+            eq(searchKeys.status, "pending"),
+            lte(searchKeys.nextDueAt, now),
+          ),
+        ))
+        .orderBy(
+          sql`case when ${searchKeys.status} = 'pending' then 0 else 1 end`,
+          asc(searchTerms.priority),
+          sql`case ${searchKeys.keyType} when 'verwaltung' then 0 when 'ort' then 1 when 'plz' then 2 else 3 end`,
+          asc(areas.orderIndex),
+          asc(searchKeys.id),
+        )
+        .limit(limit);
+      return rows.map((row) => ({
+        key: { ...row.key, tenantId: String(row.key.tenantId) } as IngestionSearchKey,
+        area: { ...row.area, tenantId: String(row.area.tenantId) } as never,
+        termPriority: row.termPriority,
+      }));
+    },
+    async hasDueSearchKeys(tenantId, now) {
+      const rows = await database.select({ id: searchKeys.id }).from(searchKeys)
+        .innerJoin(searchTerms, and(
+          eq(searchTerms.tenantId, searchKeys.tenantId),
+          eq(searchTerms.term, searchKeys.term),
+          eq(searchTerms.active, true),
+        ))
+        .where(and(
+          eq(searchKeys.tenantId, Number(tenantId)),
+          or(eq(searchKeys.status, "pending"), lte(searchKeys.nextDueAt, now)),
+        ))
+        .limit(1);
+      return rows.length > 0;
+    },
+    async updateSearchKey(tenantId, id, input) {
+      await database.update(searchKeys).set(input).where(and(
+        eq(searchKeys.tenantId, Number(tenantId)),
+        eq(searchKeys.id, id),
+      ));
+      const row = (await database.select().from(searchKeys).where(and(
+        eq(searchKeys.tenantId, Number(tenantId)),
+        eq(searchKeys.id, id),
+      )).limit(1))[0];
+      if (!row) throw new Error("Suchschlüssel nicht gefunden");
+      return { ...row, tenantId: String(row.tenantId) } as IngestionSearchKey;
+    },
+    async listSearchKeyCoverage(tenantId): Promise<SearchKeyCoverageRow[]> {
+      const rows = await database.select({
+        areaId: searchKeys.areaId,
+        keyType: searchKeys.keyType,
+        total: count(searchKeys.id),
+        searched: sql<number>`sum(case when ${searchKeys.status} = 'done' then 1 else 0 end)`,
+        errors: sql<number>`sum(case when ${searchKeys.status} = 'error' then 1 else 0 end)`,
+        withHits: sql<number>`sum(case when ${searchKeys.lastHitCount} > 0 then 1 else 0 end)`,
+        lastSearchedAt: max(searchKeys.lastSearchedAt),
+      }).from(searchKeys)
+        .innerJoin(searchTerms, and(
+          eq(searchTerms.tenantId, searchKeys.tenantId),
+          eq(searchTerms.term, searchKeys.term),
+          eq(searchTerms.active, true),
+        ))
+        .where(eq(searchKeys.tenantId, Number(tenantId)))
+        .groupBy(searchKeys.areaId, searchKeys.keyType);
+      return rows.map((row) => ({
+        areaId: row.areaId,
+        keyType: row.keyType as SearchKeyCoverageRow["keyType"],
+        total: Number(row.total),
+        searched: Number(row.searched),
+        errors: Number(row.errors),
+        withHits: Number(row.withHits),
+        lastSearchedAt: row.lastSearchedAt,
+      }));
     },
     async createSourceVisit(tenantId, input) {
       const result = await database.insert(sourceVisits).values({ tenantId: Number(tenantId), ...input });

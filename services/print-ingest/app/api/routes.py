@@ -78,12 +78,15 @@ def autodiscover(req: AutoDiscoverRequest, db: Session=Depends(get_db), _token: 
 def proposals(req: AutoDiscoverRequest, _token: None=Depends(require_service_token)):
     rejected: list[dict] = []
     archive_evidence: list[dict] = []
+    search_hits: list[dict] = []
     items = discover_proposals(
         [str(x) for x in req.seed_pages], req.search_terms, req.max_results,
         req.area_name, rejected, req.archive_domains, archive_evidence,
+        search_hits=search_hits,
     )
     return _json_response({
         'proposals': items,
+        'search_hits': search_hits,
         'rejected': rejected,
         'archive_domains': archive_evidence,
         'domain_evidence': archive_evidence,

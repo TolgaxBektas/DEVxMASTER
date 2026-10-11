@@ -21,6 +21,13 @@ export type MapArea = {
   lastError: string | null;
   foundSources: number;
   incompleteRuns: number;
+  searchKeyCoverage?: Record<string, {
+    total: number;
+    searched: number;
+    errors: number;
+    withHits: number;
+    lastSearchedAt: string | null;
+  }>;
 };
 
 export type AreaStage =
@@ -137,6 +144,10 @@ const stageColors: Record<AreaStage, string> = {
 export function areaStage(area: MapArea | undefined, now: number): AreaStage {
   if (!area) return "unknown";
   if (area.status === "running") return "running";
+  const coverage = Object.values(area.searchKeyCoverage ?? {});
+  const totalKeys = coverage.reduce((total, item) => total + item.total, 0);
+  const searchedKeys = coverage.reduce((total, item) => total + item.searched, 0);
+  if (totalKeys > 0 && searchedKeys < totalKeys) return "pending";
   if (area.status !== "done") return "pending";
   if ((area.lastError ?? "").startsWith("discovery_incomplete")) return "incomplete";
   if (area.nextDueAt !== null && new Date(area.nextDueAt).getTime() <= now) return "due";

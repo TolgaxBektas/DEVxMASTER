@@ -709,6 +709,12 @@ def test_proposals_response_includes_domain_evidence(monkeypatch):
                 "attempts": 1,
                 "error": None,
             }])
+            or kwargs["search_hits"].append({
+                "term": "Seniorenwegweiser Landkreis Beispiel",
+                "hits": 8,
+                "pdfs": 3,
+                "error": None,
+            })
             or [{"url": "https://good.example/2026.pdf", "score": 80}]
         ),
     )
@@ -722,6 +728,60 @@ def test_proposals_response_includes_domain_evidence(monkeypatch):
         "status": "ok",
         "entry_count": 1,
         "attempts": 1,
+        "error": None,
+    }]
+    assert body["search_hits"] == [{
+        "term": "Seniorenwegweiser Landkreis Beispiel",
+        "hits": 8,
+        "pdfs": 3,
+        "error": None,
+    }]
+
+
+def test_search_hits_have_a_budget_separate_from_seed_pages(monkeypatch):
+    seed_page = "https://gemeinde.example/"
+    search_page = "https://search.example/results"
+    processed_pages = []
+
+    monkeypatch.setattr(
+        autodiscovery,
+        "web_search",
+        lambda _term, limit: [{"url": search_page}] if limit == 10 else [],
+    )
+
+    def discover(page, **_kwargs):
+        processed_pages.append(page)
+        if page == search_page:
+            return [{
+                "url": "https://search.example/Seniorenwegweiser-2026.pdf",
+                "score": 80,
+                "found_on": page,
+                "discovery": "html_link",
+            }]
+        return []
+
+    monkeypatch.setattr(autodiscovery, "discover_pdf_links", discover)
+    monkeypatch.setattr(autodiscovery, "discover_sitemaps", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(ArchiveIndex, "fetch_many", lambda *_args, **_kwargs: {})
+    search_hits = []
+
+    proposals = autodiscovery.discover_proposals(
+        [seed_page, "https://other.example/"],
+        ["Seniorenwegweiser Landkreis Beispiel"],
+        max_results=1,
+        rejected=[],
+        archive_domains=[],
+        search_hits=search_hits,
+    )
+
+    assert processed_pages == [seed_page, search_page]
+    assert [item["url"] for item in proposals] == [
+        "https://search.example/Seniorenwegweiser-2026.pdf",
+    ]
+    assert search_hits == [{
+        "term": "Seniorenwegweiser Landkreis Beispiel",
+        "hits": 1,
+        "pdfs": 1,
         "error": None,
     }]
 

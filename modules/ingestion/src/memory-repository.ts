@@ -5,12 +5,18 @@ import type {
   IngestionSource,
   IngestionArea,
   IngestionAreaInput,
+  IngestionSearchKey,
+  IngestionSearchKeyDraft,
+  SearchKeyRunItem,
+  IngestionSearchTerm,
   IngestionSourceVisit,
   OccurrenceReviewResult,
   OccurrenceProvenance,
+  SearchKeyCoverageRow,
 } from "./repository.js";
 import { WEB_FIND_DATA_SOURCE } from "./repository.js";
 import type { DerivedClassification, DocumentClassification } from "./classification.js";
+import type { SearchKeyType } from "./search-keys.js";
 import {
   IngestionOccurrenceNotFoundError,
   IngestionSourceNotFoundError,
@@ -49,8 +55,12 @@ export class MemoryIngestionRepository implements IngestionRepository {
   private occurrenceId = 0;
   private occurrencePages = new Map<number, number>();
   areas: IngestionArea[] = [];
+  searchTerms: IngestionSearchTerm[] = [];
+  searchKeys: IngestionSearchKey[] = [];
   sourceVisits: IngestionSourceVisit[] = [];
   private areaId = 0;
+  private searchTermId = 0;
+  private searchKeyId = 0;
   private visitId = 0;
 
   async listSources(tenantId: string) {
@@ -119,6 +129,139 @@ export class MemoryIngestionRepository implements IngestionRepository {
     if (!area) throw new Error("Gebiet nicht gefunden");
     Object.assign(area, input);
     return area;
+  }
+  async listSearchTerms(tenantId: string) {
+    return this.searchTerms.filter((term) => term.tenantId === tenantId)
+      .sort((a, b) => a.priority - b.priority || a.id - b.id);
+  }
+  async ensureSearchTerms(tenantId: string, terms: Array<{ term: string; priority: number }>) {
+    for (const term of terms) {
+      if (this.searchTerms.some((existing) => existing.tenantId === tenantId && existing.term === term.term)) continue;
+      this.searchTerms.push({
+        id: ++this.searchTermId,
+        tenantId,
+        term: term.term,
+        priority: term.priority,
+        active: true,
+        origin: "vorgabe",
+        createdAt: new Date(),
+      });
+    }
+  }
+  async createSearchTerm(tenantId: string, input: {
+    term: string; priority: number; active: boolean; origin: IngestionSearchTerm["origin"];
+  }) {
+    const existing = this.searchTerms.find((term) => term.tenantId === tenantId && term.term === input.term);
+    if (existing) return existing;
+    const term = { ...input, id: ++this.searchTermId, tenantId, createdAt: new Date() };
+    this.searchTerms.push(term);
+    return term;
+  }
+  async setSearchTermActive(tenantId: string, id: number, active: boolean) {
+    const term = this.searchTerms.find((item) => item.tenantId === tenantId && item.id === id);
+    if (!term) throw new Error("Suchbegriff nicht gefunden");
+    term.active = active;
+    return term;
+  }
+  async insertSearchKeys(tenantId: string, keys: IngestionSearchKeyDraft[]) {
+    const result: Record<SearchKeyType, { inserted: number; existing: number }> = {
+      verwaltung: { inserted: 0, existing: 0 },
+      ort: { inserted: 0, existing: 0 },
+      plz: { inserted: 0, existing: 0 },
+      kreis: { inserted: 0, existing: 0 },
+    };
+    for (const draft of keys) {
+      const counts = result[draft.keyType];
+      if (this.searchKeys.some((key) => key.tenantId === tenantId && key.query === draft.query)) {
+        counts.existing += 1;
+        continue;
+      }
+      this.searchKeys.push({
+        ...draft,
+        id: ++this.searchKeyId,
+        tenantId,
+        status: "pending",
+        lastSearchedAt: null,
+        nextDueAt: null,
+        lastHitCount: 0,
+        lastPdfCount: 0,
+        lastNewSources: 0,
+        totalNewSources: 0,
+        runCount: 0,
+        lastError: null,
+        createdAt: new Date(),
+      });
+      counts.inserted += 1;
+    }
+    return result;
+  }
+  async listSearchKeysForRun(tenantId: string, now: Date, limit: number): Promise<SearchKeyRunItem[]> {
+    const priorityByTerm = new Map(this.searchTerms
+      .filter((term) => term.tenantId === tenantId && term.active)
+      .map((term) => [term.term, term.priority]));
+    const typeOrder: Record<SearchKeyType, number> = { verwaltung: 0, ort: 1, plz: 2, kreis: 3 };
+    return this.searchKeys.filter((key) => key.tenantId === tenantId
+      && priorityByTerm.has(key.term)
+      && (key.status === "pending" || (key.nextDueAt !== null && key.nextDueAt <= now)))
+      .sort((a, b) => Number(a.status !== "pending") - Number(b.status !== "pending")
+        || (priorityByTerm.get(a.term) ?? 0) - (priorityByTerm.get(b.term) ?? 0)
+        || typeOrder[a.keyType] - typeOrder[b.keyType]
+        || (this.areas.find((area) => area.tenantId === tenantId && area.id === a.areaId)?.orderIndex ?? 0)
+          - (this.areas.find((area) => area.tenantId === tenantId && area.id === b.areaId)?.orderIndex ?? 0)
+        || a.id - b.id)
+      .slice(0, limit)
+      .flatMap((key) => {
+        const area = this.areas.find((candidate) =>
+          candidate.tenantId === tenantId && candidate.id === key.areaId,
+        );
+        return area ? [{ key, area, termPriority: priorityByTerm.get(key.term) ?? 0 }] : [];
+      });
+  }
+  async hasDueSearchKeys(tenantId: string, now: Date) {
+    const activeTerms = new Set(this.searchTerms
+      .filter((term) => term.tenantId === tenantId && term.active)
+      .map((term) => term.term));
+    return this.searchKeys.some((key) => key.tenantId === tenantId
+      && activeTerms.has(key.term)
+      && (key.status === "pending" || (key.nextDueAt !== null && key.nextDueAt <= now)));
+  }
+  async updateSearchKey(tenantId: string, id: number, input: Partial<Pick<
+    IngestionSearchKey,
+    "status" | "lastSearchedAt" | "nextDueAt" | "lastHitCount" | "lastPdfCount"
+    | "lastNewSources" | "totalNewSources" | "runCount" | "lastError"
+  >>) {
+    const key = this.searchKeys.find((item) => item.tenantId === tenantId && item.id === id);
+    if (!key) throw new Error("Suchschlüssel nicht gefunden");
+    Object.assign(key, input);
+    return key;
+  }
+  async listSearchKeyCoverage(tenantId: string): Promise<SearchKeyCoverageRow[]> {
+    const activeTerms = new Set(this.searchTerms
+      .filter((term) => term.tenantId === tenantId && term.active)
+      .map((term) => term.term));
+    const grouped = new Map<string, SearchKeyCoverageRow>();
+    for (const key of this.searchKeys) {
+      if (key.tenantId !== tenantId || !activeTerms.has(key.term)) continue;
+      const groupKey = `${key.areaId}:${key.keyType}`;
+      const row = grouped.get(groupKey) ?? {
+        areaId: key.areaId,
+        keyType: key.keyType,
+        total: 0,
+        searched: 0,
+        errors: 0,
+        withHits: 0,
+        lastSearchedAt: null,
+      };
+      row.total += 1;
+      if (key.status === "done") row.searched += 1;
+      if (key.status === "error") row.errors += 1;
+      if (key.lastHitCount > 0) row.withHits += 1;
+      if (key.lastSearchedAt && (!row.lastSearchedAt || key.lastSearchedAt > row.lastSearchedAt)) {
+        row.lastSearchedAt = key.lastSearchedAt;
+      }
+      grouped.set(groupKey, row);
+    }
+    return [...grouped.values()];
   }
   async createSourceVisit(tenantId: string, input: Omit<IngestionSourceVisit, "id" | "tenantId">) {
     const visit = { ...input, id: ++this.visitId, tenantId };

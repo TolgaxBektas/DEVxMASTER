@@ -90,6 +90,89 @@ export function registerReviewImageRoutes(
   });
 }
 
+export function registerSearchTermRoutes(
+  app: Express,
+  deps: { repository: IngestionRepository },
+) {
+  app.get("/api/v1/ingestion/search-terms", (request, response) => {
+    void (async () => {
+      const auth = (request as AuthenticatedRequest).auth;
+      if (!auth) {
+        response.status(401).json({ code: "UNAUTHORIZED", message: "Anmeldung erforderlich" });
+        return;
+      }
+      if (!auth.permissions.has("ingestion.source.approve")) {
+        response.status(403).json({ code: "FORBIDDEN", message: "Berechtigung zum Pflegen von Suchbegriffen erforderlich" });
+        return;
+      }
+      response.json(await deps.repository.listSearchTerms(auth.tenantId));
+    })().catch((error: unknown) => {
+      response.status(500).json({
+        code: "INTERNAL_ERROR",
+        message: error instanceof Error ? error.message : "Suchbegriffe konnten nicht geladen werden",
+      });
+    });
+  });
+  app.post("/api/v1/ingestion/search-terms", (request, response) => {
+    void (async () => {
+      const auth = (request as AuthenticatedRequest).auth;
+      if (!auth) {
+        response.status(401).json({ code: "UNAUTHORIZED", message: "Anmeldung erforderlich" });
+        return;
+      }
+      if (!auth.permissions.has("ingestion.source.approve")) {
+        response.status(403).json({ code: "FORBIDDEN", message: "Berechtigung zum Pflegen von Suchbegriffen erforderlich" });
+        return;
+      }
+      const body = request.body as { term?: unknown; priority?: unknown } | null;
+      const term = typeof body?.term === "string" ? body.term.trim() : "";
+      const priority = body?.priority === undefined ? 2 : body.priority;
+      if (!term || term.length > 120 || !Number.isInteger(priority) || Number(priority) < 1) {
+        response.status(400).json({ code: "INVALID_SEARCH_TERM", message: "Suchbegriff oder Priorität ist ungültig" });
+        return;
+      }
+      const saved = await deps.repository.createSearchTerm(auth.tenantId, {
+        term,
+        priority: Number(priority),
+        active: true,
+        origin: "manuell",
+      });
+      response.status(201).json(saved);
+    })().catch((error: unknown) => {
+      response.status(500).json({
+        code: "INTERNAL_ERROR",
+        message: error instanceof Error ? error.message : "Suchbegriff konnte nicht gespeichert werden",
+      });
+    });
+  });
+  app.patch("/api/v1/ingestion/search-terms/:id", (request, response) => {
+    void (async () => {
+      const auth = (request as AuthenticatedRequest).auth;
+      if (!auth) {
+        response.status(401).json({ code: "UNAUTHORIZED", message: "Anmeldung erforderlich" });
+        return;
+      }
+      if (!auth.permissions.has("ingestion.source.approve")) {
+        response.status(403).json({ code: "FORBIDDEN", message: "Berechtigung zum Pflegen von Suchbegriffen erforderlich" });
+        return;
+      }
+      const id = Number(request.params.id);
+      const body = request.body as { active?: unknown } | null;
+      if (!Number.isInteger(id) || id <= 0 || typeof body?.active !== "boolean") {
+        response.status(400).json({ code: "INVALID_SEARCH_TERM", message: "Suchbegriff oder Aktivstatus ist ungültig" });
+        return;
+      }
+      response.json(await deps.repository.setSearchTermActive(auth.tenantId, id, body.active));
+    })().catch((error: unknown) => {
+      const notFound = error instanceof Error && error.message === "Suchbegriff nicht gefunden";
+      response.status(notFound ? 404 : 500).json({
+        code: notFound ? "NOT_FOUND" : "INTERNAL_ERROR",
+        message: error instanceof Error ? error.message : "Suchbegriff konnte nicht geändert werden",
+      });
+    });
+  });
+}
+
 
 export async function persistDocumentBytes(
   deps: UploadDependencies,

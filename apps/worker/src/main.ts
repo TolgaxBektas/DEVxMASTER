@@ -27,6 +27,7 @@ import { createDrizzleIngestionRepository } from "@xmaster-center/module-ingesti
 import { createAssistantModule } from "@xmaster-center/module-assistant";
 import type { ModuleRegistry } from "@xmaster-center/kernel";
 import { buildWorkerSchedules } from "./schedules.js";
+import { mapDiscoveryProposalResponse } from "./discovery-response.js";
 
 const env = parseEnv();
 const dbFactory = createDbFactory(env);
@@ -152,24 +153,9 @@ const ingestion = createIngestionModule({
       const body = await response.text();
       throw new Error(responseErrorMessage(body, response.status));
     }
-    const body = await response.json() as {
-      proposals?: Array<Record<string, unknown>>;
-      domain_evidence?: Array<{
-        host: string;
-        status?: string;
-        entry_count?: number;
-        attempts?: number;
-        error?: string | null;
-      }>;
-    };
-    return {
-      proposals: (body.proposals ?? []).map((item) => ({
-        url: String(item.url),
-        score: Number(item.score ?? 0),
-        metadata: { ...item },
-      })),
-      ...(body.domain_evidence ? { domainEvidence: body.domain_evidence } : {}),
-    };
+    return mapDiscoveryProposalResponse(
+      await response.json() as Parameters<typeof mapDiscoveryProposalResponse>[0],
+    );
   },
   fetchSource: async ({ url, archiveUrl, archiveLength, archiveCaptures }) => {
     if (!env.PRINT_INGEST_SERVICE_TOKEN) throw new Error("Print-Ingest-Service-Token fehlt");

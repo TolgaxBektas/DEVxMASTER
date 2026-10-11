@@ -53,6 +53,7 @@ export function createIngestionRouter(
     url: string; score: number; metadata: Record<string, unknown>;
   }> | {
     proposals: Array<{ url: string; score: number; metadata: Record<string, unknown> }>;
+    searchHits?: Array<{ term: string; hits: number; pdfs: number; error?: string | null }>;
     domainEvidence?: Array<Record<string, unknown>>;
   }>,
   reviewClientOrAudit?: PifReviewClient | AuditRepository,
@@ -155,8 +156,32 @@ export function createIngestionRouter(
         read: ctx.auth.permissions.has("ingestion.area.read"),
         run: ctx.auth.permissions.has("ingestion.area.run"),
       })),
-      list: permissionProcedure("ingestion.area.read").query(({ ctx }) =>
-        repository.listAreas(ctx.auth.tenantId),
+      list: permissionProcedure("ingestion.area.read").query(async ({ ctx }) => {
+        const [areas, coverageRows] = await Promise.all([
+          repository.listAreas(ctx.auth.tenantId),
+          repository.listSearchKeyCoverage(ctx.auth.tenantId),
+        ]);
+        const coverageByArea = new Map<number, Record<string, {
+          total: number; searched: number; errors: number; withHits: number; lastSearchedAt: Date | null;
+        }>>();
+        for (const row of coverageRows) {
+          const areaCoverage = coverageByArea.get(row.areaId) ?? {};
+          areaCoverage[row.keyType] = {
+            total: row.total,
+            searched: row.searched,
+            errors: row.errors,
+            withHits: row.withHits,
+            lastSearchedAt: row.lastSearchedAt,
+          };
+          coverageByArea.set(row.areaId, areaCoverage);
+        }
+        return areas.map((area) => ({
+          ...area,
+          searchKeyCoverage: coverageByArea.get(area.id) ?? {},
+        }));
+      }),
+      searchKeyCoverage: permissionProcedure("ingestion.area.read").query(({ ctx }) =>
+        repository.listSearchKeyCoverage(ctx.auth.tenantId),
       ),
       run: permissionProcedure("ingestion.area.run")
         .input(z.object({ limit: z.number().int().positive().max(100).default(3) }))
@@ -171,6 +196,17 @@ export function createIngestionRouter(
             payload: { limit: input.limit },
           });
         }),
+      seedSearchKeys: permissionProcedure("ingestion.area.run").mutation(async ({ ctx }) => {
+        if (!enqueue) throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Schlüsselerstellung ist nicht konfiguriert.",
+        });
+        return enqueue({
+          name: "ingestion.search_keys.seed",
+          tenantId: ctx.auth.tenantId,
+          payload: {},
+        });
+      }),
     }),
     documents: router({
       capabilities: protectedProcedure.query(({ ctx }) => ({
