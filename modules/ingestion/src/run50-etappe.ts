@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { actualityMaxAgeYears } from "./actuality.js";
 
 export type Run50EtappeArguments = {
   tenantId: number;
@@ -16,10 +17,21 @@ export type Run50EtappeCandidate = {
   areaName: string | null;
   areaLabel: string;
   areaOrigin: "quelle" | "anzeigen" | "offen";
+  periodEndYear: number | null;
   pages: number;
   filename: string;
   sha256: string;
 };
+
+export function isRun50EtappeYearEligible(
+  periodEndYear: number | null,
+  currentYear = new Date().getFullYear(),
+  maxAgeYears = actualityMaxAgeYears(),
+): boolean {
+  return periodEndYear !== null
+    && periodEndYear >= currentYear - maxAgeYears
+    && periodEndYear <= currentYear;
+}
 
 export type Run50EtappeContact = {
   city: string | null;
@@ -232,10 +244,13 @@ export function selectRun50EtappeDocuments(
   targetPages: number,
   etappe: string,
   maxPages?: number,
+  currentYear = new Date().getFullYear(),
+  maxAgeYears = actualityMaxAgeYears(),
 ): Run50EtappeCandidate[] {
   if (targetPages <= 0) return [];
   const eligibleCandidates = candidates.filter((candidate) =>
-    maxPages === undefined || candidate.pages <= maxPages
+    isRun50EtappeYearEligible(candidate.periodEndYear, currentYear, maxAgeYears)
+      && (maxPages === undefined || candidate.pages <= maxPages)
   );
   const orderedCandidates = eligibleCandidates.map((candidate) => ({
     candidate,

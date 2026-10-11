@@ -715,10 +715,67 @@ def test_customer_exclusions_and_commercial_charity_exceptions(
         ("Stadt-Apotheke", "", None),
         ("Wittichenau Bäckerei", "", None),
         ("DIVANO", "Der Ort in der Mitte der Stadt Friedberg", None),
+        (
+            "Fachkraft für Betriebsgastronomie",
+            "Wir suchen Verstärkung für unser Team am Standort Sengenthal: "
+            "Fachkraft für Betriebsgastronomie (m/w/d) in Teilzeit",
+            "veto:stellenanzeige",
+        ),
+        (
+            "Bäckerei Plank",
+            "QR-Code scannen oder unter bewerbung@baeckerei-plank.de bewerben. "
+            "• 33 Urlaubstage pro Jahr",
+            "veto:stellenanzeige",
+        ),
+        (
+            "Elektrobranche",
+            "Deine Karriere in der Elektrobranche ‒ starte jetzt beim "
+            "Top-Arbeitgeber ... Bewerbung",
+            "veto:stellenanzeige",
+        ),
+        ("Fenster", "Die haltbarste Eckausbildung bei den Fenstern, äußerst pflegeleicht", None),
+        (
+            "Immobilien",
+            "Wir suchen laufend OBJEKTE für vorgemerkte Kunden! kostenlose Wertermittlung "
+            "IMMOBILIEN SEIT 1985",
+            None,
+        ),
+        (
+            "Fahrschule",
+            "Nächster Ferienkurs: Pfingstferien. Ausserdem bei uns: "
+            "LKW-, Bus- und Traktorausbildung",
+            None,
+        ),
+        ("LKW", "LKW-Ausbildung bei Beispiel GmbH", None),
+        ("Fenster", "Bewerbung Bewerbung", None),
+        ("Autohaus", "Tel. 09181 12345 · www.autohaus-example.de", None),
+        ("Fachkraft", "Gesucht: ( m/w/d)", "veto:stellenanzeige"),
+        ("Fachkraft", "Gesucht: (w/m)", "veto:stellenanzeige"),
+        ("Fachkraft", "Gesucht: w/m/d", "veto:stellenanzeige"),
+        ("Fachkraft", "Gesucht: m/w/divers", "veto:stellenanzeige"),
     ],
 )
 def test_customer_exclusion_run50_patterns(company, text, expected):
     assert customer_exclusion(company, text) == expected
+
+
+def test_job_ad_veto_is_reported_as_exclusion_rejection(monkeypatch):
+    rect = (40, 60, 560, 600)
+    pdf = _pdf([{"ads": [rect]}])
+    monkeypatch.setattr(
+        run50,
+        "_crop_text",
+        lambda *_: "QR-Code scannen oder unter bewerbung@baeckerei-plank.de bewerben.",
+    )
+
+    result, _ = _run_one_page(
+        pdf,
+        _detector_ad(rect),
+        [_verdict("Bäckerei Plank")],
+    )
+
+    rejection = next(item for item in result.rejected if item.stage == "exclusion")
+    assert rejection.reason == "veto:stellenanzeige"
 
 
 def test_document_deduplicates_same_advertiser_by_largest_crop():

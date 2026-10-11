@@ -294,6 +294,25 @@ def test_candidate_recency_key_uses_archive_or_url_date(
     assert candidate_recency_key(url, archive_timestamp) == expected
 
 
+def test_candidate_rejection_uses_configured_actuality_age(monkeypatch):
+    monkeypatch.setenv("INGESTION_ACTUALITY_MAX_AGE_YEARS", "1")
+    assert candidate_rejection_reason(
+        "https://gemeinde-x.de/amtsblatt-2024.pdf"
+    ) == f"Jahreszahl älter als {discovery.date.today().year - 1}"
+    assert candidate_rejection_reason(
+        "https://gemeinde-x.de/amtsblatt-2025.pdf"
+    ) is None
+
+    monkeypatch.delenv("INGESTION_ACTUALITY_MAX_AGE_YEARS", raising=False)
+    assert candidate_rejection_reason(
+        "https://gemeinde-x.de/amtsblatt-2023.pdf"
+    ) is None
+    monkeypatch.setenv("INGESTION_ACTUALITY_MAX_AGE_YEARS", "invalid")
+    assert candidate_rejection_reason(
+        "https://gemeinde-x.de/amtsblatt-2023.pdf"
+    ) is None
+
+
 def test_discover_proposals_prioritizes_brochures_without_global_gazette_limit(monkeypatch):
     gazettes = [
         {

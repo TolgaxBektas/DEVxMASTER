@@ -69,6 +69,26 @@ _RUN50_PUBLISHER_ANY_PATTERN = re.compile(
     r"\beine\s+veröffentlichung\s+der\b|\banzeigen\s+schalten\b",
     re.I,
 )
+_RUN50_JOB_TERM_START = r"(?<!-)(?<![^\W\d_])"
+_RUN50_JOB_TERM_END = r"(?![^\W\d_])(?!-)"
+_RUN50_JOB_GENDER_PATTERN = re.compile(
+    rf"{_RUN50_JOB_TERM_START}(?:m\s*/\s*w\s*/\s*d|w\s*/\s*m\s*/\s*d|"
+    rf"\(\s*m\s*/\s*w\s*\)|\(\s*w\s*/\s*m\s*\)|m\s*/\s*w\s*/\s*divers){_RUN50_JOB_TERM_END}",
+    re.I,
+)
+_RUN50_JOB_TERM_PATTERNS = (
+    re.compile(rf"{_RUN50_JOB_TERM_START}ausbildung{_RUN50_JOB_TERM_END}", re.I),
+    re.compile(rf"{_RUN50_JOB_TERM_START}auszubildende{_RUN50_JOB_TERM_END}", re.I),
+    re.compile(rf"{_RUN50_JOB_TERM_START}azubis?{_RUN50_JOB_TERM_END}", re.I),
+    re.compile(rf"{_RUN50_JOB_TERM_START}bewerbung(?:en)?{_RUN50_JOB_TERM_END}", re.I),
+    re.compile(rf"{_RUN50_JOB_TERM_START}bewerben{_RUN50_JOB_TERM_END}", re.I),
+    re.compile(rf"{_RUN50_JOB_TERM_START}stellenangebot{_RUN50_JOB_TERM_END}", re.I),
+    re.compile(rf"{_RUN50_JOB_TERM_START}stellenanzeige{_RUN50_JOB_TERM_END}", re.I),
+    re.compile(rf"{_RUN50_JOB_TERM_START}wir\s+suchen{_RUN50_JOB_TERM_END}", re.I),
+    re.compile(rf"{_RUN50_JOB_TERM_START}praktikum{_RUN50_JOB_TERM_END}", re.I),
+    re.compile(rf"{_RUN50_JOB_TERM_START}karriere{_RUN50_JOB_TERM_END}", re.I),
+    re.compile(rf"{_RUN50_JOB_TERM_START}quereinsteiger{_RUN50_JOB_TERM_END}", re.I),
+)
 
 PROMPTS_DIR = Path(__file__).resolve().parents[1] / "prompts"
 DETECTOR_PROMPT_FILE = PROMPTS_DIR / "run50_detector_prompt.md"
@@ -544,6 +564,10 @@ def customer_exclusion(company: str, text: str) -> str | None:
         or _RUN50_PUBLISHER_ANY_PATTERN.search(text)
     ):
         return "veto:verlag"
+    if _RUN50_JOB_GENDER_PATTERN.search(text) or sum(
+        bool(pattern.search(text)) for pattern in _RUN50_JOB_TERM_PATTERNS
+    ) >= 2:
+        return "veto:stellenanzeige"
     return None
 
 
