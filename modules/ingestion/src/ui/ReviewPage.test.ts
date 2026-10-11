@@ -78,18 +78,20 @@ describe("Prüfseiten-Auswahl", () => {
 
     expect(germanyState).toEqual({
       areaAgs: "09262",
-      detector: "",
+      detector: "run50",
       page: 1,
       selectedId: 82,
     });
     expect(returnedHighQualityState).toEqual(highQualityState);
     expect(reviewListQueryInput(state, "xdata_nb_high_quality")).toEqual({
       area_ags: "09162",
+      detector: "run50",
       limit: 100,
       offset: 200,
     });
     expect(reviewListQueryInput(state, "xdata_germany")).toEqual({
       area_ags: "09262",
+      detector: "run50",
       limit: 100,
       offset: 100,
     });
@@ -118,6 +120,26 @@ describe("Prüfseiten-Auswahl", () => {
       detector: "run50",
     });
     expect(reviewListQueryInput(state, "xdata_germany")).toEqual({
+      detector: "run50",
+      limit: 100,
+      offset: 0,
+    });
+  });
+
+  it("zeigt standardmäßig Run50-Funde und lässt Alle Funde explizit wählen", () => {
+    const state: ReviewTabState = { areaAgs: {}, detector: {}, page: {}, selectedIds: {} };
+
+    expect(reviewTabStateFor(state, "xdata_germany").detector).toBe("run50");
+    expect(reviewListQueryInput(state, "xdata_germany")).toEqual({
+      detector: "run50",
+      limit: 100,
+      offset: 0,
+    });
+    expect(reviewSummaryQueryInput(state, "xdata_germany")).toEqual({ detector: "run50" });
+
+    const allFindsState = updateReviewDetector(state, "xdata_germany", "");
+    expect(reviewTabStateFor(allFindsState, "xdata_germany").detector).toBe("");
+    expect(reviewListQueryInput(allFindsState, "xdata_germany")).toEqual({
       limit: 100,
       offset: 0,
     });
