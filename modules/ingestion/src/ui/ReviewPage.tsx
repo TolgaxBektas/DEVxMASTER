@@ -102,7 +102,7 @@ export type ReviewTabState = {
 export function reviewTabStateFor(state: ReviewTabState, source: DataSource) {
   return {
     areaAgs: state.areaAgs[source] ?? "",
-    detector: state.detector[source] ?? "",
+    detector: state.detector[source] ?? "run50",
     page: state.page[source] ?? 0,
     selectedId: state.selectedIds[source] ?? null,
   };
@@ -439,7 +439,7 @@ function DeferredChannels({ channels }: { channels: readonly DeferredChannel[] }
 }
 
 export function ReviewPage({ api }: ModulePageProps) {
-  const [activeSource, setActiveSource] = useState<DataSource>("xdata_nb_high_quality");
+  const [activeSource, setActiveSource] = useState<DataSource>("xdata_germany");
   const [sourceState, setSourceState] = useState<ReviewTabState>({
     areaAgs: {},
     detector: {},
@@ -658,8 +658,8 @@ export function ReviewPage({ api }: ModulePageProps) {
           );
         }}
       >
-        <option value="">Alle Funde</option>
         <option value="run50">Nur neue Anzeigenerkennung (Run50)</option>
+        <option value="">Alle Funde inkl. alter Erkennung</option>
       </select>
       <Button
         disabled={page === 0}
