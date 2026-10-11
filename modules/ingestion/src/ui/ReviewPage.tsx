@@ -427,7 +427,7 @@ export function ReviewProvenanceRows({
         </dd>
       </div>
       <div><dt>Heft</dt><dd>{issue || "—"}</dd></div>
-      <div><dt>Datei</dt><dd>{provenance?.document_filename || "—"}</dd></div>
+      <div><dt>Datei</dt><dd>{readableFilename(provenance?.document_filename) || "—"}</dd></div>
     </>
   );
 }
