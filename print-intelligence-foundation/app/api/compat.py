@@ -227,6 +227,8 @@ def discovery_proposals(payload: DiscoveryProposalsRequest):
         request_delay=settings.discovery_request_delay,
         user_agent=settings.discovery_user_agent,
     )
-    return crawler.propose_with_search_hits(
-        payload.seed_pages, payload.search_terms, payload.max_results
-    )
+    return {
+        "proposals": crawler.propose(
+            payload.seed_pages, payload.search_terms, payload.max_results
+        )
+    }

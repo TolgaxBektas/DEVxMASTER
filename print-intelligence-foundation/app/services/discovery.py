@@ -118,54 +118,29 @@ class DiscoveryCrawler:
         search_terms: list[str],
         max_results: int,
     ) -> list[dict]:
-        return self.propose_with_search_hits(seed_pages, search_terms, max_results)[
-            "proposals"
-        ]
-
-    def propose_with_search_hits(
-        self,
-        seed_pages: list[str],
-        search_terms: list[str],
-        max_results: int,
-    ) -> dict:
         proposals = []
-        search_hits = []
         seen = set()
         candidate_pages = [
-            (page, {"type": "seed", "page": page})
-            for page in seed_pages[:max_results]
+            (page, {"type": "seed", "page": page}) for page in seed_pages
         ]
-        for term in search_terms:
-            if not self.search_provider:
-                search_hits.append(
-                    {"term": term, "count": 0, "error": "Suchanbieter nicht konfiguriert"}
-                )
-                continue
-            try:
-                if hasattr(self.search_provider, "search_with_status"):
-                    results, error = self.search_provider.search_with_status(
-                        term, min(10, self.max_entries)
+        if self.search_provider:
+            for term in search_terms:
+                candidate_pages.extend(
+                    (result.url, {"type": "search", "query": term})
+                    for result in self.search_provider.search(
+                        term, min(max_results, self.max_entries)
                     )
-                else:
-                    results = self.search_provider.search(term, min(10, self.max_entries))
-                    error = None
-            except Exception as exc:
-                results, error = [], str(exc)
-            search_hits.append(
-                {"term": term, "count": len(results), "error": error}
-            )
-            candidate_pages.extend(
-                (result.url, {"type": "search", "query": term})
-                for result in results
-                if result.url
-            )
+                    if result.url
+                )
         unique_pages = []
         page_seen = set()
         for page, origin in candidate_pages:
             if page not in page_seen:
                 page_seen.add(page)
                 unique_pages.append((page, origin))
-        for page_url, origin in unique_pages:
+        for page_url, origin in unique_pages[: self.max_pages]:
+            if len(proposals) >= max_results:
+                break
             try:
                 validate_public_url(page_url)
             except (ValueError, TimeoutError, httpx.HTTPError):
@@ -204,7 +179,9 @@ class DiscoveryCrawler:
                         "discovery": origin["type"],
                     }
                 )
-        return {"proposals": proposals, "search_hits": search_hits}
+                if len(proposals) >= max_results:
+                    break
+        return proposals
 
     def process_candidate(self, candidate: DiscoveredCandidate) -> Document:
         session = self._require_session()

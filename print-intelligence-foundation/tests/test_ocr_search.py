@@ -286,47 +286,13 @@ def test_search_results_are_ssrf_filtered_bounded_and_read_only(monkeypatch):
         search_provider=provider, max_entries=3, max_pages=2
     )
     proposals = crawler.propose([], ["brochure"], max_results=2)
-    assert [proposal["url"] for proposal in proposals] == [
-        "https://good.test/one.pdf",
-        "https://good.test/two.pdf",
+    assert proposals == [
+        {
+            "url": "https://good.test/one.pdf",
+            "score": 1.0,
+            "found_on": None,
+            "origin": {"type": "search", "query": "brochure"},
+            "discovery": "search",
+        }
     ]
     assert crawler.session is None
-
-
-def test_search_hits_are_reported_and_not_truncated_by_seed_budget(monkeypatch):
-    provider = RecordedSearchProvider({
-        "brochure": [
-            SearchResult("https://search.test/one.pdf"),
-            SearchResult("https://search.test/two.pdf"),
-            SearchResult("https://search.test/three.pdf"),
-        ]
-    })
-    monkeypatch.setattr("app.services.discovery.validate_public_url", lambda _url: None)
-    crawler = DiscoveryCrawler.for_proposals(
-        search_provider=provider, max_entries=10, max_pages=1
-    )
-    result = crawler.propose_with_search_hits(
-        ["https://seed.test/one.pdf", "https://seed.test/two.pdf"],
-        ["brochure"],
-        max_results=1,
-    )
-    assert [proposal["url"] for proposal in result["proposals"]] == [
-        "https://seed.test/one.pdf",
-        "https://search.test/one.pdf",
-        "https://search.test/two.pdf",
-        "https://search.test/three.pdf",
-    ]
-    assert result["search_hits"] == [{"term": "brochure", "count": 3, "error": None}]
-
-
-def test_search_provider_errors_are_reported_as_search_hits(monkeypatch):
-    class FailedSearchProvider:
-        def search(self, _query, _limit):
-            raise RuntimeError("provider unavailable")
-
-    monkeypatch.setattr("app.services.discovery.validate_public_url", lambda _url: None)
-    crawler = DiscoveryCrawler.for_proposals(search_provider=FailedSearchProvider())
-    result = crawler.propose_with_search_hits([], ["brochure"], max_results=1)
-    assert result["search_hits"] == [
-        {"term": "brochure", "count": 0, "error": "provider unavailable"}
-    ]

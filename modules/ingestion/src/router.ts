@@ -53,7 +53,7 @@ export function createIngestionRouter(
     url: string; score: number; metadata: Record<string, unknown>;
   }> | {
     proposals: Array<{ url: string; score: number; metadata: Record<string, unknown> }>;
-    searchHits?: Array<{ term: string; count: number; error?: string | null }>;
+    searchHits?: Array<{ term: string; hits: number; pdfs: number; error?: string | null }>;
     domainEvidence?: Array<Record<string, unknown>>;
   }>,
   reviewClientOrAudit?: PifReviewClient | AuditRepository,

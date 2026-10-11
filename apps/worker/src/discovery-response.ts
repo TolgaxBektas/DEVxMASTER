@@ -1,6 +1,6 @@
 export type DiscoveryProposalResponse = {
   proposals?: Array<Record<string, unknown>>;
-  search_hits?: Array<{ term: string; count: number; error?: string | null }>;
+  search_hits?: Array<{ term: string; hits: number; pdfs: number; error?: string | null }>;
   domain_evidence?: Array<{
     host: string;
     status?: string;
@@ -17,7 +17,7 @@ export function mapDiscoveryProposalResponse(body: DiscoveryProposalResponse) {
       score: Number(item.score ?? 0),
       metadata: item,
     })),
-    ...(body.search_hits ? { searchHits: body.search_hits } : {}),
+    ...(body.search_hits ? { searchHits: body.search_hits.map((hit) => ({ ...hit })) } : {}),
     ...(body.domain_evidence ? { domainEvidence: body.domain_evidence } : {}),
   };
 }

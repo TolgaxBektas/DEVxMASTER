@@ -89,7 +89,7 @@ describe("feste Suchschlüssel-Jobs", () => {
             { url: "https://example.test/brochure.pdf", score: 1, metadata: {} },
             { url: "https://example.test/index.html", score: 1, metadata: {} },
           ],
-          searchHits: [{ term: searchTerms[0] ?? "", count: 7, error: null }],
+          searchHits: [{ term: searchTerms[0] ?? "", hits: 7, pdfs: 2, error: null }],
         };
       },
     });
@@ -104,7 +104,7 @@ describe("feste Suchschlüssel-Jobs", () => {
     expect(primary).toMatchObject({
       status: "done",
       lastHitCount: 7,
-      lastPdfCount: 1,
+      lastPdfCount: 2,
       lastNewSources: 2,
       totalNewSources: 2,
       runCount: 1,
@@ -136,7 +136,7 @@ describe("feste Suchschlüssel-Jobs", () => {
       publish: async () => undefined,
       discoverProposals: async ({ searchTerms }) => ({
         proposals: [],
-        searchHits: [{ term: searchTerms[0] ?? "", count: 0, error: "Suchanbieter ausgefallen" }],
+        searchHits: [{ term: searchTerms[0] ?? "", hits: 0, pdfs: 0, error: "Suchanbieter ausgefallen" }],
       }),
     });
     const job = module.jobs.find((item) => item.name === "ingestion.search_keys.run");
@@ -178,7 +178,7 @@ describe("feste Suchschlüssel-Jobs", () => {
       enqueue,
       discoverProposals: async ({ searchTerms }) => ({
         proposals: [],
-        searchHits: [{ term: searchTerms[0] ?? "", count: 3, error: null }],
+        searchHits: [{ term: searchTerms[0] ?? "", hits: 3, pdfs: 0, error: null }],
       }),
     });
     const job = module.jobs.find((item) => item.name === "ingestion.search_keys.run");

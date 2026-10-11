@@ -82,22 +82,39 @@ def discover_proposals(
     rejected: list[dict] | None = None,
     archive_domains: list[str] | None = None,
     archive_evidence: list[dict] | None = None,
+    search_hits: list[dict] | None = None,
 ):
     collected=[]
     visited=set()
-    candidate_pages=list(seed_pages)
+    seed_candidates=list(dict.fromkeys(seed_pages[:max_results]))
+    search_pages: dict[str, set[str]] = {}
+    search_results = []
     budget = DiscoveryBudget()
     for term in search_terms:
+        stats = {"term": term, "hits": 0, "pdfs": 0, "error": None}
         try:
             hits = web_search(term, limit=10)
         except Exception as error:
             _record_error(rejected, term, error, "search")
+            stats["error"] = str(error)
+            search_results.append(stats)
             continue
+        stats["hits"] = len(hits)
         for hit in hits:
-            if hit['url'] and hit['url'] not in visited:
-                candidate_pages.append(hit['url'])
-    for page in candidate_pages[:max_results]:
-        if page in visited: continue
+            if hit.get("url"):
+                search_pages.setdefault(hit["url"], set()).add(term)
+        search_results.append(stats)
+    search_page_candidates = list(search_pages)[:max_results]
+    candidate_pages = [*seed_candidates, *search_page_candidates]
+    search_pdf_urls: dict[str, set[str]] = {
+        term: set() for term in search_terms
+    }
+    processed_pages = set()
+    for page in candidate_pages:
+        if page in processed_pages:
+            continue
+        processed_pages.add(page)
+        page_terms = search_pages.get(page, set())
         if '.pdf' in page.lower():
             visited.add(page)
             try:
@@ -118,9 +135,18 @@ def discover_proposals(
                     'discovery': 'search_or_seed_direct',
                     'reason': 'Direkte PDF-Adresse aus Startseite oder Suchtreffer.',
                 })
+                for term in page_terms:
+                    search_pdf_urls[term].add(page)
             continue
         try:
-            collected.extend(discover_pdf_links(page, budget=budget, area_name=area_name, rejected=rejected, visited=visited))
+            page_proposals = discover_pdf_links(
+                page, budget=budget, area_name=area_name, rejected=rejected, visited=visited,
+            )
+            collected.extend(page_proposals)
+            for term in page_terms:
+                search_pdf_urls[term].update(
+                    item["url"] for item in page_proposals if item.get("url")
+                )
         except Exception as error:
             _record_error(rejected, page, error, "html_crawl")
         try:
@@ -144,8 +170,14 @@ def discover_proposals(
                         'discovery': 'sitemap',
                         'reason': f'PDF-Adresse aus Sitemap {sm}.',
                     })
+                    for term in page_terms:
+                        search_pdf_urls[term].add(pdf_url)
         except Exception as error:
             _record_error(rejected, page, error, "sitemap")
+    for stats in search_results:
+        stats["pdfs"] = len(search_pdf_urls[stats["term"]])
+    if search_hits is not None:
+        search_hits.extend(search_results)
     domains = archive_domains or [
         urlparse(page).hostname
         for page in seed_pages

@@ -6,8 +6,8 @@ describe("print-ingest discovery mapping", () => {
     expect(mapDiscoveryProposalResponse({
       proposals: [{ url: "https://example.test/file.pdf", score: 0.8 }],
       search_hits: [
-        { term: "Broschüre", count: 7, error: null },
-        { term: "Wegweiser", count: 0, error: "Suchanbieter ausgefallen" },
+        { term: "Broschüre", hits: 7, pdfs: 2, error: null },
+        { term: "Wegweiser", hits: 0, pdfs: 0, error: "Suchanbieter ausgefallen" },
       ],
     })).toEqual({
       proposals: [{
@@ -16,8 +16,8 @@ describe("print-ingest discovery mapping", () => {
         metadata: { url: "https://example.test/file.pdf", score: 0.8 },
       }],
       searchHits: [
-        { term: "Broschüre", count: 7, error: null },
-        { term: "Wegweiser", count: 0, error: "Suchanbieter ausgefallen" },
+        { term: "Broschüre", hits: 7, pdfs: 2, error: null },
+        { term: "Wegweiser", hits: 0, pdfs: 0, error: "Suchanbieter ausgefallen" },
       ],
     });
   });

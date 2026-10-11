@@ -30,12 +30,6 @@ class SearXNGSearchProvider:
         self.user_agent = user_agent
 
     def search(self, query: str, limit: int) -> list[SearchResult]:
-        results, _error = self.search_with_status(query, limit)
-        return results
-
-    def search_with_status(
-        self, query: str, limit: int
-    ) -> tuple[list[SearchResult], str | None]:
         try:
             response = httpx.get(
                 f"{self.base_url}/search",
@@ -44,21 +38,18 @@ class SearXNGSearchProvider:
                 timeout=self.timeout_seconds,
             )
             response.raise_for_status()
-            return (
-                [
-                    SearchResult(
-                        url=item.get("url", ""),
-                        title=item.get("title", ""),
-                        content=item.get("content", ""),
-                    )
-                    for item in response.json().get("results", [])[:limit]
-                    if item.get("url")
-                ],
-                None,
-            )
+            return [
+                SearchResult(
+                    url=item.get("url", ""),
+                    title=item.get("title", ""),
+                    content=item.get("content", ""),
+                )
+                for item in response.json().get("results", [])[:limit]
+                if item.get("url")
+            ]
         except (httpx.HTTPError, ValueError, TypeError) as exc:
             logger.warning("search provider failed query=%s error=%s", query, exc)
-            return [], str(exc)
+            return []
 
 
 class RecordedSearchProvider:

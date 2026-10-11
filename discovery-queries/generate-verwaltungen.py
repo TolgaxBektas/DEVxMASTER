@@ -20,9 +20,7 @@ AREAS_PATH = ROOT / "modules/ingestion/src/data/areas.de.json"
 OUTPUT_PATH = ROOT / "modules/ingestion/src/data/verwaltungen.de.json"
 REPORT_PATH = Path("/home/ubuntu/pruefung/recherche-verwaltungen-generator-report.txt")
 
-EXCLUDED_TYPES = {"landkreis", "kreis", "regionalverband"}
 EXCLUDED_PREFIXES = (
-    "hessische staatskanzlei",
     "landratsamt",
     "kreisverwaltung",
     "kreisausschuss",
@@ -34,6 +32,16 @@ EXCLUDED_PREFIXES = (
     "landesdirektion",
     "landesregierung",
     "staatskanzlei",
+    "regionalverband",
+)
+LOCAL_AUTHORITY_PREFIXES = (
+    "stadt",
+    "gemeinde",
+    "amt",
+    "markt",
+    "samtgemeinde",
+    "verbandsgemeinde",
+    "verwaltungsgemeinschaft",
 )
 SCOPE_PREFIXES = (
     "Gemeindevorstand der Gemeinde ",
@@ -67,17 +75,17 @@ def normalize_postal_code(value: Any) -> str:
     return text
 
 
-def exclusion_reason(name: str, typ: str) -> str | None:
+def exclusion_reason(name: str) -> str | None:
     if not name:
         return "leerer Name"
-    normalized_type = typ.casefold().strip()
-    if normalized_type in EXCLUDED_TYPES:
-        return f"Typ {typ.strip()}"
     folded_name = name.casefold()
-    if any(folded_name.startswith(prefix) for prefix in EXCLUDED_PREFIXES):
-        return "ausgeschlossener Name-Präfix"
-    if not normalized_type and folded_name.endswith(("kreis", "-kreis")):
-        return "Typ leer, Name endet auf Kreis"
+    for prefix in sorted(EXCLUDED_PREFIXES, key=len, reverse=True):
+        if folded_name.startswith(prefix):
+            return f"Name-Präfix {prefix.strip()}"
+    if not folded_name.startswith(LOCAL_AUTHORITY_PREFIXES):
+        last_word = folded_name.split()[-1].rstrip(".,;:")
+        if last_word.endswith("kreis"):
+            return "Name endet auf Kreis"
     return None
 
 
@@ -122,15 +130,104 @@ def select_ags(counts: Counter[str]) -> str | None:
     return min(counts, key=lambda ags: (-counts[ags], ags))
 
 
+def normalize_comparison_name(value: str) -> str:
+    normalized = clean_name(value).casefold()
+    normalized = re.sub(r"\([^)]*\)", " ", normalized)
+    for pattern, replacement in (
+        (r"\ba\s*\.\s*d\s*\.\s*", "an der "),
+        (r"\bi\s*\.\s*d\s*\.\s*", "in der "),
+        (r"\bv\s*\.\s*d\s*\.\s*", "vor der "),
+        (r"\ba\s*\.\s*", "am "),
+        (r"\bi\s*\.\s*", "im "),
+        (r"\bb\s*\.\s*", "bei "),
+        (r"\bst\s*\.\s*", "sankt "),
+    ):
+        normalized = re.sub(pattern, replacement, normalized)
+    return " ".join(normalized.replace(".", " ").split())
+
+
+def build_mapping_indexes(
+    localities: list[dict],
+    area_by_ags: dict[str, dict],
+) -> dict[str, Any]:
+    exact, postal = locality_aggs(localities)
+    names_by_state: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
+    normalized_by_state: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
+    postal_by_ags: dict[str, list[str]] = defaultdict(list)
+    for locality in localities:
+        ags = clean_name(locality.get("municipalityKey"))[:5]
+        area = area_by_ags.get(ags)
+        if not area:
+            continue
+        state_name = clean_name(area.get("stateName"))
+        name = clean_name(locality.get("name"))
+        if not state_name or not name:
+            continue
+        state_key = state_name.casefold()
+        names_by_state[state_key][name.casefold()].add(ags)
+        normalized_by_state[state_key][normalize_comparison_name(name)].add(ags)
+        postal_by_ags[ags].append(normalize_postal_code(locality.get("postalCode")))
+    return {
+        "exact": exact,
+        "postal": postal,
+        "names_by_state": names_by_state,
+        "normalized_by_state": normalized_by_state,
+        "postal_by_ags": postal_by_ags,
+    }
+
+
+def common_postal_prefix(left: str, right: str) -> int:
+    length = 0
+    for left_digit, right_digit in zip(left, right):
+        if left_digit != right_digit:
+            break
+        length += 1
+    return length
+
+
 def map_district(
     postal_code: str,
     ort: str,
-    exact: dict[tuple[str, str], Counter[str]],
-    postal: dict[str, Counter[str]],
-) -> str | None:
-    return select_ags(exact.get((postal_code, ort), Counter())) or select_ags(
-        postal.get(postal_code, Counter())
-    )
+    scope: str,
+    state_name: str,
+    indexes: dict[str, Any],
+) -> tuple[str | None, str | None]:
+    exact_ags = select_ags(indexes["exact"].get((postal_code, ort), Counter()))
+    if exact_ags:
+        return exact_ags, "a"
+
+    state_key = clean_name(state_name).casefold()
+    names_by_state = indexes["names_by_state"].get(state_key, {})
+    name_matches = names_by_state.get(clean_name(ort).casefold(), set())
+    if len(name_matches) == 1:
+        return next(iter(name_matches)), "b"
+
+    normalized_by_state = indexes["normalized_by_state"].get(state_key, {})
+    ambiguous_matches = set(name_matches)
+    for value in (ort, scope):
+        matches = normalized_by_state.get(normalize_comparison_name(value), set())
+        if len(matches) == 1:
+            return next(iter(matches)), "c"
+        ambiguous_matches.update(matches)
+
+    if len(ambiguous_matches) > 1 and postal_code:
+        prefix_scores = {
+            ags: max(
+                (
+                    common_postal_prefix(postal_code, locality_postal)
+                    for locality_postal in indexes["postal_by_ags"].get(ags, [])
+                ),
+                default=0,
+            )
+            for ags in ambiguous_matches
+        }
+        best_score = max(prefix_scores.values(), default=0)
+        winners = [ags for ags, score in prefix_scores.items() if score == best_score]
+        if best_score >= 3 and len(winners) == 1:
+            return winners[0], "d"
+
+    postal_ags = select_ags(indexes["postal"].get(postal_code, Counter()))
+    return (postal_ags, "e") if postal_ags else (None, None)
 
 
 def generate(input_path: Path) -> tuple[list[dict], list[str]]:
@@ -141,7 +238,7 @@ def generate(input_path: Path) -> tuple[list[dict], list[str]]:
         for area in areas
         if area["level"] == "district"
     }
-    exact_aggs, postal_aggs = locality_aggs(localities)
+    mapping_indexes = build_mapping_indexes(localities, area_by_ags)
     workbook = load_workbook(input_path, read_only=True, data_only=True)
     worksheet = workbook["Tabelle1"]
     headers = next(worksheet.iter_rows(min_row=1, max_row=1, values_only=True))
@@ -161,7 +258,7 @@ def generate(input_path: Path) -> tuple[list[dict], list[str]]:
             continue
         if name:
             source_name_counts[name] += 1
-        reason = exclusion_reason(name, typ)
+        reason = exclusion_reason(name)
         if reason:
             exclusions[reason] += 1
             excluded_names[reason][name or "<leer>"] += 1
@@ -196,24 +293,26 @@ def generate(input_path: Path) -> tuple[list[dict], list[str]]:
 
     mapped: list[dict] = []
     unmapped: list[str] = []
-    ambiguous_exact = 0
+    mapped_by_step: Counter[str] = Counter()
     for candidate in unique.values():
-        postal_code = candidate["postalCode"]
-        ort = candidate["ort"]
-        exact_counts = exact_aggs.get((postal_code, ort), Counter())
-        district_ags = select_ags(exact_counts)
-        if district_ags is None:
-            district_ags = select_ags(postal_aggs.get(postal_code, Counter()))
+        district_ags, mapping_step = map_district(
+            candidate["postalCode"],
+            candidate["ort"],
+            candidate["scope"],
+            candidate["stateName"],
+            mapping_indexes,
+        )
         if district_ags is None or district_ags not in area_by_ags:
             unmapped.append(
-                f"{candidate['name']} | {postal_code or '<leer>'} | {ort or '<leer>'}"
+                f"{candidate['name']} | {candidate['postalCode'] or '<leer>'} | "
+                f"{candidate['ort'] or '<leer>'}"
             )
             continue
-        if len(exact_counts) > 1:
-            ambiguous_exact += 1
+        mapped_by_step[mapping_step or ""] += 1
         mapped.append({
             **candidate,
             "districtAgs": district_ags,
+            "mappingStep": mapping_step,
         })
 
     mapped.sort(key=lambda item: (
@@ -238,8 +337,12 @@ def generate(input_path: Path) -> tuple[list[dict], list[str]]:
     lines.extend([
         f"Doppelte Namen nach Ausschlüssen zusammengeführt: {sum(duplicate_names.values())} Zusatzzeilen / {len(duplicate_names)} Namen",
         f"Eindeutige Verwaltungen nach Ausschlüssen: {len(unique)}",
-        f"Mehrdeutige exakte (PLZ, Ort)-Zuordnungen, Mehrheit/AGS-Gleichstand angewandt: {ambiguous_exact}",
         f"Unmapped: {len(unmapped)}",
+        "Zuordnungen nach Mapping-Schritt:",
+        *(
+            f"  Schritt {step}: {mapped_by_step[step]}"
+            for step in "abcde"
+        ),
     ])
     if duplicate_names:
         lines.append("Zusammengeführte Doppelnamen:")
@@ -249,10 +352,19 @@ def generate(input_path: Path) -> tuple[list[dict], list[str]]:
         )
     lines.append("Nicht zuordenbare Verwaltungen (Name | PLZ | Ort):")
     lines.extend(f"  {row}" for row in sorted(unmapped, key=str.casefold))
-    sample = random.Random(20261011).sample(mapped, min(40, len(mapped)))
-    lines.append("Deterministische Zufallsstichprobe (Seed 20261011), Name → scope → districtAgs / Kreis:")
+    rng = random.Random(20261012)
+    cascade_mapped = [row for row in mapped if row["mappingStep"] in {"b", "c", "d", "e"}]
+    sample_cascade = rng.sample(cascade_mapped, min(10, len(cascade_mapped)))
+    remaining = [row for row in mapped if row not in sample_cascade]
+    sample = [*sample_cascade, *rng.sample(remaining, min(40 - len(sample_cascade), len(remaining)))]
+    rng.shuffle(sample)
+    lines.append(
+        "Zufallsstichprobe (Seed 20261012), mindestens 10 Zuordnungen aus b–e; "
+        "Name → scope → districtAgs / Kreis / Schritt:"
+    )
     lines.extend(
-        f"  {row['name']} → {row['scope']} → {row['districtAgs']} / {area_by_ags[row['districtAgs']]['name']}"
+        f"  {row['name']} → {row['scope']} → {row['districtAgs']} / "
+        f"{area_by_ags[row['districtAgs']]['name']} / {row['mappingStep']}"
         for row in sample
     )
     return mapped, lines

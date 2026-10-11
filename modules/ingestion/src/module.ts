@@ -332,7 +332,7 @@ export function createIngestionModule(deps: {
     url: string; score: number; metadata: Record<string, unknown>;
   }> | {
     proposals: Array<{ url: string; score: number; metadata: Record<string, unknown> }>;
-    searchHits?: Array<{ term: string; count: number; error?: string | null }>;
+    searchHits?: Array<{ term: string; hits: number; pdfs: number; error?: string | null }>;
     domainEvidence?: Array<{
       host: string;
       status?: string;
@@ -545,13 +545,6 @@ export function createIngestionModule(deps: {
                   : discovery.searchHits?.find((hit) => hit.term === key.query);
                 if (!searchHit) throw new Error("Suchtreffer-Zähler fehlt für den Suchschlüssel");
                 if (searchHit.error) throw new Error(searchHit.error);
-                const pdfProposals = proposals.filter((proposal) => {
-                  try {
-                    return new URL(proposal.url).pathname.toLocaleLowerCase("de-DE").endsWith(".pdf");
-                  } catch {
-                    return false;
-                  }
-                });
                 let newSources = 0;
                 for (const proposal of proposals) {
                   const isNewSource = !knownSourceUrls.has(proposal.url);
@@ -566,13 +559,13 @@ export function createIngestionModule(deps: {
                   knownSourceUrls.add(source.url);
                   await approveRegisteredSource(tenantId, source, now);
                 }
-                const nextDueDays = pdfProposals.length > 0 ? 30 : 90;
+                const nextDueDays = searchHit.pdfs > 0 ? 30 : 90;
                 await repository.updateSearchKey(tenantId, key.id, {
                   status: "done",
                   lastSearchedAt: now,
                   nextDueAt: new Date(now.getTime() + nextDueDays * 86_400_000),
-                  lastHitCount: searchHit.count,
-                  lastPdfCount: pdfProposals.length,
+                  lastHitCount: searchHit.hits,
+                  lastPdfCount: searchHit.pdfs,
                   lastNewSources: newSources,
                   totalNewSources: key.totalNewSources + newSources,
                   runCount: key.runCount + 1,
