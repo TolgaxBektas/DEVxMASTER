@@ -781,17 +781,6 @@ def detect_page(
             )
             candidate["crop_png"] = png
             candidate["crop_info"] = crop_info
-            if crop_info.get("background_cut_edges"):
-                result.rejected.append(
-                    _rejection(
-                        page_number,
-                        candidate,
-                        "crop",
-                        "crop:hintergrund_angeschnitten",
-                        page_usage,
-                    )
-                )
-                continue
             candidate["crop_area"] = _crop_area(png)
             width, height = _crop_size(png)
             if min(width, height) < 200 or max(width, height) < 350:

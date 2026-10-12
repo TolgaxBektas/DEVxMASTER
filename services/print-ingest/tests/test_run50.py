@@ -177,33 +177,6 @@ def test_two_framed_ads_are_accepted_with_crop_provenance_and_evidence():
     assert result.accepted[0].region["x"] != result.accepted[0].crop_info["crop_bbox"]["x"]
 
 
-def test_background_cut_crop_is_rejected_before_crop_review():
-    document = fitz.open()
-    page = document.new_page(width=600, height=800)
-    page.draw_rect(
-        fitz.Rect(150, 40, 450, 600),
-        color=None,
-        fill=(0.88, 0.88, 0.88),
-    )
-    ad_rect = (180, 150, 420, 450)
-    page.insert_text((200, 210), "Musterfirma GmbH", fontsize=16)
-    page.insert_text(
-        (200, 250),
-        "Telefon 01234 567890 www.muster.example",
-        fontsize=12,
-    )
-    pdf = document.tobytes()
-    document.close()
-
-    result, client = _run_one_page(pdf, _detector_ad(ad_rect), [])
-
-    assert result.accepted == []
-    assert len(result.rejected) == 1
-    assert result.rejected[0].stage == "crop"
-    assert result.rejected[0].reason == "crop:hintergrund_angeschnitten"
-    assert [call[2] for call in client.calls] == [2000]
-
-
 def test_unparseable_detector_response_creates_one_page_rejection():
     pdf = _pdf([{"ads": []}])
     client = FakeClient([None])

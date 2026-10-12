@@ -72,7 +72,6 @@ MARGIN_TARGET_PT = 5 / 25.4 * 72
 MARGIN_MIN_PT = 2.5 / 25.4 * 72
 COMPLETION_MAX_PT = 10 / 25.4 * 72
 COMPLETION_GUTTER_PT = 2 / 25.4 * 72
-COMPLETION_BACKGROUND_FRACTION = 0.6
 MAX_OCR_REGIONS_PER_PAGE = 12
 _CLUSTER_MAX_GAP = 8
 _IMAGE_XOBJECT_LIMIT = 400
@@ -1517,7 +1516,6 @@ def complete_ad_rect(
     gutter_pt=COMPLETION_GUTTER_PT,
     ink_delta=24,
     safety_pt=0.5,
-    background_fraction=COMPLETION_BACKGROUND_FRACTION,
 ) -> dict:
     original = tuple(float(value) for value in ad_rect)
     sides = ("left", "top", "right", "bottom")
@@ -1525,7 +1523,6 @@ def complete_ad_rect(
         "rect": original,
         "growth_mm": {side: 0.0 for side in sides},
         "incomplete_edges": [],
-        "background_cut_edges": [],
     }
     if page_image is None:
         return unchanged
@@ -1545,7 +1542,6 @@ def complete_ad_rect(
     gutter_pt = max(0.0, float(gutter_pt))
     ink_delta = max(0.0, float(ink_delta))
     safety_pt = max(0.0, float(safety_pt))
-    background_fraction = max(0.0, min(1.0, float(background_fraction)))
     paper = _paper_gray(page_image)
     rect = list(original)
     indexes = {"left": 0, "top": 1, "right": 2, "bottom": 3}
@@ -1576,44 +1572,11 @@ def complete_ad_rect(
         )
         line_length = cross_end - cross_start
         if line_length <= 0:
-            return current_edge, False, False
-
-        ink_threshold = max(2, 0.002 * line_length)
-
-        def ink_pixels_for_line(scan_line):
-            strip = page_image.crop(
-                (scan_line, cross_start, scan_line + 1, cross_end)
-                if axis_index == 0
-                else (cross_start, scan_line, cross_end, scan_line + 1)
-            )
-            histogram = strip.histogram()
-            strip.close()
-            return sum(histogram[:low_cut]) + sum(histogram[high_cut:])
+            return current_edge, False
 
         edge_px = (current_edge - origin) * scale
         step = -1 if negative else 1
         line = math.floor(edge_px) - 1 if negative else math.ceil(edge_px)
-        background_strip_px = (1 / 25.4 * 72) * scale
-        inside_start = (
-            math.floor(edge_px)
-            if negative
-            else math.floor(edge_px - background_strip_px)
-        )
-        inside_end = (
-            math.ceil(edge_px + background_strip_px)
-            if negative
-            else math.ceil(edge_px)
-        )
-        inside_start = max(0, min(axis_size, inside_start))
-        inside_end = max(inside_start, min(axis_size, inside_end))
-        edge_ink_fractions = [
-            ink_pixels_for_line(sample_line) / line_length
-            for sample_line in range(inside_start, inside_end)
-        ]
-        edge_is_background = bool(edge_ink_fractions) and (
-            sum(edge_ink_fractions) / len(edge_ink_fractions)
-            >= background_fraction
-        )
         allowed_edge = original[edge_index] + (
             -max_growth_pt if negative else max_growth_pt
         )
@@ -1649,6 +1612,7 @@ def complete_ad_rect(
             else min(limit_options, key=lambda item: (item[0], -item[2]))
         )
 
+        ink_threshold = max(2, 0.002 * line_length)
         clean_run = 0.0
         clean_before_ink = 0.0
         frame_mode = False
@@ -1665,11 +1629,18 @@ def complete_ad_rect(
             )
             if not within_limit:
                 break
-            ink_pixels = ink_pixels_for_line(line)
+            strip = page_image.crop(
+                (line, cross_start, line + 1, cross_end)
+                if axis_index == 0
+                else (cross_start, line, cross_end, line + 1)
+            )
+            histogram = strip.histogram()
+            strip.close()
+            ink_pixels = sum(histogram[:low_cut]) + sum(histogram[high_cut:])
             if ink_pixels > ink_threshold:
                 if last_ink_edge is None and clean_before_ink + 1e-9 >= gutter_pt:
                     if ink_pixels < 0.8 * line_length:
-                        return current_edge, False, False
+                        return current_edge, False
                     frame_mode = True
                 clean_run = 0.0
                 saw_ink = True
@@ -1680,13 +1651,13 @@ def complete_ad_rect(
                 else:
                     clean_run += 1 / scale
                     if frame_mode or clean_run + 1e-9 >= gutter_pt:
-                        return last_ink_edge, False, False
+                        return last_ink_edge, False
             line += step
 
         reached_page = not (0 <= line < axis_size)
         if limit_reason == "page" and reached_page:
-            return (page_edge if saw_ink else current_edge), False, False
-        incomplete = saw_ink or (
+            return (page_edge if saw_ink else current_edge), False
+        if saw_ink or (
             limit_reason == "neighbor"
             and (
                 clean_before_ink
@@ -1695,33 +1666,24 @@ def complete_ad_rect(
             )
             + 1e-9
             < gutter_pt
-        )
-        background_cut = (
-            edge_is_background and limit_reason == "max" and saw_ink
-        )
-        if incomplete:
-            return original[indexes[side]], True, background_cut
-        return current_edge, False, False
+        ):
+            return original[indexes[side]], True
+        return current_edge, False
 
     incomplete_edges = []
-    background_cut_edges = []
     for _ in range(3):
         changed = False
         round_incomplete = []
-        round_background_cut = []
         for side in sides:
             index = indexes[side]
-            new_edge, incomplete, background_cut = scan_side(side)
+            new_edge, incomplete = scan_side(side)
             edge = original[index] if incomplete else new_edge
             if rect[index] != edge:
                 rect[index] = edge
                 changed = True
             if incomplete:
                 round_incomplete.append(side)
-            if background_cut:
-                round_background_cut.append(side)
         incomplete_edges = round_incomplete
-        background_cut_edges = round_background_cut
         if not changed:
             break
 
@@ -1739,7 +1701,6 @@ def complete_ad_rect(
             for side, distance in growth.items()
         },
         "incomplete_edges": incomplete_edges,
-        "background_cut_edges": background_cut_edges,
     }
 
 
@@ -2033,7 +1994,6 @@ def render_ad_crop_with_margin(
             "shortfall": margin_info["shortfall"],
             "completion_mm": completion_info["growth_mm"],
             "incomplete_edges": completion_info["incomplete_edges"],
-            "background_cut_edges": completion_info["background_cut_edges"],
         }
     finally:
         doc.close()
