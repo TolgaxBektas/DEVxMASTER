@@ -402,6 +402,7 @@ export function createIngestionRouter(
       list: permissionProcedure("ingestion.review.read")
         .input(z.object({
           data_source: z.enum(["xdata_nb_high_quality", "xdata_germany"]).optional(),
+          ids: z.array(z.number().int().positive()).min(1).max(200).optional(),
           area_ags: z.string().regex(/^\d{5}$/).optional(),
           detector: z.enum(["heuristic", "run50"]).optional(),
           limit: z.number().int().min(1).max(500).optional(),
@@ -426,6 +427,7 @@ export function createIngestionRouter(
           enabled: true,
           items: await reviewClient.listOpen({
             ...(input?.data_source ? { dataSource: input.data_source } : {}),
+            ...(input?.ids ? { ids: input.ids } : {}),
             ...(input?.area_ags ? { areaAgs: input.area_ags } : {}),
             ...(input?.detector ? { detector: input.detector } : {}),
             ...(input?.limit !== undefined ? { limit: input.limit } : {}),
@@ -437,6 +439,7 @@ export function createIngestionRouter(
         .input(z.object({
           data_source: z.enum(["xdata_nb_high_quality", "xdata_germany"]).optional(),
           detector: z.enum(["heuristic", "run50"]).optional(),
+          ids: z.array(z.number().int().positive()).min(1).max(200).optional(),
         }).optional())
         .query(async ({ ctx, input }) => {
           if (!reviewClient || !reviewTenantId) {
@@ -458,6 +461,7 @@ export function createIngestionRouter(
           const summary = await reviewClient.openSummary(
             input?.data_source,
             input?.detector,
+            input?.ids,
           );
           return { enabled: true, ...summary };
         }),

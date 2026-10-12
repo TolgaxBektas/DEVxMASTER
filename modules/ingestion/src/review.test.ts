@@ -76,6 +76,7 @@ describe("Ingestion-Prüfung", () => {
     const { caller, client } = setup();
     await caller.review.list({
       data_source: "xdata_germany",
+      ids: [5019, 5020, 5031],
       area_ags: "09162",
       detector: "run50",
       limit: 100,
@@ -83,6 +84,7 @@ describe("Ingestion-Prüfung", () => {
     });
     expect(client.listOpen).toHaveBeenCalledWith({
       dataSource: "xdata_germany",
+      ids: [5019, 5020, 5031],
       areaAgs: "09162",
       detector: "run50",
       limit: 100,
@@ -95,12 +97,17 @@ describe("Ingestion-Prüfung", () => {
     await expect(caller.review.summary({
       data_source: "xdata_germany",
       detector: "run50",
+      ids: [5019, 5020, 5031],
     })).resolves.toMatchObject({
       enabled: true,
       total: 1,
       areas: [],
     });
-    expect(client.openSummary).toHaveBeenCalledWith("xdata_germany", "run50");
+    expect(client.openSummary).toHaveBeenCalledWith(
+      "xdata_germany",
+      "run50",
+      [5019, 5020, 5031],
+    );
   });
 
   it("grenzt fremde Mandanten ab", async () => {
@@ -190,10 +197,11 @@ describe("Ingestion-Prüfung", () => {
         dataSource: "xdata_germany",
         areaAgs: "09162",
         detector: "run50",
+        ids: [5019, 5020, 5031],
         limit: 100,
         offset: 200,
       });
-      await client.openSummary("xdata_germany", "run50");
+      await client.openSummary("xdata_germany", "run50", [5019, 5020, 5031]);
 
       const listUrl = new URL(requests[0] ?? "");
       expect(listUrl.pathname).toBe("/api/v1/reviews/open");
@@ -201,6 +209,7 @@ describe("Ingestion-Prüfung", () => {
         ["data_source", "xdata_germany"],
         ["area_ags", "09162"],
         ["detector", "run50"],
+        ["ids", "5019,5020,5031"],
         ["limit", "100"],
         ["offset", "200"],
       ]);
@@ -208,6 +217,30 @@ describe("Ingestion-Prüfung", () => {
       expect(summaryUrl.pathname).toBe("/api/v1/reviews/open/summary");
       expect(summaryUrl.searchParams.get("data_source")).toBe("xdata_germany");
       expect(summaryUrl.searchParams.get("detector")).toBe("run50");
+      expect(summaryUrl.searchParams.get("ids")).toBe("5019,5020,5031");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("lässt leere IDs in Prüfungsanfragen weg", async () => {
+    const requests: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      requests.push(url);
+      return new Response(JSON.stringify(url.includes("/summary") ? { total: 0, areas: [] } : []), {
+        status: 200,
+      });
+    }));
+    try {
+      const client = createPifReviewClient({
+        baseUrl: "http://pif.test",
+        serviceToken: "test-token",
+      });
+      await client.listOpen({ ids: [] });
+      await client.openSummary(undefined, undefined, []);
+
+      expect(requests).toHaveLength(2);
+      expect(requests.every((url) => !new URL(url).searchParams.has("ids"))).toBe(true);
     } finally {
       vi.unstubAllGlobals();
     }

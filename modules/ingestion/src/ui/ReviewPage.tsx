@@ -87,6 +87,21 @@ type DecisionResult = { next_open_id: number | null };
 
 const REVIEW_PAGE_SIZE = 100;
 
+export function parseReviewSampleIds(search: string): number[] | null {
+  const value = new URLSearchParams(search).get("faelle");
+  if (!value) return null;
+
+  const values = value.split(",");
+  if (values.some((id) => !/^\d+$/.test(id))) return null;
+
+  const ids = [...new Set(values.map(Number))];
+  if (
+    ids.length > 200
+    || ids.some((id) => !Number.isSafeInteger(id) || id <= 0)
+  ) return null;
+  return ids.length ? ids : null;
+}
+
 const SOURCE_LABELS: Record<DataSource, string> = {
   xdata_nb_high_quality: "xDATA-nB High Quality",
   xdata_germany: "xDATA Germany",
@@ -157,19 +172,31 @@ export function updateReviewSelection(
   };
 }
 
-export function reviewListQueryInput(state: ReviewTabState, source: DataSource) {
+export function reviewListQueryInput(
+  state: ReviewTabState,
+  source: DataSource,
+  sampleIds?: number[],
+) {
   const { areaAgs, detector, page } = reviewTabStateFor(state, source);
   return {
-    ...(areaAgs ? { area_ags: areaAgs } : {}),
+    ...(!sampleIds?.length && areaAgs ? { area_ags: areaAgs } : {}),
     ...(detector ? { detector } : {}),
+    ...(sampleIds?.length ? { ids: sampleIds } : {}),
     limit: REVIEW_PAGE_SIZE,
     offset: page * REVIEW_PAGE_SIZE,
   };
 }
 
-export function reviewSummaryQueryInput(state: ReviewTabState, source: DataSource) {
+export function reviewSummaryQueryInput(
+  state: ReviewTabState,
+  source: DataSource,
+  sampleIds?: number[],
+) {
   const detector = reviewTabStateFor(state, source).detector;
-  return detector ? { detector } : {};
+  return {
+    ...(detector ? { detector } : {}),
+    ...(sampleIds?.length ? { ids: sampleIds } : {}),
+  };
 }
 
 const FIELD_LABELS: Record<string, string> = {
@@ -448,6 +475,9 @@ function DeferredChannels({ channels }: { channels: readonly DeferredChannel[] }
 }
 
 export function ReviewPage({ api }: ModulePageProps) {
+  const [sampleIds] = useState<number[] | null>(() =>
+    typeof window === "undefined" ? null : parseReviewSampleIds(window.location.search),
+  );
   const [activeSource, setActiveSource] = useState<DataSource>("xdata_germany");
   const [sourceState, setSourceState] = useState<ReviewTabState>({
     areaAgs: {},
@@ -462,7 +492,11 @@ export function ReviewPage({ api }: ModulePageProps) {
     "modules.ingestion.review.summary",
     {
       data_source: "xdata_nb_high_quality",
-      ...reviewSummaryQueryInput(sourceState, "xdata_nb_high_quality"),
+      ...reviewSummaryQueryInput(
+        sourceState,
+        "xdata_nb_high_quality",
+        sampleIds ?? undefined,
+      ),
     },
   );
   const germanySummary = useModuleQuery<ReviewSummary>(
@@ -470,11 +504,19 @@ export function ReviewPage({ api }: ModulePageProps) {
     "modules.ingestion.review.summary",
     {
       data_source: "xdata_germany",
-      ...reviewSummaryQueryInput(sourceState, "xdata_germany"),
+      ...reviewSummaryQueryInput(sourceState, "xdata_germany", sampleIds ?? undefined),
     },
   );
-  const highQualityListInput = reviewListQueryInput(sourceState, "xdata_nb_high_quality");
-  const germanyListInput = reviewListQueryInput(sourceState, "xdata_germany");
+  const highQualityListInput = reviewListQueryInput(
+    sourceState,
+    "xdata_nb_high_quality",
+    sampleIds ?? undefined,
+  );
+  const germanyListInput = reviewListQueryInput(
+    sourceState,
+    "xdata_germany",
+    sampleIds ?? undefined,
+  );
   const highQualityQueue = useModuleQuery<ReviewQueue>(
     api,
     "modules.ingestion.review.list",
@@ -491,7 +533,9 @@ export function ReviewPage({ api }: ModulePageProps) {
   const selectedArea = areaAgs
     ? summary.data?.areas.find((area) => area.area_ags === areaAgs)
     : undefined;
-  const total = areaAgs ? selectedArea?.count ?? 0 : summaryTotal;
+  const total = sampleIds !== null
+    ? summaryTotal
+    : areaAgs ? selectedArea?.count ?? 0 : summaryTotal;
   const selectedId = resolveSelectedReviewId(
     queue.data?.items ?? [],
     activeTab.selectedId,
@@ -645,43 +689,47 @@ export function ReviewPage({ api }: ModulePageProps) {
   const areaOptions = reviewAreaOptions(summary.data?.areas ?? [], summaryTotal);
   const reviewControls = (
     <div className="button-row">
-      <label htmlFor="review-area">Gebiet</label>
-      <select
-        className="ui-input"
-        id="review-area"
-        value={areaAgs}
-        onChange={(event) => {
-          lastNavigationAt.current = Date.now();
-          setSourceState((current) =>
-            updateReviewArea(current, activeSource, event.target.value),
-          );
-        }}
-      >
-        {areaOptions.map((option) => (
-          <option key={option.value} value={option.value} disabled={option.disabled}>
-            {option.label}
-          </option>
-        ))}
-      </select>
-      <label htmlFor="review-detector">Erkennung</label>
-      <select
-        className="ui-input"
-        id="review-detector"
-        value={detector}
-        onChange={(event) => {
-          lastNavigationAt.current = Date.now();
-          setSourceState((current) =>
-            updateReviewDetector(
-              current,
-              activeSource,
-              event.target.value as "" | "run50",
-            ),
-          );
-        }}
-      >
-        <option value="run50">Nur neue Anzeigenerkennung (Run50)</option>
-        <option value="">Alle Funde inkl. alter Erkennung</option>
-      </select>
+      {sampleIds === null ? (
+        <>
+          <label htmlFor="review-area">Gebiet</label>
+          <select
+            className="ui-input"
+            id="review-area"
+            value={areaAgs}
+            onChange={(event) => {
+              lastNavigationAt.current = Date.now();
+              setSourceState((current) =>
+                updateReviewArea(current, activeSource, event.target.value),
+              );
+            }}
+          >
+            {areaOptions.map((option) => (
+              <option key={option.value} value={option.value} disabled={option.disabled}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <label htmlFor="review-detector">Erkennung</label>
+          <select
+            className="ui-input"
+            id="review-detector"
+            value={detector}
+            onChange={(event) => {
+              lastNavigationAt.current = Date.now();
+              setSourceState((current) =>
+                updateReviewDetector(
+                  current,
+                  activeSource,
+                  event.target.value as "" | "run50",
+                ),
+              );
+            }}
+          >
+            <option value="run50">Nur neue Anzeigenerkennung (Run50)</option>
+            <option value="">Alle Funde inkl. alter Erkennung</option>
+          </select>
+        </>
+      ) : null}
       <Button
         disabled={page === 0}
         onClick={() => {
@@ -745,6 +793,11 @@ export function ReviewPage({ api }: ModulePageProps) {
       {pageHeader}
       {sourceTabs}
       {reviewControls}
+      {sampleIds !== null && (
+        <div className="form-message">
+          Stichprobe: {total} offene Fälle · <a href="/ingestion/review">Alle Fälle anzeigen</a>
+        </div>
+      )}
       <div className="review-case-nav">
         <Button variant="secondary" disabled={busy} onClick={previous}>← Vorheriger Fall</Button>
         <strong>Fall {position} von {total}</strong>

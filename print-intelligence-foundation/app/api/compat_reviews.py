@@ -351,6 +351,7 @@ def open_reviews(
     session=Depends(session_dependency),
     storage=Depends(storage_dependency),
     data_source: str | None = Query(None),
+    ids: str | None = Query(None, pattern=r"^\d+(,\d+){0,199}$"),
     area_ags: str | None = Query(None, pattern=r"^\d{5}$"),
     detector: Literal["heuristic", "run50"] | None = Query(None),
     limit: int | None = Query(None, ge=1, le=500),
@@ -358,6 +359,9 @@ def open_reviews(
 ):
     _validate_data_source(data_source)
     rows = session.execute(_open_query(data_source)).all()
+    if ids is not None:
+        selected_ids = {int(item_id) for item_id in ids.split(",")}
+        rows = [row for row in rows if row[0].id in selected_ids]
     if area_ags is not None:
         rows = [
             row
@@ -377,10 +381,14 @@ def open_reviews(
 def open_reviews_summary(
     session=Depends(session_dependency),
     data_source: str | None = Query(None),
+    ids: str | None = Query(None, pattern=r"^\d+(,\d+){0,199}$"),
     detector: Literal["heuristic", "run50"] | None = Query(None),
 ):
     _validate_data_source(data_source)
     rows = session.execute(_open_query(data_source)).all()
+    if ids is not None:
+        selected_ids = {int(item_id) for item_id in ids.split(",")}
+        rows = [row for row in rows if row[0].id in selected_ids]
     if detector is not None:
         rows = [
             row for row in rows

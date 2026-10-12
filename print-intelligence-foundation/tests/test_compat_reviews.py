@@ -210,6 +210,44 @@ def test_open_review_area_filter_pagination_and_summary(tmp_path, monkeypatch):
         app.dependency_overrides.clear()
 
 
+def test_open_review_ids_filter_list_and_summary(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    try:
+        for page, name in enumerate(("Erster Fall", "Zweiter Fall", "Dritter Fall"), 1):
+            imported = _import(client, _metadata(name, page))
+            assert imported.status_code == 200
+
+        headers = {"x-service-token": "review-token"}
+        all_items = client.get("/api/v1/reviews/open", headers=headers).json()
+        selected_ids = [all_items[0]["id"], all_items[2]["id"]]
+        query_ids = ",".join(str(item_id) for item_id in selected_ids)
+
+        selected = client.get(
+            f"/api/v1/reviews/open?ids={query_ids}",
+            headers=headers,
+        )
+        assert selected.status_code == 200
+        assert [item["id"] for item in selected.json()] == selected_ids
+
+        summary = client.get(
+            f"/api/v1/reviews/open/summary?ids={query_ids}",
+            headers=headers,
+        )
+        assert summary.status_code == 200
+        assert summary.json()["total"] == 2
+
+        assert client.get(
+            "/api/v1/reviews/open?ids=1,invalid",
+            headers=headers,
+        ).status_code == 422
+        assert client.get(
+            "/api/v1/reviews/open/summary?ids=1,invalid",
+            headers=headers,
+        ).status_code == 422
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_detector_filter_defaults_missing_provenance_to_heuristic(tmp_path, monkeypatch):
     client, factory = _client(tmp_path, monkeypatch)
     try:
