@@ -753,10 +753,59 @@ def test_customer_exclusions_and_commercial_charity_exceptions(
         ("Fachkraft", "Gesucht: (w/m)", "veto:stellenanzeige"),
         ("Fachkraft", "Gesucht: w/m/d", "veto:stellenanzeige"),
         ("Fachkraft", "Gesucht: m/w/divers", "veto:stellenanzeige"),
+        ("Chiemsee-Alpenland Tourismus GmbH&Co.KG", "", "veto:behoerde"),
+        ("Stadtverwaltung Friedberg", "", "veto:behoerde"),
+        ("Bürgerfest Zapfendorf", "", "veto:behoerde"),
+        ("Sommerkonzert", "Veranstalter: Gemeinde Hohenlinden", "veto:behoerde"),
+        (
+            "Sommerkonzert GmbH",
+            "Veranstalter: Gemeinde Hohenlinden",
+            "veto:behoerde",
+        ),
+        ("Bustouristik Müller GmbH", "", None),
+        ("Reisebüro Sonnenschein", "", None),
+        ("Stadtwerke Augsburg Energie GmbH", "", None),
+        ("Bäckerei Plank", "", None),
     ],
 )
 def test_customer_exclusion_run50_patterns(company, text, expected):
     assert customer_exclusion(company, text) == expected
+
+
+def test_customer_exclusion_checks_detector_company_name():
+    assert (
+        customer_exclusion(
+            "LEW-Gruppe",
+            "",
+            detector_company="Lechmuseum Bayern",
+        )
+        == "veto:behoerde"
+    )
+
+
+@pytest.mark.parametrize(
+    ("company", "text", "detector_company"),
+    [
+        ("Gustav-Weißkopf-Apotheke", "", "Hand in Hand e.V."),
+        ("KUK Dettelbach", "", "Dettelbach Stadt"),
+        (
+            "TROGLAUER",
+            "",
+            "150 Jahre FREIWILLIGE FEUERWEHR STRULLENDORF",
+        ),
+        (
+            "Vitakt-Hausnotruf GmbH Rheine",
+            "",
+            "Malteser Hilfsdienst e.V.",
+        ),
+    ],
+)
+def test_customer_exclusion_ignores_noncompany_patterns_in_detector_name(
+    company,
+    text,
+    detector_company,
+):
+    assert customer_exclusion(company, text, detector_company) is None
 
 
 def test_job_ad_veto_is_reported_as_exclusion_rejection(monkeypatch):
@@ -776,6 +825,20 @@ def test_job_ad_veto_is_reported_as_exclusion_rejection(monkeypatch):
 
     rejection = next(item for item in result.rejected if item.stage == "exclusion")
     assert rejection.reason == "veto:stellenanzeige"
+
+
+def test_detector_company_name_is_passed_to_customer_exclusion():
+    rect = (40, 60, 560, 600)
+    pdf = _pdf([{"ads": [rect]}])
+
+    result, _ = _run_one_page(
+        pdf,
+        _detector_ad(rect, company="Lechmuseum Bayern"),
+        [_verdict("LEW-Gruppe")],
+    )
+
+    rejection = next(item for item in result.rejected if item.stage == "exclusion")
+    assert rejection.reason == "veto:behoerde"
 
 
 def test_document_deduplicates_same_advertiser_by_largest_crop():

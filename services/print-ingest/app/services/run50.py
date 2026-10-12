@@ -60,6 +60,20 @@ _RUN50_PUBLIC_TEXT_PATTERN = re.compile(
 _RUN50_PUBLIC_INSTITUTION_PATTERN = re.compile(
     r"\bvolkshochschul\w*|(?-i:\b(?:vhs|VHS)\b)", re.I
 )
+_RUN50_NONCOMPANY_NAME_PATTERN = re.compile(
+    r"\w*tourismus\w*|\btourist[-\s]?info\w*|\btouristinformation\b|"
+    r"\bkurverwaltung\b|\bkurdirektion\b|\bverkehrsamt\b|\bverkehrsverein\b|"
+    r"\bstadtverwaltung\b|\bgemeindeverwaltung\b|\w*museum\w*|"
+    r"\b(?:bürger|stadt|dorf|gemeinde|markt|volks|heimat)fest\w*|"
+    r"\bweihnachtsmarkt\w*|\bchristkindl\w*markt\w*|\badventsmarkt\w*|"
+    r"\bkirchweih\b|\bkerwa\b|\bferienprogramm\w*",
+    re.I,
+)
+_RUN50_MUNICIPAL_EVENT_TEXT_PATTERN = re.compile(
+    r"\bveranstalter(?:in)?\s*:?\s*(?:ist\s+)?(?:die\s+|der\s+)?"
+    r"(?:stadt|gemeinde|marktgemeinde|markt|verwaltungsgemeinschaft)\b",
+    re.I,
+)
 _RUN50_PUBLISHER_COMPANY_PATTERN = re.compile(
     r"\b(?:verlag\w*|mediengruppe|journal|amtsblatt|mitteilungsblatt|gemeindeblatt|anzeiger)\b",
     re.I,
@@ -534,11 +548,24 @@ def _has_contact(text):
     return bool(PHONE_RE.search(text) or EMAIL_RE.search(text) or DOMAIN_RE.search(text))
 
 
-def customer_exclusion(company: str, text: str) -> str | None:
+def customer_exclusion(
+    company: str,
+    text: str,
+    detector_company: str = "",
+) -> str | None:
+    if (
+        _RUN50_NONCOMPANY_NAME_PATTERN.search(company)
+        or _RUN50_NONCOMPANY_NAME_PATTERN.search(detector_company)
+        or _RUN50_MUNICIPAL_EVENT_TEXT_PATTERN.search(text)
+    ):
+        return "veto:behoerde"
+
     commercially_identified = bool(
         _LEGAL_FORM_PATTERN.search(company) or _industry_match(company)
     )
-    if _ASSOCIATION_PATTERN.search(company) or _RUN50_ASSOCIATION_PATTERN.search(company):
+    if _ASSOCIATION_PATTERN.search(company) or _RUN50_ASSOCIATION_PATTERN.search(
+        company
+    ):
         return "veto:verein"
     if (
         _RUN50_WELFARE_PATTERN.search(company)
@@ -1075,7 +1102,11 @@ def detect_page(
                 continue
 
             company = str(final_verdict.get("advertiser") or "")
-            exclusion = customer_exclusion(company, final_text)
+            exclusion = customer_exclusion(
+                company,
+                final_text,
+                detector_company=candidate["company"],
+            )
             provenance = _ad_metadata(
                 candidate,
                 call_usage,
