@@ -72,9 +72,6 @@ MARGIN_TARGET_PT = 5 / 25.4 * 72
 MARGIN_MIN_PT = 2.5 / 25.4 * 72
 COMPLETION_MAX_PT = 10 / 25.4 * 72
 COMPLETION_GUTTER_PT = 2 / 25.4 * 72
-COMPLETION_BACKGROUND_MAX_PT = 60 / 25.4 * 72
-COMPLETION_BACKGROUND_FRACTION = 0.6
-COMPLETION_BACKGROUND_TRANSITION_PT = 1 / 25.4 * 72
 MAX_OCR_REGIONS_PER_PAGE = 12
 _CLUSTER_MAX_GAP = 8
 _IMAGE_XOBJECT_LIMIT = 400
@@ -1519,9 +1516,6 @@ def complete_ad_rect(
     gutter_pt=COMPLETION_GUTTER_PT,
     ink_delta=24,
     safety_pt=0.5,
-    background_max_pt=COMPLETION_BACKGROUND_MAX_PT,
-    background_fraction=COMPLETION_BACKGROUND_FRACTION,
-    background_transition_pt=COMPLETION_BACKGROUND_TRANSITION_PT,
 ) -> dict:
     original = tuple(float(value) for value in ad_rect)
     sides = ("left", "top", "right", "bottom")
@@ -1548,9 +1542,6 @@ def complete_ad_rect(
     gutter_pt = max(0.0, float(gutter_pt))
     ink_delta = max(0.0, float(ink_delta))
     safety_pt = max(0.0, float(safety_pt))
-    background_max_pt = max(0.0, float(background_max_pt))
-    background_fraction = max(0.0, min(1.0, float(background_fraction)))
-    background_transition_pt = max(0.0, float(background_transition_pt))
     paper = _paper_gray(page_image)
     rect = list(original)
     indexes = {"left": 0, "top": 1, "right": 2, "bottom": 3}
@@ -1583,50 +1574,11 @@ def complete_ad_rect(
         if line_length <= 0:
             return current_edge, False
 
-        ink_threshold = max(2, 0.002 * line_length)
-
-        def ink_pixels_for_line(scan_line):
-            strip = page_image.crop(
-                (scan_line, cross_start, scan_line + 1, cross_end)
-                if axis_index == 0
-                else (cross_start, scan_line, cross_end, scan_line + 1)
-            )
-            histogram = strip.histogram()
-            strip.close()
-            return sum(histogram[:low_cut]) + sum(histogram[high_cut:])
-
         edge_px = (current_edge - origin) * scale
         step = -1 if negative else 1
         line = math.floor(edge_px) - 1 if negative else math.ceil(edge_px)
-        background_strip_px = (1 / 25.4 * 72) * scale
-        inside_start = (
-            math.floor(edge_px)
-            if negative
-            else math.floor(edge_px - background_strip_px)
-        )
-        inside_end = (
-            math.ceil(edge_px + background_strip_px)
-            if negative
-            else math.ceil(edge_px)
-        )
-        inside_start = max(0, min(axis_size, inside_start))
-        inside_end = max(inside_start, min(axis_size, inside_end))
-        edge_ink_fractions = [
-            ink_pixels_for_line(sample_line) / line_length
-            for sample_line in range(inside_start, inside_end)
-        ]
-        edge_is_background = bool(edge_ink_fractions) and (
-            sum(edge_ink_fractions) / len(edge_ink_fractions)
-            >= background_fraction
-        )
-        normal_allowed_edge = original[edge_index] + (
-            -max_growth_pt if negative else max_growth_pt
-        )
-        growth_limit_pt = (
-            background_max_pt if edge_is_background else max_growth_pt
-        )
         allowed_edge = original[edge_index] + (
-            -growth_limit_pt if negative else growth_limit_pt
+            -max_growth_pt if negative else max_growth_pt
         )
         obstacle_edges = []
         for obstacle in other_ad_rects or ():
@@ -1660,9 +1612,9 @@ def complete_ad_rect(
             else min(limit_options, key=lambda item: (item[0], -item[2]))
         )
 
+        ink_threshold = max(2, 0.002 * line_length)
         clean_run = 0.0
         clean_before_ink = 0.0
-        transition_run = 0.0
         frame_mode = False
         last_ink_edge = None
         saw_ink = False
@@ -1677,28 +1629,15 @@ def complete_ad_rect(
             )
             if not within_limit:
                 break
-            ink_pixels = ink_pixels_for_line(line)
-            beyond_normal_limit = (
-                line_edge < normal_allowed_edge - 1e-9
-                if negative
-                else line_edge > normal_allowed_edge + 1e-9
+            strip = page_image.crop(
+                (line, cross_start, line + 1, cross_end)
+                if axis_index == 0
+                else (cross_start, line, cross_end, line + 1)
             )
-            background_extension_line = edge_is_background and beyond_normal_limit
-            background_line = (
-                ink_pixels >= background_fraction * line_length
-            )
-            if background_extension_line:
-                if background_line:
-                    transition_run = 0.0
-                elif ink_pixels > ink_threshold:
-                    transition_run += 1 / scale
-                    if transition_run > background_transition_pt + 1e-9:
-                        return original[indexes[side]], True
-                else:
-                    transition_run = 0.0
-            if ink_pixels > ink_threshold or (
-                background_extension_line and background_line
-            ):
+            histogram = strip.histogram()
+            strip.close()
+            ink_pixels = sum(histogram[:low_cut]) + sum(histogram[high_cut:])
+            if ink_pixels > ink_threshold:
                 if last_ink_edge is None and clean_before_ink + 1e-9 >= gutter_pt:
                     if ink_pixels < 0.8 * line_length:
                         return current_edge, False
