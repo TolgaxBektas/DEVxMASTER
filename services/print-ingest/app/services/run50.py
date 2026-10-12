@@ -553,13 +553,9 @@ def customer_exclusion(
     text: str,
     detector_company: str = "",
 ) -> str | None:
-    names = (company, detector_company)
-
-    def matches_name(pattern):
-        return any(pattern.search(name) for name in names if name)
-
     if (
-        matches_name(_RUN50_NONCOMPANY_NAME_PATTERN)
+        _RUN50_NONCOMPANY_NAME_PATTERN.search(company)
+        or _RUN50_NONCOMPANY_NAME_PATTERN.search(detector_company)
         or _RUN50_MUNICIPAL_EVENT_TEXT_PATTERN.search(text)
     ):
         return "veto:behoerde"
@@ -567,31 +563,31 @@ def customer_exclusion(
     commercially_identified = bool(
         _LEGAL_FORM_PATTERN.search(company) or _industry_match(company)
     )
-    if matches_name(_ASSOCIATION_PATTERN) or matches_name(
-        _RUN50_ASSOCIATION_PATTERN
+    if _ASSOCIATION_PATTERN.search(company) or _RUN50_ASSOCIATION_PATTERN.search(
+        company
     ):
         return "veto:verein"
     if (
-        matches_name(_RUN50_WELFARE_PATTERN)
+        _RUN50_WELFARE_PATTERN.search(company)
         and not _LEGAL_FORM_PATTERN.search(company)
         and not re.search(r"\bggmbh\b", company, re.I)
     ):
         return "veto:verein"
     if (
-        matches_name(_PUBLIC_SENDER_PATTERN)
-        or matches_name(PUBLIC_ORIGIN_SIGNALS)
-        or matches_name(_RUN50_PUBLIC_COMPANY_PATTERN)
-        or matches_name(_RUN50_PUBLIC_INSTITUTION_PATTERN)
+        _PUBLIC_SENDER_PATTERN.search(company)
+        or PUBLIC_ORIGIN_SIGNALS.search(company)
+        or _RUN50_PUBLIC_COMPANY_PATTERN.search(company)
+        or _RUN50_PUBLIC_INSTITUTION_PATTERN.search(company)
         or _RUN50_PUBLIC_TEXT_PATTERN.search(text)
         or _has_strong_public_origin(text)
     ) and not commercially_identified:
         return "veto:behoerde"
-    if matches_name(_CHURCH_SENDER_PATTERN) and not commercially_identified:
+    if _CHURCH_SENDER_PATTERN.search(company) and not commercially_identified:
         return "veto:kirche"
     if (
         _PUBLISHER_PROMOTION_PATTERN.search(text)
-        or matches_name(_RUN50_PUBLISHER_COMPANY_PATTERN)
-        or matches_name(_RUN50_PUBLISHER_ANY_PATTERN)
+        or _RUN50_PUBLISHER_COMPANY_PATTERN.search(company)
+        or _RUN50_PUBLISHER_ANY_PATTERN.search(company)
         or _RUN50_PUBLISHER_ANY_PATTERN.search(text)
     ):
         return "veto:verlag"

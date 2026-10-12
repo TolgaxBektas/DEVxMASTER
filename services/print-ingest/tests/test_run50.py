@@ -783,6 +783,31 @@ def test_customer_exclusion_checks_detector_company_name():
     )
 
 
+@pytest.mark.parametrize(
+    ("company", "text", "detector_company"),
+    [
+        ("Gustav-Weißkopf-Apotheke", "", "Hand in Hand e.V."),
+        ("KUK Dettelbach", "", "Dettelbach Stadt"),
+        (
+            "TROGLAUER",
+            "",
+            "150 Jahre FREIWILLIGE FEUERWEHR STRULLENDORF",
+        ),
+        (
+            "Vitakt-Hausnotruf GmbH Rheine",
+            "",
+            "Malteser Hilfsdienst e.V.",
+        ),
+    ],
+)
+def test_customer_exclusion_ignores_noncompany_patterns_in_detector_name(
+    company,
+    text,
+    detector_company,
+):
+    assert customer_exclusion(company, text, detector_company) is None
+
+
 def test_job_ad_veto_is_reported_as_exclusion_rejection(monkeypatch):
     rect = (40, 60, 560, 600)
     pdf = _pdf([{"ads": [rect]}])
