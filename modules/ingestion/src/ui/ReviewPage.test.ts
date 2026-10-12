@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   AdvertiserProofDetails,
   ignoresReviewKeyboardShortcut,
+  parseReviewSampleIds,
   reviewAreaOptions,
   reviewListQueryInput,
   reviewSummaryQueryInput,
@@ -21,6 +22,34 @@ import {
   reviewListCaption,
   type ReviewTabState,
 } from "./ReviewPage.js";
+
+describe("Prüfseiten-Stichprobe", () => {
+  it("liest IDs in Reihenfolge, dedupliziert sie und verwirft ungültige Werte", () => {
+    expect(parseReviewSampleIds("?faelle=3,1,3")).toEqual([3, 1]);
+    expect(parseReviewSampleIds("?faelle=")).toBeNull();
+    expect(parseReviewSampleIds("?faelle=a,2")).toBeNull();
+    expect(parseReviewSampleIds("")).toBeNull();
+    expect(parseReviewSampleIds("?anderes=2")).toBeNull();
+  });
+
+  it("begrenzt die Stichprobe auf 200 IDs und ergänzt Liste und Zusammenfassung", () => {
+    const state: ReviewTabState = { areaAgs: {}, detector: {}, page: {}, selectedIds: {} };
+    const sampleIds = [5019, 5020, 5031];
+    const tooManyIds = Array.from({ length: 201 }, (_, index) => index + 1).join(",");
+
+    expect(parseReviewSampleIds(`?faelle=${tooManyIds}`)).toBeNull();
+    expect(reviewListQueryInput(state, "xdata_germany", sampleIds)).toEqual({
+      detector: "run50",
+      ids: sampleIds,
+      limit: 100,
+      offset: 0,
+    });
+    expect(reviewSummaryQueryInput(state, "xdata_germany", sampleIds)).toEqual({
+      detector: "run50",
+      ids: sampleIds,
+    });
+  });
+});
 
 function renderedText(node: ReactNode): string {
   if (typeof node === "string" || typeof node === "number") return String(node);
