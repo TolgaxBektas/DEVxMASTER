@@ -1053,6 +1053,7 @@ def test_complete_ad_rect_does_not_cross_into_a_neighbor_ad():
 
     assert result["rect"][2] == 200
     assert "right" in result["incomplete_edges"]
+    assert result["background_cut_edges"] == []
     assert result["rect"][2] <= 200
 
 
@@ -1069,9 +1070,10 @@ def test_complete_ad_rect_reports_ink_beyond_the_growth_limit():
 
     assert result["rect"][2] == 200
     assert "right" in result["incomplete_edges"]
+    assert result["background_cut_edges"] == []
 
 
-def test_complete_ad_rect_continues_through_background_to_a_gutter():
+def test_complete_ad_rect_flags_a_full_bleed_background_cut_at_ten_mm():
     page_image = Image.new("L", (400, 300), 255)
     ad_rect = (100, 150, 300, 220)
     ImageDraw.Draw(page_image).rectangle((100, 65, 299, 170), fill=225)
@@ -1083,12 +1085,18 @@ def test_complete_ad_rect_continues_through_background_to_a_gutter():
         page_image,
     )
 
-    assert result["rect"][1] == 65
-    assert result["growth_mm"]["top"] >= 29
-    assert result["incomplete_edges"] == []
+    assert result["rect"] == ad_rect
+    assert result["growth_mm"] == {
+        "left": 0.0,
+        "top": 0.0,
+        "right": 0.0,
+        "bottom": 0.0,
+    }
+    assert result["incomplete_edges"] == ["top"]
+    assert result["background_cut_edges"] == ["top"]
 
 
-def test_complete_ad_rect_does_not_extend_background_for_sparse_edge_ink():
+def test_complete_ad_rect_does_not_flag_sparse_ink_as_background_cut():
     page_image = Image.new("L", (400, 300), 255)
     ad_rect = (100, 150, 300, 220)
     draw = ImageDraw.Draw(page_image)
@@ -1103,14 +1111,15 @@ def test_complete_ad_rect_does_not_extend_background_for_sparse_edge_ink():
     )
 
     assert result["rect"] == ad_rect
-    assert "top" in result["incomplete_edges"]
+    assert result["incomplete_edges"] == ["top"]
+    assert result["background_cut_edges"] == []
 
 
-def test_complete_ad_rect_background_extension_stops_before_neighbor():
+def test_complete_ad_rect_does_not_flag_a_neighbor_limited_background_cut():
     page_image = Image.new("L", (400, 300), 255)
     ad_rect = (100, 150, 300, 220)
-    neighbor = (100, 90, 300, 110)
-    ImageDraw.Draw(page_image).rectangle((100, 65, 299, 170), fill=225)
+    neighbor = (100, 135, 300, 145)
+    ImageDraw.Draw(page_image).rectangle((100, 120, 299, 170), fill=225)
 
     result = complete_ad_rect(
         ad_rect,
@@ -1119,18 +1128,15 @@ def test_complete_ad_rect_background_extension_stops_before_neighbor():
         page_image,
     )
 
-    assert result["rect"][1] >= neighbor[3] + 0.5
-    assert result["rect"][1] == ad_rect[1]
-    assert "top" in result["incomplete_edges"]
+    assert result["rect"] == ad_rect
+    assert result["incomplete_edges"] == ["top"]
+    assert result["background_cut_edges"] == []
 
 
-def test_complete_ad_rect_reports_long_ink_transition_after_background():
+def test_complete_ad_rect_completes_a_tinted_background_before_a_gutter():
     page_image = Image.new("L", (400, 300), 255)
     ad_rect = (100, 150, 300, 220)
-    draw = ImageDraw.Draw(page_image)
-    draw.rectangle((100, 65, 299, 170), fill=225)
-    for y in range(50, 65):
-        draw.line((110, y, 113, y), fill=0)
+    ImageDraw.Draw(page_image).rectangle((100, 130, 299, 170), fill=225)
 
     result = complete_ad_rect(
         ad_rect,
@@ -1139,8 +1145,10 @@ def test_complete_ad_rect_reports_long_ink_transition_after_background():
         page_image,
     )
 
-    assert result["rect"] == ad_rect
-    assert "top" in result["incomplete_edges"]
+    assert result["rect"][1] == 130
+    assert 6 < result["growth_mm"]["top"] < 8
+    assert result["incomplete_edges"] == []
+    assert result["background_cut_edges"] == []
 
 
 def test_complete_ad_rect_leaves_clean_edges_unchanged():
@@ -1213,6 +1221,7 @@ def test_complete_ad_rect_ignores_ordinary_ink_after_a_clean_gutter():
 
     assert result["rect"] == ad_rect
     assert result["incomplete_edges"] == []
+    assert result["background_cut_edges"] == []
 
 
 def test_complete_ad_rect_does_not_include_a_partial_neighbor_frame():
@@ -1401,6 +1410,7 @@ def test_render_ad_crop_with_margin_includes_safe_padding_without_neighbor_pixel
         "shortfall",
         "completion_mm",
         "incomplete_edges",
+        "background_cut_edges",
     }
     assert info["completion_mm"] == {
         "left": 0.0,
