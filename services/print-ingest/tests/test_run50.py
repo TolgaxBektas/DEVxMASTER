@@ -234,7 +234,7 @@ def test_detect_document_rejects_foreign_language_without_client_calls():
     english = " ".join(SW["en"].split() * 20)
     pages = [
         {"page_number": 2, "text": english},
-        {"page_number": 1, "text": ""},
+        {"page_number": 1, "text": english},
     ]
     language = document_language(pages)
     client = FakeClient()
@@ -245,14 +245,70 @@ def test_detect_document_rejects_foreign_language_without_client_calls():
     assert client.calls == []
     assert client.skeptic_calls == []
     assert all(result.accepted == [] and result.usage == [] for result in results)
-    assert len(results[0].rejected) == 1
-    rejection = results[0].rejected[0]
-    assert rejection.region is None
-    assert rejection.company == ""
-    assert rejection.stage == "language"
-    assert rejection.reason == "fremdsprachig"
-    assert rejection.run50 == {"language": language}
+    assert all(len(result.rejected) == 1 for result in results)
+    for result in results:
+        rejection = result.rejected[0]
+        page_language = document_language(
+            [{"text": english, "page_number": result.page_number}]
+        )
+        assert rejection.region is None
+        assert rejection.company == ""
+        assert rejection.stage == "language"
+        assert rejection.reason == "fremdsprachig"
+        assert rejection.run50 == {
+            "language": page_language,
+            "document_language": language,
+        }
+
+
+def test_detect_document_skips_only_foreign_pages_in_mixed_foreign_document():
+    english = " ".join(SW["en"].split() * 25)
+    german = " ".join(SW["de"].split() * 6)
+    pages = [
+        {"page_number": 1, "text": english},
+        {"page_number": 2, "text": german},
+        {"page_number": 3, "text": english},
+        {"page_number": 4, "text": "Kurzseite " * 10},
+    ]
+    document_language_result = document_language(pages)
+    assert document_language_result["verdict"] == "fremdsprachig"
+    assert document_language([pages[1]])["verdict"] == "deutsch"
+    assert document_language([pages[3]])["verdict"] == "zu_wenig_text"
+
+    rect = (40, 60, 560, 600)
+    pdf = _pdf([{"ads": [rect]} for _ in pages])
+    client = FakeClient(
+        [
+            {"advertisements": [_detector_ad(rect, company="Deutsch GmbH")]},
+            {"advertisements": [_detector_ad(rect, company="Kurz GmbH")]},
+        ],
+        [_verdict("Deutsch GmbH"), _verdict("Kurz GmbH")],
+    )
+
+    results = detect_document(pdf, pages, client, concurrency=1)
+
+    assert [result.page_number for result in results] == [1, 2, 3, 4]
+    assert [call[2] for call in client.calls] == [2000, 1600, 2000, 1600]
+    assert len(client.skeptic_calls) == 2
+    assert len(results[1].accepted) == 1
+    assert len(results[3].accepted) == 1
     assert results[1].rejected == []
+    assert results[3].rejected == []
+    for result in (results[0], results[2]):
+        page = next(page for page in pages if page["page_number"] == result.page_number)
+        page_language = document_language([page])
+        assert result.accepted == []
+        assert result.usage == []
+        assert len(result.rejected) == 1
+        rejection = result.rejected[0]
+        assert rejection.stage == "language"
+        assert rejection.reason == "fremdsprachig"
+        assert rejection.region is None
+        assert rejection.company == ""
+        assert rejection.run50 == {
+            "language": page_language,
+            "document_language": document_language_result,
+        }
 
 
 @pytest.mark.parametrize("reason", sorted(run50.SKEPTIC_BLOCKING_REASONS))
@@ -427,6 +483,50 @@ def test_skeptic_high_confidence_keep_is_accepted_with_provenance_and_usage():
     assert accepted.run50["usage"][-1] == skeptic_raw["usage"]
     assert result.usage[-1] == skeptic_raw["usage"]
     assert len(client.skeptic_calls) == 1
+
+
+def test_skeptic_keep_with_blocking_reason_is_rejected_as_uncertain():
+    rect = (40, 60, 560, 600)
+    pdf = _pdf([{"ads": [rect]}])
+    skeptic = {"decision": "keep", "reason": "job_ad", "confidence": 0.95}
+
+    result, _ = _run_one_page(
+        pdf,
+        _detector_ad(rect),
+        [_verdict("Prüf GmbH")],
+        skeptic_results=[skeptic],
+    )
+
+    rejection = next(item for item in result.rejected if item.stage == "skeptic")
+    assert result.accepted == []
+    assert rejection.reason == "gegenpruefer_unsicher"
+
+
+@pytest.mark.parametrize(
+    ("include_reason", "reason"),
+    [(True, None), (True, ""), (False, None)],
+)
+def test_skeptic_keep_with_empty_or_missing_reason_is_accepted(include_reason, reason):
+    rect = (40, 60, 560, 600)
+    pdf = _pdf([{"ads": [rect]}])
+    skeptic = {
+        "decision": "keep",
+        "advertiser": "Prüf GmbH",
+        "doubt": "",
+        "confidence": 0.95,
+    }
+    if include_reason:
+        skeptic["reason"] = reason
+
+    result, _ = _run_one_page(
+        pdf,
+        _detector_ad(rect),
+        [_verdict("Prüf GmbH")],
+        skeptic_results=[skeptic],
+    )
+
+    assert len(result.accepted) == 1
+    assert "positiv:gegenpruefer" in result.accepted[0].region["evidence"]
 
 
 def test_unparseable_detector_response_creates_one_page_rejection():
