@@ -1223,6 +1223,8 @@ def detect_page(
                     skeptic_evidence = "gegenpruefer:zuschnitt_zweifel"
                 else:
                     skeptic_rejection = "gegenpruefer_unsicher"
+            elif reason not in (None, "", "none"):
+                skeptic_rejection = "gegenpruefer_unsicher"
             elif confidence < SKEPTIC_MIN_KEEP_CONFIDENCE:
                 skeptic_rejection = "gegenpruefer_unsicher"
             else:
@@ -1282,31 +1284,34 @@ def detect_document(
     language = document_language(pages)
     ordered_pages = sorted(pages, key=lambda page: page["page_number"])
     if language["verdict"] == "fremdsprachig":
-        results = [
-            Run50PageResult(
-                page_number=page["page_number"],
-                accepted=[],
-                rejected=[],
-                usage=[],
-            )
-            for page in ordered_pages
-        ]
-        if results:
-            results[0].rejected.append(
-                Run50Rejection(
-                    page_number=results[0].page_number,
-                    region=None,
-                    company="",
-                    stage="language",
-                    reason="fremdsprachig",
-                    run50={"language": language},
+        for page in ordered_pages:
+            page_language = document_language([page])
+            if page_language["verdict"] == "fremdsprachig":
+                number = page["page_number"]
+                page_results[number] = Run50PageResult(
+                    page_number=number,
+                    accepted=[],
+                    rejected=[
+                        Run50Rejection(
+                            page_number=number,
+                            region=None,
+                            company="",
+                            stage="language",
+                            reason="fremdsprachig",
+                            run50={
+                                "language": page_language,
+                                "document_language": language,
+                            },
+                        )
+                    ],
+                    usage=[],
                 )
-            )
-        return results
 
     pages_to_detect = []
     for page in ordered_pages:
         number = page["page_number"]
+        if number in page_results:
+            continue
         if is_order_form_page(page.get("text", "")):
             page_results[number] = Run50PageResult(number, [], [], [])
         else:

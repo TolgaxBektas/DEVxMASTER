@@ -20,6 +20,27 @@ def test_english_sample_is_classified_as_foreign():
     assert result["foreign_language"] == "en"
 
 
+def test_english_dominated_text_with_german_stopwords_is_foreign():
+    text = (
+        " ".join(SW["en"].split() * 20)
+        + " "
+        + " ".join(SW["de"].split()[:12])
+    )
+
+    result = document_language([{"text": text}])
+
+    assert result["verdict"] == "fremdsprachig"
+
+
+def test_german_text_with_some_english_words_is_classified_as_german():
+    text = " ".join(SW["de"].split() * 10 + SW["en"].split() * 5)
+
+    result = document_language([{"text": text}])
+
+    assert result["de_share"] > result["foreign_share"]
+    assert result["verdict"] == "deutsch"
+
+
 def test_cyrillic_sample_is_classified_as_foreign():
     result = document_language(
         [{"text": "ДОБРО ПОЖАЛОВАТЬ НА РАБОТУ " * 70}]

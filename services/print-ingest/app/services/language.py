@@ -4,6 +4,7 @@ MIN_WORDS = 200
 MIN_GERMAN_SHARE = 0.04
 MIN_FOREIGN_SHARE = 0.04
 MIN_NONLATIN_SHARE = 0.3
+FOREIGN_DOMINANCE = 2
 
 SW = {
     "de": "der die das und ist nicht mit sich auf für von den des dem ein eine einer im zu bei auch wir sie es aus nach oder wird werden sind am an als bis über vom zum zur noch wie nur durch",
@@ -44,7 +45,10 @@ def document_language(pages: list[dict]) -> dict:
 
     if word_count < MIN_WORDS:
         verdict = "zu_wenig_text"
-    elif shares["de"] >= MIN_GERMAN_SHARE:
+    elif shares["de"] >= MIN_GERMAN_SHARE and not (
+        foreign_share >= MIN_FOREIGN_SHARE
+        and foreign_share > FOREIGN_DOMINANCE * shares["de"]
+    ):
         verdict = "deutsch"
     elif (
         nonlatin_share >= MIN_NONLATIN_SHARE
