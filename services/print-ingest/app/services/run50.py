@@ -16,6 +16,7 @@ import httpx
 import pytesseract
 from PIL import Image
 
+from app.services.language import document_language
 from app.services.processor import (
     PUBLIC_ORIGIN_SIGNALS,
     _ASSOCIATION_PATTERN,
@@ -107,15 +108,30 @@ _RUN50_JOB_TERM_PATTERNS = (
 PROMPTS_DIR = Path(__file__).resolve().parents[1] / "prompts"
 DETECTOR_PROMPT_FILE = PROMPTS_DIR / "run50_detector_prompt.md"
 CROP_CHECK_PROMPT_FILE = PROMPTS_DIR / "run50_crop_check_prompt.md"
+SKEPTIC_PROMPT_FILE = PROMPTS_DIR / "run50_skeptic_prompt.md"
 DETECTOR_PROMPT_TEXT = DETECTOR_PROMPT_FILE.read_text(encoding="utf-8")
 DETECTOR_PROMPT = re.search(
     r"```(?:text)?\n(.*?)\n```", DETECTOR_PROMPT_TEXT, re.S
 ).group(1)
 CROP_CHECK_PROMPT = CROP_CHECK_PROMPT_FILE.read_text(encoding="utf-8")
+SKEPTIC_PROMPT = SKEPTIC_PROMPT_FILE.read_text(encoding="utf-8")
 DETECTOR_PROMPT_SHA256 = hashlib.sha256(DETECTOR_PROMPT_FILE.read_bytes()).hexdigest()
 CROP_CHECK_PROMPT_SHA256 = hashlib.sha256(
     CROP_CHECK_PROMPT_FILE.read_bytes()
 ).hexdigest()
+SKEPTIC_PROMPT_SHA256 = hashlib.sha256(
+    SKEPTIC_PROMPT_FILE.read_bytes()
+).hexdigest()
+SKEPTIC_BLOCKING_REASONS = {
+    "job_ad",
+    "public_body",
+    "association_or_church",
+    "publisher",
+    "listing",
+    "editorial",
+    "private",
+}
+SKEPTIC_MIN_KEEP_CONFIDENCE = 0.8
 MODEL = "gpt-5.1"
 API_URL = "https://api.openai.com/v1/responses"
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
@@ -293,6 +309,24 @@ def is_order_form_page(text: str) -> bool:
 def _usage(raw: dict | None) -> dict:
     value = raw.get("usage") if isinstance(raw, dict) else None
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _valid_skeptic_verdict(verdict) -> bool:
+    if not isinstance(verdict, dict):
+        return False
+    decision = verdict.get("decision")
+    confidence = verdict.get("confidence")
+    if (
+        not isinstance(decision, str)
+        or decision not in {"keep", "reject"}
+        or isinstance(confidence, bool)
+        or not isinstance(confidence, (int, float))
+    ):
+        return False
+    try:
+        return math.isfinite(confidence)
+    except OverflowError:
+        return False
 
 
 def _provenance(
@@ -1107,14 +1141,14 @@ def detect_page(
                 final_text,
                 detector_company=candidate["company"],
             )
-            provenance = _ad_metadata(
-                candidate,
-                call_usage,
-                first,
-                second,
-                first_action,
-            )
             if exclusion:
+                provenance = _ad_metadata(
+                    candidate,
+                    call_usage,
+                    first,
+                    second,
+                    first_action,
+                )
                 result.rejected.append(
                     Run50Rejection(
                         page_number,
@@ -1127,7 +1161,87 @@ def detect_page(
                 )
                 continue
 
+            skeptic_verdict, skeptic_raw = client.ask(
+                SKEPTIC_PROMPT,
+                current_png,
+                1600,
+            )
+            if (
+                isinstance(skeptic_raw, dict)
+                and isinstance(skeptic_raw.get("usage"), dict)
+            ):
+                skeptic_usage = _usage(skeptic_raw)
+                page_usage.append(skeptic_usage)
+                call_usage.append(skeptic_usage)
+            decision = (
+                skeptic_verdict.get("decision")
+                if isinstance(skeptic_verdict, dict)
+                else None
+            )
+            reason = (
+                skeptic_verdict.get("reason")
+                if isinstance(skeptic_verdict, dict)
+                else None
+            )
+            confidence = (
+                skeptic_verdict.get("confidence")
+                if isinstance(skeptic_verdict, dict)
+                else None
+            )
+            skeptic_metadata = {
+                "decision": decision,
+                "reason": reason,
+                "advertiser": (
+                    skeptic_verdict.get("advertiser")
+                    if isinstance(skeptic_verdict, dict)
+                    else None
+                ),
+                "doubt": (
+                    skeptic_verdict.get("doubt")
+                    if isinstance(skeptic_verdict, dict)
+                    else None
+                ),
+                "confidence": confidence,
+                "prompt_sha256": SKEPTIC_PROMPT_SHA256,
+            }
+            provenance = _ad_metadata(
+                candidate,
+                call_usage,
+                first,
+                second,
+                first_action,
+            )
+            provenance["skeptic"] = skeptic_metadata
+            skeptic_rejection = None
+            skeptic_evidence = None
+            if not _valid_skeptic_verdict(skeptic_verdict):
+                skeptic_rejection = "gegenpruefer_unsicher"
+            elif decision == "reject":
+                if isinstance(reason, str) and reason in SKEPTIC_BLOCKING_REASONS:
+                    skeptic_rejection = f"gegenpruefer_{reason}"
+                elif reason == "incomplete":
+                    skeptic_evidence = "gegenpruefer:zuschnitt_zweifel"
+                else:
+                    skeptic_rejection = "gegenpruefer_unsicher"
+            elif confidence < SKEPTIC_MIN_KEEP_CONFIDENCE:
+                skeptic_rejection = "gegenpruefer_unsicher"
+            else:
+                skeptic_evidence = "positiv:gegenpruefer"
+            if skeptic_rejection:
+                result.rejected.append(
+                    Run50Rejection(
+                        page_number,
+                        current_region,
+                        company,
+                        "skeptic",
+                        skeptic_rejection,
+                        provenance,
+                    )
+                )
+                continue
+
             evidence = ["positiv:run50", "positiv:p3"]
+            evidence.append(skeptic_evidence)
             if candidate["bbox_promille_korrigiert"]:
                 evidence.append("bbox:promille_korrigiert")
             if candidate["glyph_randschnitt"]:
@@ -1165,7 +1279,31 @@ def detect_document(
     concurrency: int = 4,
 ) -> list[Run50PageResult]:
     page_results = {}
+    language = document_language(pages)
     ordered_pages = sorted(pages, key=lambda page: page["page_number"])
+    if language["verdict"] == "fremdsprachig":
+        results = [
+            Run50PageResult(
+                page_number=page["page_number"],
+                accepted=[],
+                rejected=[],
+                usage=[],
+            )
+            for page in ordered_pages
+        ]
+        if results:
+            results[0].rejected.append(
+                Run50Rejection(
+                    page_number=results[0].page_number,
+                    region=None,
+                    company="",
+                    stage="language",
+                    reason="fremdsprachig",
+                    run50={"language": language},
+                )
+            )
+        return results
+
     pages_to_detect = []
     for page in ordered_pages:
         number = page["page_number"]

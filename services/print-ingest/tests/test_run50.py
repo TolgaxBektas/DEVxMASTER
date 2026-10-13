@@ -12,11 +12,15 @@ from app.api import stateless
 from app.core.config import settings
 from app.main import app
 from app.services import run50
+from app.services.language import SW, document_language
 from app.services.run50 import (
     CROP_CHECK_PROMPT,
     CROP_CHECK_PROMPT_FILE,
     DETECTOR_PROMPT,
     DETECTOR_PROMPT_FILE,
+    SKEPTIC_PROMPT,
+    SKEPTIC_PROMPT_FILE,
+    SKEPTIC_PROMPT_SHA256,
     Run50PageResult,
     ResponsesClient,
     _norm_name,
@@ -29,12 +33,36 @@ from app.services.run50 import (
 
 
 class FakeClient:
-    def __init__(self, detector_results=None, crop_results=None):
+    def __init__(
+        self,
+        detector_results=None,
+        crop_results=None,
+        skeptic_results=None,
+        skeptic_raws=None,
+    ):
         self.detector_results = list(detector_results or [])
         self.crop_results = list(crop_results or [])
+        self.skeptic_results = list(skeptic_results or [])
+        self.skeptic_raws = list(skeptic_raws or [])
         self.calls = []
+        self.skeptic_calls = []
 
     def ask(self, prompt, png, max_edge):
+        if prompt == SKEPTIC_PROMPT:
+            self.skeptic_calls.append((prompt, png, max_edge))
+            result = (
+                self.skeptic_results.pop(0)
+                if self.skeptic_results
+                else {
+                    "decision": "keep",
+                    "reason": "none",
+                    "advertiser": "Prüf GmbH",
+                    "doubt": "",
+                    "confidence": 0.95,
+                }
+            )
+            raw = self.skeptic_raws.pop(0) if self.skeptic_raws else None
+            return result, raw
         self.calls.append((prompt, png, max_edge))
         if max_edge == 2000:
             result = self.detector_results.pop(0)
@@ -127,8 +155,20 @@ def _rendered_page(pdf_bytes):
     return result
 
 
-def _run_one_page(pdf, ad, crop_results, layout=None):
-    client = FakeClient([{"advertisements": [ad]}], crop_results)
+def _run_one_page(
+    pdf,
+    ad,
+    crop_results,
+    layout=None,
+    skeptic_results=None,
+    skeptic_raws=None,
+):
+    client = FakeClient(
+        [{"advertisements": [ad]}],
+        crop_results,
+        skeptic_results=skeptic_results,
+        skeptic_raws=skeptic_raws,
+    )
     result = detect_page(pdf, 1, layout, client)
     return result, client
 
@@ -145,6 +185,19 @@ def test_prompt_files_hashes_and_sent_text():
         r"```(?:text)?\n(.*?)\n```", detector_text, re.S
     ).group(1)
     assert CROP_CHECK_PROMPT == CROP_CHECK_PROMPT_FILE.read_text(encoding="utf-8")
+
+
+def test_detector_and_crop_check_prompt_hashes_remain_unchanged():
+    assert run50.DETECTOR_PROMPT_SHA256 == (
+        "75d67fc6eb55d1c11d4a723f3ef7045f1a7cfffbaad161af9f2545ce8f50f1f7"
+    )
+    assert run50.CROP_CHECK_PROMPT_SHA256 == (
+        "2b53b436d55a04174e7bab1b161b51068f36bc0924ea8b24436bbb4da926ab48"
+    )
+    assert hashlib.sha256(SKEPTIC_PROMPT_FILE.read_bytes()).hexdigest() == (
+        SKEPTIC_PROMPT_SHA256
+    )
+    assert SKEPTIC_PROMPT == SKEPTIC_PROMPT_FILE.read_text(encoding="utf-8")
 
 
 def test_two_framed_ads_are_accepted_with_crop_provenance_and_evidence():
@@ -175,6 +228,205 @@ def test_two_framed_ads_are_accepted_with_crop_provenance_and_evidence():
     ]
     assert all(len(ad.run50["usage"]) == 2 for ad in result.accepted)
     assert result.accepted[0].region["x"] != result.accepted[0].crop_info["crop_bbox"]["x"]
+
+
+def test_detect_document_rejects_foreign_language_without_client_calls():
+    english = " ".join(SW["en"].split() * 20)
+    pages = [
+        {"page_number": 2, "text": english},
+        {"page_number": 1, "text": ""},
+    ]
+    language = document_language(pages)
+    client = FakeClient()
+
+    results = detect_document(b"not a PDF", pages, client)
+
+    assert [result.page_number for result in results] == [1, 2]
+    assert client.calls == []
+    assert client.skeptic_calls == []
+    assert all(result.accepted == [] and result.usage == [] for result in results)
+    assert len(results[0].rejected) == 1
+    rejection = results[0].rejected[0]
+    assert rejection.region is None
+    assert rejection.company == ""
+    assert rejection.stage == "language"
+    assert rejection.reason == "fremdsprachig"
+    assert rejection.run50 == {"language": language}
+    assert results[1].rejected == []
+
+
+@pytest.mark.parametrize("reason", sorted(run50.SKEPTIC_BLOCKING_REASONS))
+def test_skeptic_blocking_reasons_reject_candidate(reason):
+    rect = (40, 60, 560, 600)
+    pdf = _pdf([{"ads": [rect]}])
+    skeptic = {
+        "decision": "reject",
+        "reason": reason,
+        "advertiser": "Prüf GmbH",
+        "doubt": "blocking reason",
+        "confidence": 0.95,
+    }
+
+    result, client = _run_one_page(
+        pdf,
+        _detector_ad(rect),
+        [_verdict("Prüf GmbH")],
+        skeptic_results=[skeptic],
+    )
+
+    rejection = next(item for item in result.rejected if item.stage == "skeptic")
+    assert result.accepted == []
+    assert rejection.reason == f"gegenpruefer_{reason}"
+    assert rejection.region is not None
+    assert rejection.company == "Prüf GmbH"
+    assert rejection.run50["skeptic"]["reason"] == reason
+    assert len(client.skeptic_calls) == 1
+    assert client.skeptic_calls[0][0] == SKEPTIC_PROMPT
+    assert client.skeptic_calls[0][2] == 1600
+
+
+def test_skeptic_incomplete_rejection_keeps_candidate_with_doubt_evidence():
+    rect = (40, 60, 560, 600)
+    pdf = _pdf([{"ads": [rect]}])
+    skeptic = {
+        "decision": "reject",
+        "reason": "incomplete",
+        "advertiser": "Prüf GmbH",
+        "doubt": "crop may be incomplete",
+        "confidence": 0.5,
+    }
+
+    result, _ = _run_one_page(
+        pdf,
+        _detector_ad(rect),
+        [_verdict("Prüf GmbH")],
+        skeptic_results=[skeptic],
+    )
+
+    assert len(result.accepted) == 1
+    assert "gegenpruefer:zuschnitt_zweifel" in result.accepted[0].region["evidence"]
+    assert "positiv:gegenpruefer" not in result.accepted[0].region["evidence"]
+    assert not any(item.stage == "skeptic" for item in result.rejected)
+
+
+def test_skeptic_low_confidence_keep_is_rejected_as_uncertain():
+    rect = (40, 60, 560, 600)
+    pdf = _pdf([{"ads": [rect]}])
+    skeptic = {
+        "decision": "keep",
+        "reason": "none",
+        "advertiser": "Prüf GmbH",
+        "doubt": "",
+        "confidence": 0.79,
+    }
+
+    result, _ = _run_one_page(
+        pdf,
+        _detector_ad(rect),
+        [_verdict("Prüf GmbH")],
+        skeptic_results=[skeptic],
+    )
+
+    rejection = next(item for item in result.rejected if item.stage == "skeptic")
+    assert result.accepted == []
+    assert rejection.reason == "gegenpruefer_unsicher"
+
+
+def test_skeptic_none_verdict_is_rejected_as_uncertain():
+    rect = (40, 60, 560, 600)
+    pdf = _pdf([{"ads": [rect]}])
+
+    result, _ = _run_one_page(
+        pdf,
+        _detector_ad(rect),
+        [_verdict("Prüf GmbH")],
+        skeptic_results=[None],
+    )
+
+    rejection = next(item for item in result.rejected if item.stage == "skeptic")
+    assert result.accepted == []
+    assert rejection.reason == "gegenpruefer_unsicher"
+    assert rejection.run50["skeptic"]["decision"] is None
+
+
+@pytest.mark.parametrize(
+    "skeptic",
+    [
+        [],
+        {"decision": "maybe", "confidence": 0.95},
+        {"decision": "keep", "confidence": "0.95"},
+        {"decision": "keep", "confidence": True},
+    ],
+)
+def test_invalid_skeptic_verdict_is_rejected_as_uncertain(skeptic):
+    rect = (40, 60, 560, 600)
+    pdf = _pdf([{"ads": [rect]}])
+
+    result, _ = _run_one_page(
+        pdf,
+        _detector_ad(rect),
+        [_verdict("Prüf GmbH")],
+        skeptic_results=[skeptic],
+    )
+
+    rejection = next(item for item in result.rejected if item.stage == "skeptic")
+    assert result.accepted == []
+    assert rejection.reason == "gegenpruefer_unsicher"
+
+
+def test_skeptic_unknown_reject_reason_is_rejected_as_uncertain():
+    rect = (40, 60, 560, 600)
+    pdf = _pdf([{"ads": [rect]}])
+    skeptic = {
+        "decision": "reject",
+        "reason": "other",
+        "advertiser": "Prüf GmbH",
+        "doubt": "",
+        "confidence": 0.95,
+    }
+
+    result, _ = _run_one_page(
+        pdf,
+        _detector_ad(rect),
+        [_verdict("Prüf GmbH")],
+        skeptic_results=[skeptic],
+    )
+
+    rejection = next(item for item in result.rejected if item.stage == "skeptic")
+    assert result.accepted == []
+    assert rejection.reason == "gegenpruefer_unsicher"
+
+
+def test_skeptic_high_confidence_keep_is_accepted_with_provenance_and_usage():
+    rect = (40, 60, 560, 600)
+    pdf = _pdf([{"ads": [rect]}])
+    skeptic = {
+        "decision": "keep",
+        "reason": "none",
+        "advertiser": "Prüf GmbH",
+        "doubt": "",
+        "confidence": 0.95,
+    }
+    skeptic_raw = {"usage": {"input_tokens": 7, "output_tokens": 3}}
+
+    result, client = _run_one_page(
+        pdf,
+        _detector_ad(rect),
+        [_verdict("Prüf GmbH")],
+        skeptic_results=[skeptic],
+        skeptic_raws=[skeptic_raw],
+    )
+
+    assert len(result.accepted) == 1
+    accepted = result.accepted[0]
+    assert "positiv:gegenpruefer" in accepted.region["evidence"]
+    assert accepted.run50["skeptic"] == {
+        **skeptic,
+        "prompt_sha256": SKEPTIC_PROMPT_SHA256,
+    }
+    assert accepted.run50["usage"][-1] == skeptic_raw["usage"]
+    assert result.usage[-1] == skeptic_raw["usage"]
+    assert len(client.skeptic_calls) == 1
 
 
 def test_unparseable_detector_response_creates_one_page_rejection():
